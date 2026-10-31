@@ -15,10 +15,27 @@ import SwiftUI
 
 // MARK: - Escalation card (§6.2)
 
+/// Where a card is drawn: its sheets open from the surface that holds it (ADR-0128 §3 — one item, two views).
+enum SupervisorCardSurface { case pane, chat }
+
+/// A card's sheets, as one value the Supervisor tab presents.
+enum SupervisorCardSheet: Identifiable {
+    case answer(SupervisorInboxItem), newTabEdit(SupervisorInboxItem), sendEdit(SupervisorInboxItem), raiseCap(SupervisorInboxItem)
+    var id: String {
+        switch self {
+        case .answer(let i): return "answer-\(i.id)"
+        case .newTabEdit(let i): return "newtab-\(i.id)"
+        case .sendEdit(let i): return "send-\(i.id)"
+        case .raiseCap(let i): return "cap-\(i.id)"
+        }
+    }
+}
+
 @MainActor struct SupervisorEscalationCard: View {
     let model: SupervisorModel
     let item: SupervisorInboxItem
     let enabled: Bool
+    var surface: SupervisorCardSurface = .pane
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var expanded: Bool { model.expandedCards.contains(item.id) }
@@ -31,6 +48,12 @@ import SwiftUI
         VStack(alignment: .leading, spacing: 6) {
             whyLine
             rawAct
+            if let note = SupervisorChat.sendNote(item) {
+                Text(note)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             recommendation
             if !item.grounds.isEmpty { groundsDisclosure }
             chipRow
@@ -61,7 +84,7 @@ import SwiftUI
             if chips.showReviewAct { Button("Show full act") { reviewAct() } }
             if !item.grounds.isEmpty { Button("Show grounds") { model.groundsShown.insert(item.id) } }
             if let sid = item.sessionId { Button("Open tab") { MarvinBridge.shared.requestChatTab(.select(sid)) } }
-            if item.question != nil { Button("Answer differently") { model.answerSheetItem = item } }
+            if item.question != nil { Button("Answer differently") { present(.answer(item)) } }
         }
     }
 
@@ -272,7 +295,7 @@ import SwiftUI
                 Button("Open tab") { MarvinBridge.shared.requestChatTab(.select(sid)) }
             }
             if item.question != nil {
-                Button("Answer differently…") { model.answerSheetItem = item }
+                Button("Answer differently…") { present(.answer(item)) }
             }
             if let act = item.rawAct {
                 Button("Copy act") {
@@ -300,10 +323,20 @@ import SwiftUI
 
     private func perform(_ a: SupervisorInboxItem.Action) {
         switch a.id {
-        case "answer-edit": model.answerSheetItem = item
-        case "edit": model.newTabEditItem = item
-        case "raise-cap": model.raiseCapItem = item
+        case "answer-edit": present(.answer(item))
+        case "edit": present(SupervisorChat.sendText(item) != nil ? .sendEdit(item) : .newTabEdit(item))
+        case "raise-cap": present(.raiseCap(item))
         default: Task { await model.act(item, actionId: a.id) }
+        }
+    }
+
+    private func present(_ sheet: SupervisorCardSheet) {
+        if surface == .chat { model.chatSheet = sheet; return }
+        switch sheet {
+        case .answer(let i): model.answerSheetItem = i
+        case .newTabEdit(let i): model.newTabEditItem = i
+        case .sendEdit(let i): model.sendEditItem = i
+        case .raiseCap(let i): model.raiseCapItem = i
         }
     }
 
@@ -691,6 +724,44 @@ import SwiftUI
             mode = proposed?.mode ?? "agent"
             strategy = proposed?.strategy ?? "gated"
         }
+    }
+}
+
+/// [7.2] — a send card's "Edit…": the text only, never the tab or the kind (ADR-0128 §4).
+/// The words stay the supervisor's, marked edited; the server checks them again when sent.
+@MainActor struct SupervisorSendEditSheet: View {
+    let model: SupervisorModel
+    let item: SupervisorInboxItem
+    let onClose: () -> Void
+    @State private var text = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Edit the message").font(.headline)
+            Text("It goes to \(item.tabTitle ?? "the tab") as the supervisor's message, marked as edited by you. Sending stays your click.")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextEditor(text: $text)
+                .font(.system(size: 12))
+                .frame(height: 140)
+                .overlay(RoundedRectangle(cornerRadius: MarvinTheme.Radius.chip).stroke(MarvinTheme.border, lineWidth: 1))
+                .accessibilityLabel("Message to the tab")
+            HStack {
+                Spacer()
+                Button("Cancel", action: onClose).keyboardShortcut(.cancelAction)
+                // No default action: Return never consents (brief §9.1).
+                Button("Send to the tab") {
+                    Task {
+                        await model.act(item, actionId: "edit", edits: ["text": text])
+                        onClose()
+                    }
+                }
+                .disabled(SupervisorChat.sendable(text) == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+        .onAppear { text = SupervisorChat.sendText(item) ?? "" }
     }
 }
 

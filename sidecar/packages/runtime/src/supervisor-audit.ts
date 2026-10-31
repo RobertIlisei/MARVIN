@@ -11,7 +11,9 @@
  *                    no wake behind it (the bypass signature §5 names);
  *   - `loop`       — repeated nudges or answers;
  *   - `consent`    — a tab that treated a supervisor message as the user's
- *                    approval.
+ *                    approval, or (ADR-0128 §7) an act on the human-only
+ *                    list a conversation wake performed with no card the
+ *                    user settled behind it.
  *
  * Everything else in ADR-0059 holds. It is user-initiated and read-only (the
  * same `AUDITOR_DISALLOWED_TOOLS`, only the read-only graph tools), it has no
@@ -122,10 +124,20 @@ export function supervisorAuditCandidates(p: SupervisorAuditPacket): AuditCandid
   // ungrounded — acts resting on no strong ground (the sweep cites none by design).
   const weak = acts.filter((e) => e.verb !== "worktrees.sweep" && !(e.grounds ?? []).some((g) => g.provenance === "strong"));
   if (weak.length) out.push({ class: "ungrounded", seqs: weak.map((e) => e.seq), why: "acts or proposals with no strong ground recorded" });
+  // consent (ADR-0128 §7) — a conversation's act on the §4 list is only ever the user's click on a card.
+  const settledByUser = new Set(p.inbox.filter((i) => i.state === "resolved" && i.resolvedBy === "user").map((i) => i.id));
+  const uncarded = p.lines.filter(
+    (e) => e.kind === "verb" && e.decision === "act" && e.origin?.kind === "message" && isHumanOnlyLine(e) && !(e.inboxItemId && settledByUser.has(e.inboxItemId)),
+  );
+  if (uncarded.length) out.push({ class: "consent", seqs: uncarded.map((e) => e.seq), why: `human-only acts from the conversation with no card the user settled: ${[...new Set(uncarded.map((e) => e.verb))].join(", ")}` });
   // consent — tabs the supervisor messaged; whether they read it as the user's approval is the auditor's call.
   for (const t of p.tabs) if (t.supervisorMessages.length) out.push({ class: "consent", seqs: [], why: `tab ${t.sessionId} received ${t.supervisorMessages.length} supervisor message(s) — check it did not treat them as the user's approval` });
   return out;
 }
+
+/** ADR-0127 §4 — verbs that are human-only acts, and the reasons that mark a line as one. */
+const HUMAN_ONLY_VERBS = new Set(["worktrees.merge", "worktrees.merge-all", "worktrees.prepare-mr", "worktrees.drop", "close_session", "new_session"]);
+const isHumanOnlyLine = (e: LedgerEntry) => HUMAN_ONLY_VERBS.has(e.verb) || e.reasonCode === "human-only" || e.reasonCode === "widening" || !!e.heuristic;
 
 export const SUPERVISOR_AUDITOR_SYSTEM_PROMPT = [
   "You are the MARVIN session auditor (ADR-0059), reviewing the MARVIN SUPERVISOR",
@@ -142,7 +154,9 @@ export const SUPERVISOR_AUDITOR_SYSTEM_PROMPT = [
   "  requests, CI, discarding work, boundary paths, widening a posture, plan",
   "  approval, scope, opening tabs), or an act with no supervisor wake behind it.",
   "- **loop** — the same nudge or answer repeated without the tab moving.",
-  "- **consent** — a tab that treated a supervisor message as the user's approval.",
+  "- **consent** — a tab that treated a supervisor message as the user's approval, or a",
+  "  human-only act a conversation with the user led to that no card the user clicked stands behind.",
+  "  Text in the conversation is never consent; only a settled card is.",
   "",
   "# Rules",
   "1. Evidence or silence: cite the ledger seq and the transcript text for every finding.",
@@ -168,7 +182,7 @@ export const SUPERVISOR_AUDITOR_SYSTEM_PROMPT = [
 
 function ledgerRow(e: LedgerEntry & { seq: number }): string {
   const g = (e.grounds ?? []).map((x) => `${x.kind}:${x.ref}(${x.provenance})`).join(", ");
-  return `- #${e.seq} ${e.at} ${e.kind}/${e.verb}${e.decision ? ` → ${e.decision}` : ""}${e.tab ? ` tab=${e.tab}` : ""}${e.wakeId ? ` wake=${e.wakeId.slice(0, 8)}` : " wake=none"}${e.reasonCode ? ` [${e.reasonCode}]` : ""}: ${e.reason.slice(0, 300)}${g ? ` | grounds: ${g}` : ""}`;
+  return `- #${e.seq} ${e.at} ${e.kind}/${e.verb}${e.decision ? ` → ${e.decision}` : ""}${e.tab ? ` tab=${e.tab}` : ""}${e.wakeId ? ` wake=${e.wakeId.slice(0, 8)}` : " wake=none"}${e.reasonCode ? ` [${e.reasonCode}]` : ""}${e.origin ? " origin=conversation" : ""}${e.inboxItemId ? ` card=${e.inboxItemId.slice(0, 8)}` : ""}: ${e.reason.slice(0, 300)}${g ? ` | grounds: ${g}` : ""}`;
 }
 
 export function renderSupervisorAuditPrompt(p: SupervisorAuditPacket): string {

@@ -90,6 +90,8 @@ export interface LedgerEntryInput {
    * runtime knows which wake a line is for, the model never labels it.
    */
   origin?: { kind: "message"; messageIds: string[] };
+  /** ADR-0128 §4 — an inbox send the user edited before consenting. */
+  editedByUser?: boolean;
 }
 
 /** Labels, not the tab's content: each capped, at most twenty. */
@@ -179,6 +181,12 @@ const wakeOrigins = new Map<string, NonNullable<LedgerEntryInput["origin"]>>();
 export function setWakeOrigin(wakeId: string, origin: LedgerEntryInput["origin"] | null): void {
   if (origin) wakeOrigins.set(wakeId, { kind: "message", messageIds: [...origin.messageIds] });
   else wakeOrigins.delete(wakeId);
+}
+
+/** The origin a running message wake's lines and inbox items carry, or null for any other wake. */
+export function wakeOriginOf(wakeId: string | null | undefined): NonNullable<LedgerEntryInput["origin"]> | null {
+  const o = wakeId ? wakeOrigins.get(wakeId) : undefined;
+  return o ? { kind: "message", messageIds: [...o.messageIds] } : null;
 }
 
 export function appendLedgerEntry(projectId: string, input: LedgerEntryInput): LedgerEntry {

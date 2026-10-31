@@ -200,6 +200,8 @@ export interface AnswerEvaluationInput {
   groundCtx: GroundContext;
   /** The supervisor chose to escalate rather than answer. */
   escalate?: { reason: string } | undefined;
+  /** ADR-0128 §4 — the wake a user message started: what the supervisor may not perform becomes a card. */
+  messageWake?: boolean;
 }
 
 export interface PolicyOutcome {
@@ -229,7 +231,9 @@ export function evaluateAnswer(input: AnswerEvaluationInput): PolicyOutcome {
       ? done("escalate", `supervisor escalated: ${input.escalate.reason}`)
       : done("refuse", "this tab is not delegated to the supervisor");
   }
-  if (rank < delegationRank("answer-questions")) {
+  // ADR-0128 §4 — above the tab's level, at `observe` or higher, a message wake raises a card; any other wake refuses.
+  const observeOnly = !!input.messageWake && rank >= delegationRank("observe") && rank < delegationRank("answer-questions");
+  if (rank < delegationRank("answer-questions") && !observeOnly) {
     return done("refuse", `delegation "${input.delegation ?? "off"}" does not allow answering questions`);
   }
   const heuristic = questionHeuristic(input.questionTexts);
@@ -244,10 +248,16 @@ export function evaluateAnswer(input: AnswerEvaluationInput): PolicyOutcome {
   if (!grounds.some((g) => g.provenance === "strong")) {
     return done("escalate", "only weak grounds — every cited artifact was written by the tab itself");
   }
+  if (observeOnly) return done("escalate", observeReason(input.delegation), { reasonCode: "delegation-observe" });
+  if (input.mode !== "autonomous" && input.messageWake) return done("escalate", SHADOW_REASON, { reasonCode: "shadow" });
   return input.mode === "autonomous"
     ? done("act", "grounded; the questions category is autonomous")
     : done("propose", "grounded; shadow mode records the proposal and performs nothing");
 }
+
+/** ADR-0128 §4 — the two reasons a request in the conversation becomes a card the user performs. */
+const observeReason = (d: Delegation | undefined) => `the tab is delegated at "${d ?? "off"}", below this act — the supervisor recommends, the user decides`;
+const SHADOW_REASON = "you asked for it, and this category is in shadow — the supervisor only proposes; you perform it";
 
 // ── The set_posture verb's decision (milestone 2) ───────────────────────────
 
@@ -265,6 +275,7 @@ export function evaluateSetPosture(input: {
   lookup: ModelLookup;
   grounds: GroundRef[];
   groundCtx: GroundContext;
+  messageWake?: boolean;
 }): PolicyOutcome {
   const grounds = input.grounds.map((g) => resolveGround(g, input.groundCtx));
   const plain = grounds.map(({ kind, ref, provenance }) => ({ kind, ref, provenance }));
@@ -285,6 +296,7 @@ export function evaluateSetPosture(input: {
   if (bad.length) return done("refuse", `citation does not resolve: ${bad.map((g) => `${g.kind}:${g.ref} (${g.why ?? "unresolved"})`).join("; ")}`);
   if (!grounds.some((g) => g.provenance === "strong")) return done("escalate", "only weak grounds — every cited artifact was written by the tab itself");
   const what = changes.map((c) => `${c.field} ${c.from ?? "?"} → ${c.to}`).join("; ") || "no change";
+  if (input.mode !== "autonomous" && input.messageWake) return { ...done("escalate", SHADOW_REASON), reasonCode: "shadow" };
   return input.mode === "autonomous"
     ? done("act", `narrowing (${what}); the posture category is autonomous`)
     : done("propose", `narrowing (${what}); shadow mode records the proposal and performs nothing`);
@@ -306,6 +318,24 @@ function groundsVerdict(resolved: Array<LedgerGround & { why?: string }>, done: 
   const bad = resolved.filter((g) => g.provenance === "unresolved");
   if (bad.length) return done("refuse", "unresolvable-citation", `citation does not resolve: ${bad.map((g) => `${g.kind}:${g.ref} (${g.why ?? "unresolved"})`).join("; ")}`);
   if (!resolved.some((g) => g.provenance === "strong")) return done("escalate", "weak-grounds-only", "only weak grounds — every cited artifact was written by the tab itself");
+  return null;
+}
+
+/**
+ * ADR-0128 §4 — in a message wake a tab at `observe` (or above it, short of the
+ * act's level) gets a card for what its level does not allow. Only there: in a
+ * tab-event wake the same act stays refused, or the supervisor could raise
+ * cards nobody asked for.
+ */
+function observeCard(input: { delegation: Delegation | undefined; messageWake?: boolean | undefined }, needs: Delegation = "answer-questions"): boolean {
+  const rank = delegationRank(input.delegation);
+  return !!input.messageWake && rank >= delegationRank("observe") && rank < delegationRank(needs);
+}
+
+/** The card an otherwise allowed act becomes in a message wake: above the tab's level, or its category in shadow. */
+function conversationCard(input: { mode: SupervisorMode; delegation?: Delegation | undefined; messageWake?: boolean | undefined }, observeOnly: boolean, done: Done): PolicyOutcome | null {
+  if (observeOnly) return done("escalate", "delegation-observe", observeReason(input.delegation));
+  if (input.messageWake && input.mode !== "autonomous") return done("escalate", "shadow", SHADOW_REASON);
   return null;
 }
 
@@ -351,11 +381,13 @@ export function evaluateSend(input: {
   failedTurnsInARow?: number;
   grounds: GroundRef[];
   groundCtx: GroundContext;
+  messageWake?: boolean;
 }): PolicyOutcome {
   const { done, resolved } = judge(input.grounds, input.groundCtx);
   const first = common(input, done);
   if (first) return first;
-  if (delegationRank(input.delegation) < delegationRank("answer-questions")) {
+  const observeOnly = observeCard(input);
+  if (delegationRank(input.delegation) < delegationRank("answer-questions") && !observeOnly) {
     return done("refuse", "delegation", `delegation "${input.delegation ?? "off"}" does not allow messages`);
   }
   if (input.secret) return done("refuse", "secret", "the message carries a secret-shaped string (ADR-0127 §6)");
@@ -375,6 +407,8 @@ export function evaluateSend(input: {
   }
   const g = groundsVerdict(resolved, done, "message");
   if (g) return g;
+  const card = conversationCard(input, observeOnly, done);
+  if (card) return card;
   return input.mode === "autonomous"
     ? done("act", "grounded", "grounded; the nudges category is autonomous")
     : done("propose", "grounded", "grounded; shadow mode records the proposal and sends nothing");
@@ -390,6 +424,7 @@ export function evaluateCancel(input: {
   turn?: { kind: "human" | "machine"; author?: "supervisor" | undefined; mutated: boolean } | null;
   grounds: GroundRef[];
   groundCtx: GroundContext;
+  messageWake?: boolean;
 }): PolicyOutcome {
   const { done, resolved } = judge(input.grounds, input.groundCtx);
   const first = common(input, done);
@@ -407,6 +442,8 @@ export function evaluateCancel(input: {
   if (input.turn?.mutated) return done("escalate", "mid-write", "the running turn has started writing; cancelling it could leave a half-applied edit (ADR-0069)");
   const g = groundsVerdict(resolved, done, "cancel");
   if (g) return g;
+  const card = conversationCard(input, false, done);
+  if (card) return card;
   return input.mode === "autonomous"
     ? done("act", "grounded", "grounded; the nudges category is autonomous")
     : done("propose", "grounded", "grounded; shadow mode records the proposal and cancels nothing");
@@ -427,6 +464,7 @@ export function evaluateConfirm(input: {
   act: HumanOnlyAct | null;
   grounds: GroundRef[];
   groundCtx: GroundContext;
+  messageWake?: boolean;
 }): PolicyOutcome {
   const { done, resolved } = judge(input.grounds, input.groundCtx);
   const first = common(input, done);
@@ -438,7 +476,8 @@ export function evaluateConfirm(input: {
     return done("escalate", "human-only", `a ${input.raisedBy} confirm is a human-only act (ADR-0127 §4)`);
   }
   if (input.act) return done("escalate", "human-only", `${input.act.label} is a human-only act (ADR-0127 §4, ${input.act.item})`);
-  if (delegationRank(input.delegation) < delegationRank("answer-confirms")) {
+  const observeOnly = observeCard(input, "answer-confirms");
+  if (delegationRank(input.delegation) < delegationRank("answer-confirms") && !observeOnly) {
     return done("refuse", "delegation", `delegation "${input.delegation ?? "off"}" does not allow answering confirms`);
   }
   // Milestone 5 — only the gated strategy's own card is ordinary (ADR-0127 §3).
@@ -449,6 +488,8 @@ export function evaluateConfirm(input: {
   }
   const g = groundsVerdict(resolved, done, "confirm");
   if (g) return g;
+  const card = conversationCard(input, observeOnly, done);
+  if (card) return card;
   return input.mode === "autonomous"
     ? done("act", "grounded", "grounded; the confirms category is autonomous")
     : done("propose", "grounded", "grounded; shadow mode records the proposal and answers nothing");

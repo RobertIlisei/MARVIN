@@ -123,9 +123,9 @@ final class SupervisorService {
         return s
     }
 
-    func inbox(projectId: String) async throws -> [SupervisorInboxItem] {
+    func inbox(projectId: String, state: String = "open") async throws -> [SupervisorInboxItem] {
         let data = try await call("api/supervisor/inbox", query: [URLQueryItem(name: "projectId", value: projectId),
-                                                                 URLQueryItem(name: "state", value: "open")])
+                                                                 URLQueryItem(name: "state", value: state)])
         guard let items = SupervisorInboxItem.decodeList(data) else { throw SupervisorServiceError.transport("unreadable inbox") }
         return items
     }
@@ -208,6 +208,10 @@ final class SupervisorModel {
     var newTabEditItem: SupervisorInboxItem?
     /// A budget guardrail's "Raise cap…" prompt.
     var raiseCapItem: SupervisorInboxItem?
+    /// [7.2] — a send card's "Edit…" sheet (text only; never the tab or the kind).
+    var sendEditItem: SupervisorInboxItem?
+    /// [7.2] — the same sheets, opened from a card in the Supervisor tab, which is mounted apart from the pane.
+    var chatSheet: SupervisorCardSheet?
     /// Tab-level "answered in tab" notes for VoiceOver.
     private var announcer = SupervisorAnnouncer()
     private var lastStripState: SupervisorStripState = .off
@@ -235,6 +239,8 @@ final class SupervisorModel {
     var chatError: String?
     /// The pinned tab is selected in place of the chat body.
     var chatSelected = false
+    /// [7.2] — the inbox items replies list, by id, in any state: open ones are cards, settled ones one line.
+    var chatItems: [String: SupervisorInboxItem] = [:]
 
     /// Brief §12.1 — the pinned tab exists only while the supervisor is on.
     var chatTabVisible: Bool { SupervisorChat.tabVisible(mode: status?.mode) }
@@ -245,10 +251,25 @@ final class SupervisorModel {
             let lines = try await SupervisorService.shared.conversation(projectId: pid)
             guard projectId == pid else { return }
             chat = lines
+            await refreshChatItems()
         } catch SupervisorServiceError.token(let path) {
             tokenError = path
         } catch {
             NSLog("[SupervisorModel] conversation failed: \(error)")
+        }
+    }
+
+    /// The cards the conversation names. Settled ones too: a card settled in Needs you collapses here.
+    func refreshChatItems() async {
+        let ids = SupervisorChat.cardIds(chat)
+        guard !offline, let pid = projectId, !ids.isEmpty else { return }
+        do {
+            let all = try await SupervisorService.shared.inbox(projectId: pid, state: "all")
+            guard projectId == pid else { return }
+            let wanted = Set(ids)
+            chatItems = Dictionary(all.filter { wanted.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
+        } catch {
+            NSLog("[SupervisorModel] chat cards failed: \(error)")
         }
     }
 
@@ -283,6 +304,8 @@ final class SupervisorModel {
         chatSending = false
         chatError = nil
         chatSelected = false
+        chatItems = [:]
+        chatSheet = nil
         announcer = SupervisorAnnouncer()
         expandedCards = []
         expandedTabs = []
@@ -353,6 +376,8 @@ final class SupervisorModel {
                 }
             }
             Task { await refreshInbox() }
+            // One item, two places (ADR-0128 §3): a card in the conversation settles with it.
+            if chatItems[id] != nil { Task { await refreshChatItems() } }
         case .ledger:
             if logExpanded { Task { await refreshLedger() } }
             else { ledgerTodayCount += 1 }
@@ -441,6 +466,7 @@ final class SupervisorModel {
             _ = try await SupervisorService.shared.act(projectId: pid, itemId: item.id, actionId: actionId, edits: edits)
             inbox.removeAll { $0.id == item.id }
             await refreshInbox()
+            if chatItems[item.id] != nil { await refreshChatItems() }
             SessionRegistry.shared.refreshSnapshot()
         } catch SupervisorServiceError.token(let path) {
             tokenError = path

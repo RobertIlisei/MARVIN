@@ -5243,6 +5243,52 @@ runner.suite("supervisor-chat") {
         runner.expect(SupervisorChat.sendable(" hi \n"), equals: "hi", "trimmed")
         runner.expect(SupervisorChat.sendable(String(repeating: "a", count: 4001)), equals: nil, "too long")
     }
+
+    // [7.2] — in-chat cards are inbox items.
+    let sendItem = { (state: String, resolvedBy: String?, code: String) in
+        SupervisorInboxItem(id: "i1", createdAt: "t", sessionId: "tab-obs", tabTitle: "fix-flags", kind: "scope",
+                            escalatedBecause: .init(code: code, label: "x"),
+                            rawAct: SupervisorInboxItem.RawAct(toolName: "send", input: .object(["message": .string("Run the tests first."), "marvinSessionId": .string("tab-obs")]),
+                                                               digest: "d", summary: "Send to tab tab-obs: Run the tests first.", outward: false, destructive: false),
+                            actions: [.init(id: "perform", label: "Send to the tab", role: "consent", recommended: true, requiresExpanded: false),
+                                      .init(id: "edit", label: "Edit…", role: "edit", recommended: false, requiresExpanded: false)],
+                            state: state, resolvedBy: resolvedBy)
+    }
+    runner.test("a reply's items decode, and each id resolves to its card or nothing") {
+        let json = #"{"messages":[{"id":"r1","at":"t","from":"supervisor","text":"Here it is.","wakeId":"w","origin":{"kind":"message","messageIds":["m1"]},"items":["i1","i2"]}]}"#
+        let page = try? JSONDecoder().decode(SupervisorConversation.self, from: Data(json.utf8))
+        runner.expect(page?.messages.first?.items, equals: ["i1", "i2"], "items")
+        runner.expect(SupervisorChat.cardIds(page?.messages ?? []), equals: ["i1", "i2"], "ids to fetch")
+        let open = sendItem("open", nil, "delegation-observe")
+        runner.expect(SupervisorChat.card("i1", items: ["i1": open]), equals: .open(open), "open: the inbox card")
+        runner.expect(SupervisorChat.card("i2", items: ["i1": open]), equals: .missing, "unknown: nothing drawn")
+    }
+    runner.test("a settled card collapses to one line, with the server's summary, wherever it was settled") {
+        runner.expect(SupervisorChat.settledLine(sendItem("resolved", "user", "shadow")), equals: "Done — Send to tab tab-obs: Run the tests first.", "done by you")
+        runner.expect(SupervisorChat.settledLine(sendItem("dismissed", "user", "shadow")), equals: "Dismissed — Send to tab tab-obs: Run the tests first.", "dismissed")
+        runner.expect(SupervisorChat.settledLine(sendItem("superseded", "expired", "shadow")), equals: "No longer needed — Send to tab tab-obs: Run the tests first.", "expired")
+        if case .settled = SupervisorChat.card("i1", items: ["i1": sendItem("resolved", "user", "shadow")]) {} else { runner.expect(false, equals: true, "resolved is settled") }
+    }
+    runner.test("a send card says the message is the supervisor's, and names observe when that is why") {
+        runner.expect(SupervisorChat.sendNote(sendItem("open", nil, "delegation-observe")), equals: "The tab is at observe. Sent, it arrives in the tab as the supervisor's message, not yours.", "observe")
+        runner.expect(SupervisorChat.sendNote(sendItem("open", nil, "shadow")), equals: "Sent, it arrives in the tab as the supervisor's message, not yours.", "shadow")
+        runner.expect(SupervisorChat.sendText(sendItem("open", nil, "shadow")), equals: "Run the tests first.", "the edit sheet starts from the proposed text")
+    }
+    runner.test("a send card is one click; an outward act expands first; no chip is a default action") {
+        let chips = SupervisorActChips(actions: sendItem("open", nil, "shadow").actions, expanded: false)
+        runner.expect(chips.showReviewAct, equals: false, "send: one click")
+        let push = SupervisorActChips(actions: [.init(id: "perform", label: "Prepare MR", role: "consent", recommended: true, requiresExpanded: true)], expanded: false)
+        runner.expect(push.showReviewAct, equals: true, "outward: Review act… first")
+        runner.expect(push.chips.contains { $0.id == "perform" }, equals: false, "no consent chip before expanding")
+    }
+    runner.test("an unanswered message shows retrying, then failed") {
+        let retrying = SupervisorStatus.MessageRetry(state: "retrying", messageIds: ["m1"], attempts: 1, nextRetryAt: "t")
+        runner.expect(SupervisorChat.unanswered("m1", retry: retrying), equals: .retrying(attempt: 1), "retrying")
+        runner.expect(SupervisorChat.unanswered("m2", retry: retrying), equals: nil, "another message")
+        runner.expect(SupervisorChat.unanswered("m1", retry: .init(state: "failed", messageIds: ["m1"], attempts: 4)), equals: .failed, "failed")
+        let json = #"{"revision":1,"mode":"shadow","autonomy":{},"run":"idle","queuedEvents":0,"health":"ok","watchedTabs":0,"openEscalations":0,"budget":{"capUsd":20,"spentUsd":0,"resetsAt":"t","level":"ok"},"messageRetry":{"state":"failed","messageIds":["m1"],"attempts":4,"nextRetryAt":null}}"#
+        runner.expect(try? JSONDecoder().decode(SupervisorStatus.self, from: Data(json.utf8)).messageRetry?.state, equals: "failed", "decodes from status")
+    }
 }
 
 // MARK: - Cost popover: auth modes, plan-window clock, token breakdown (2026-10-31)

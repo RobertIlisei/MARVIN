@@ -149,6 +149,17 @@ public struct SupervisorStatus: Decodable, Equatable, Sendable {
             self.wakeId = wakeId; self.startedAt = startedAt; self.itemCount = itemCount
         }
     }
+    /// ADR-0128 §6 — user messages a message wake left unanswered: retried with backoff, then `failed`.
+    public struct MessageRetry: Decodable, Equatable, Sendable {
+        /// `retrying` | `failed`.
+        public let state: String
+        public let messageIds: [String]
+        public let attempts: Int
+        public let nextRetryAt: String?
+        public init(state: String, messageIds: [String], attempts: Int, nextRetryAt: String? = nil) {
+            self.state = state; self.messageIds = messageIds; self.attempts = attempts; self.nextRetryAt = nextRetryAt
+        }
+    }
     public struct LastWake: Decodable, Equatable, Sendable {
         public struct Failure: Decodable, Equatable, Sendable {
             public let message: String
@@ -230,19 +241,20 @@ public struct SupervisorStatus: Decodable, Equatable, Sendable {
     public let stats: [String: CategoryStats]?
     public let suggestedBar: Bar?
     public let confirmsEligible: Bool?
+    public let messageRetry: MessageRetry?
 
     public init(projectId: String? = nil, revision: Int, mode: String, autonomy: [String: String] = [:],
                 run: String, pause: Pause? = nil, currentWake: Wake? = nil, queuedEvents: Int = 0,
                 lastWake: LastWake? = nil, health: String = "ok", healthSince: String? = nil,
                 watchedTabs: Int = 0, openEscalations: Int = 0, budget: Budget, charter: Charter? = nil,
                 model: Model? = nil, stats: [String: CategoryStats]? = nil, suggestedBar: Bar? = nil,
-                confirmsEligible: Bool? = nil) {
+                confirmsEligible: Bool? = nil, messageRetry: MessageRetry? = nil) {
         self.projectId = projectId; self.revision = revision; self.mode = mode; self.autonomy = autonomy
         self.run = run; self.pause = pause; self.currentWake = currentWake; self.queuedEvents = queuedEvents
         self.lastWake = lastWake; self.health = health; self.healthSince = healthSince
         self.watchedTabs = watchedTabs; self.openEscalations = openEscalations; self.budget = budget
         self.charter = charter; self.model = model; self.stats = stats; self.suggestedBar = suggestedBar
-        self.confirmsEligible = confirmsEligible
+        self.confirmsEligible = confirmsEligible; self.messageRetry = messageRetry
     }
 
     /// The four categories in the order the expanded block lists them.

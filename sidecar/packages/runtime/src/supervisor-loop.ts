@@ -137,6 +137,9 @@ export interface Conversation {
   messageIds: string[];
 }
 
+/** ADR-0128 §6 — waits before each retry of an unanswered message wake; one wake plus this many retries, then failed. */
+export const MESSAGE_RETRY_BACKOFF_MS = [10_000, 60_000, 300_000] as const;
+
 const refKey = (r: PendingRef) => {
   switch (r.trigger) {
     case "turn-ended":
@@ -167,6 +170,8 @@ export class SupervisorLoop {
   private readonly idleWoken = new Map<string, string>();
   /** `projectId:sessionId` → the scope-met close a review wake was last raised for (milestone 5). */
   private readonly scopeWoken = new Map<string, string>();
+  /** A message wake that failed or ended without a reply: retried with backoff, then shown as failed (ADR-0128 §6). */
+  private readonly messageRetry = new Map<string, { messageIds: string[]; attempts: number; nextRetryAt: number | null; timer: ReturnType<typeof setTimeout> | null }>();
   private unsubscribers: Array<() => void> = [];
 
   constructor(private readonly deps: LoopDeps) {}
@@ -198,17 +203,68 @@ export class SupervisorLoop {
     for (const p of [...this.timers.keys()]) this.clearTimer(p);
     for (const t of this.idleTimers.values()) clearTimeout(t);
     this.idleTimers.clear();
+    for (const p of [...this.messageRetry.keys()]) this.clearMessageRetry(p);
     for (const c of this.running.values()) c.abort();
   }
 
   /** What the status projection reads (brief §10.1 `currentWake`, `queuedEvents`). */
   snapshot(projectId: string): LoopSnapshot {
     const q = this.queues.get(projectId);
+    const r = this.messageRetry.get(projectId);
     return {
       currentWake: this.current.get(projectId) ?? null,
       queuedEvents: q?.size ?? 0,
       oldestQueuedAt: q?.size ? (this.queuedAt.get(projectId) ?? null) : null,
+      messageRetry: r
+        ? { state: r.nextRetryAt === null ? "failed" : "retrying", messageIds: [...r.messageIds], attempts: r.attempts, nextRetryAt: r.nextRetryAt === null ? null : new Date(r.nextRetryAt).toISOString() }
+        : null,
     };
+  }
+
+  private clearMessageRetry(projectId: string): void {
+    const r = this.messageRetry.get(projectId);
+    if (r?.timer) clearTimeout(r.timer);
+    this.messageRetry.delete(projectId);
+  }
+
+  /**
+   * ADR-0128 §6 / ADR-0069 — a message wake ended and some of its messages
+   * still have no reply (the wake failed, or the model never called `reply`).
+   * Retry them with backoff; past the cap, stop and show them as failed until
+   * the user's Restart, a resume or a boot queues them again.
+   */
+  private retryUnanswered(projectId: string, messageIds: string[]): void {
+    let left: string[];
+    try {
+      const open = new Set(unansweredUserMessages(projectId).map((m) => m.id));
+      left = messageIds.filter((id) => open.has(id));
+    } catch {
+      left = messageIds;
+    }
+    if (!left.length) {
+      this.clearMessageRetry(projectId);
+      return;
+    }
+    const prev = this.messageRetry.get(projectId);
+    if (prev?.timer) clearTimeout(prev.timer);
+    const attempts = (prev?.messageIds.some((id) => left.includes(id)) ? prev.attempts : 0) + 1;
+    if (attempts > MESSAGE_RETRY_BACKOFF_MS.length) {
+      this.messageRetry.set(projectId, { messageIds: left, attempts, nextRetryAt: null, timer: null });
+      guarded(() =>
+        appendLedgerEntry(projectId, { kind: "wake", verb: "unanswered", tab: null, wakeId: null, reason: `gave up after ${attempts} attempts — the user's Restart retries`, reasonCode: "message-retry-cap", argSummary: `messages ${left.join(", ")}` }),
+      );
+      return;
+    }
+    const delay = MESSAGE_RETRY_BACKOFF_MS[attempts - 1] as number;
+    const timer = setTimeout(() => {
+      const cur = this.messageRetry.get(projectId);
+      if (cur) cur.timer = null;
+      if (getSupervisorState(projectId).mode === "off") return;
+      for (const id of left) this.enqueue(projectId, { trigger: "message", marvinSessionId: "", turnId: "", toolUseId: id });
+      this.schedule(projectId);
+    }, delay);
+    timer.unref?.();
+    this.messageRetry.set(projectId, { messageIds: left, attempts, nextRetryAt: Date.now() + delay, timer });
   }
 
   /**
@@ -231,6 +287,8 @@ export class SupervisorLoop {
    * reply answers is queued again (one the running wake carries excepted).
    */
   private requeueUnanswered(projectId: string): void {
+    // The user's act (or a boot) starts the attempts again.
+    this.clearMessageRetry(projectId);
     if (getSupervisorState(projectId).mode === "off") return;
     let pending: ReturnType<typeof unansweredUserMessages>;
     try {
@@ -484,6 +542,8 @@ export class SupervisorLoop {
       this.runningWake.delete(projectId);
       setWakeOrigin(wakeId, null);
       if (ran) guarded(() => updateSupervisorRuntime(projectId, { lastWake: { wakeId, at: new Date().toISOString(), outcome, ...(error ? { error } : {}) } }));
+      // A killed wake is the user's stop: resume queues its messages again. Anything else that left one unanswered retries.
+      if (messageIds.length && !abortController.signal.aborted) this.retryUnanswered(projectId, messageIds);
       if (!abortController.signal.aborted) this.schedule(projectId);
     }
   }
@@ -497,6 +557,7 @@ export class SupervisorLoop {
   /** Aborts the wake and clears the queue. A user message survives on disk and is queued again on resume (ADR-0128 §6). */
   kill(projectId: string): void {
     this.clearTimer(projectId);
+    this.clearMessageRetry(projectId);
     this.running.get(projectId)?.abort();
     this.queues.get(projectId)?.clear();
   }
@@ -589,8 +650,15 @@ export function defaultVerbDeps(projectId: string, workDir: string, conversation
     newTabBase: () => newTabBase(projectId, workDir),
     // Only a wake the user's message started can speak in the Supervisor tab (ADR-0128 §5).
     ...(conversation
-      ? { postReply: (text: string) => addSupervisorReply(projectId, text, { wakeId: conversation.wakeId, origin: { kind: "message", messageIds: conversation.messageIds } }) }
+      ? {
+          postReply: (text: string, items?: readonly string[]) =>
+            addSupervisorReply(projectId, text, { wakeId: conversation.wakeId, origin: { kind: "message", messageIds: conversation.messageIds }, items }),
+        }
       : {}),
+    listTabs: () =>
+      listSessionMetas(projectId)
+        .filter((m) => !m.closedAt)
+        .map((m) => ({ id: m.marvinSessionId, title: m.title ?? null })),
     perform: defaultPerform(projectId),
   };
 }

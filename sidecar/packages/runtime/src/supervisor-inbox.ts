@@ -29,7 +29,8 @@ import path from "node:path";
 import type { PosturePatch } from "./posture";
 import type { SessionPosture } from "./session-meta";
 import { shellWriteTargets, withoutGitGlobalOptions } from "./supervisor-acts";
-import { digestArgs, ensureSupervisorDir, type LedgerGround, supervisorDir } from "./supervisor-ledger";
+import { digestArgs, ensureSupervisorDir, type LedgerGround, supervisorDir, wakeOriginOf } from "./supervisor-ledger";
+import type { MessageOrigin } from "./supervisor-messages";
 import { type Ground, type GroundViewContext, projectGround } from "./supervisor-view";
 import { announceProjectEvent } from "./turn-registry";
 
@@ -51,7 +52,9 @@ export type EscalationCode =
   | "refusals"
   | "repeated-failures"
   /** ADR-0128 §6 — the user wrote to the supervisor during the wake; its acts wait for the user. */
-  | "message-hold";
+  | "message-hold"
+  /** ADR-0128 §4 — asked for in the conversation, but the act's category is in shadow: the user performs it. */
+  | "shadow";
 
 export interface RawAct {
   toolName: string;
@@ -88,7 +91,8 @@ export type InboxAct =
   | { type: "answer"; turnId: string; toolUseId: string; answers: Record<string, string | string[]>; other: Record<string, string> }
   | { type: "confirm"; turnId: string; toolUseId: string }
   | { type: "posture"; sessionId: string; patch: PosturePatch }
-  | { type: "send"; sessionId: string; text: string; kind: "nudge" | "instruction"; grounds: LedgerGround[] }
+  /** `reopensScope`: a scope review's "what is missing" — sent to a scope-met tab on the user's click (§4 item 6). */
+  | { type: "send"; sessionId: string; text: string; kind: "nudge" | "instruction"; grounds: LedgerGround[]; reopensScope?: boolean }
   | { type: "cancel"; sessionId: string }
   | { type: "worktrees"; op: "merge" | "merge-all" | "prepare-mr" | "drop"; slugs: string[]; push?: boolean; openMergeRequest?: boolean }
   | { type: "close"; sessionId: string; worktree: "keep" | "merge" | "discard" }
@@ -121,6 +125,8 @@ export interface InboxDraft {
 }
 
 export interface InboxRecord extends Required<Omit<InboxDraft, "id" | "dedupeKey">> {
+  /** ADR-0128 §3 — the messages of the conversation wake that raised it; assigned by the runtime from the wake, never by the model. */
+  origin: MessageOrigin | null;
   id: string;
   revision: number;
   createdAt: string;
@@ -155,6 +161,7 @@ export const INBOX_ITEM_FIELDS = [
   "resolvedBy",
   "resolvedAt",
   "burstRank",
+  "origin",
 ] as const;
 
 export const MAX_RECOMMENDATION_CHARS = 500;
@@ -318,6 +325,7 @@ export function addInboxItem(projectId: string, draft: InboxDraft): InboxRecord 
     guardrail: draft.guardrail ?? null,
     modeAtCreation: draft.modeAtCreation,
     wakeId: draft.wakeId ?? null,
+    origin: wakeOriginOf(draft.wakeId),
     ledgerId: draft.ledgerId ?? null,
     tabTitle: draft.tabTitle ?? null,
     act: draft.act ?? null,
@@ -387,6 +395,24 @@ export function openEscalationCounts(projectId: string): { total: number; byTab:
   return { total: open.length, byTab };
 }
 
+/**
+ * ADR-0128 §3 — the items a reply may list: ones raised for exactly this
+ * wake's messages. Another wake's item, a tab's escalation and an unknown id
+ * are dropped, so a reply cannot pull a card in beside "here is what you asked for".
+ */
+export function itemsForConversation(projectId: string, ids: readonly unknown[], messageIds: readonly string[]): string[] {
+  const want = [...new Set(messageIds)].sort().join("\n");
+  const out: string[] = [];
+  for (const id of ids) {
+    if (typeof id !== "string" || out.includes(id) || out.length >= MAX_REPLY_ITEMS) continue;
+    const o = getInboxItem(projectId, id)?.origin;
+    if (o?.kind === "message" && [...new Set(o.messageIds)].sort().join("\n") === want) out.push(id);
+  }
+  return out;
+}
+
+export const MAX_REPLY_ITEMS = 10;
+
 // ── The item as the brief reads it ──────────────────────────────────────────
 
 export interface InboxAction {
@@ -437,6 +463,13 @@ export function actionsFor(i: InboxRecord): InboxAction[] {
         { id: "edit", label: "Edit…", role: "edit", recommended: false, requiresExpanded: false },
         DISMISS,
       ];
+    case "send":
+      // ADR-0128 §4 — the text may be edited; never the tab or the kind.
+      return [
+        { id: "perform", label: PERFORM_LABEL.send as string, role: "consent", recommended: true, requiresExpanded: false },
+        { id: "edit", label: "Edit…", role: "edit", recommended: false, requiresExpanded: false },
+        DISMISS,
+      ];
     case "guardrail":
       return i.guardrail?.verb === "raise-cap"
         ? [
@@ -478,6 +511,7 @@ export interface InboxItemView {
   resolvedAt: string | null;
   burstRank: number;
   ledgerId: string | null;
+  origin: MessageOrigin | null;
 }
 
 /** The brief's item. `all` is the project's items, for `burstRank` (age order among the tab's open items). */
@@ -510,5 +544,6 @@ export function projectInboxItem(i: InboxRecord, ctx: GroundViewContext, all: re
     resolvedAt: i.resolvedAt,
     burstRank: rank === -1 ? 0 : rank,
     ledgerId: i.ledgerId,
+    origin: i.origin ?? null,
   };
 }
