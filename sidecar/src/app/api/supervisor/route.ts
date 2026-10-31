@@ -4,13 +4,14 @@
  * - GET  /api/supervisor?projectId=…  → { state, status }
  *     `status` is the design brief's §10.1 object (revision, mode, autonomy,
  *     run, pause, currentWake, queuedEvents, lastWake, health, watchedTabs,
- *     openEscalations, budget, charter, model, stats, suggestedBar,
+ *     openEscalations, budget, charter, model, personality, stats, suggestedBar,
  *     confirmsEligible, caps). `health` and `budget.level` are derived here.
  * - POST /api/supervisor  { projectId, action, … } → { state, status }
  *     action: start {charter?, capUsd?, delegations?: [{sessionId, level}]} |
  *             stop | disable | pause | resume | kill | wakeNow |
  *             mode (off|shadow) | delegate { marvinSessionId, level } |
  *             charter { text } | cap { capUsd } |
+ *             personality { personality: marvin|neutral|ultron } |
  *             autonomy { category: questions|nudges|posture|confirms, value: shadow|autonomous }
  *     `confirms` may leave shadow from milestone 5. `status.openEscalations`
  *     counts open inbox items (`/api/supervisor/inbox`).

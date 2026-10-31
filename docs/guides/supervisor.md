@@ -14,7 +14,7 @@ The decision behind it is [ADR-0127](../decisions/0127-a-supervisor-session-over
 | Its state: idle, waking, paused, at the cap, failed | The **Brain** at the top of the right column, which describes the supervisor while the workspace is open ("SUPERVISOR" over the state, then what it watches and follows). Close the workspace and the Brain describes your selected tab again. |
 | Which tabs it watches, and how far it may go on each | The right column's **Tabs** (the default). Each tab row in the Sessions pane keeps its delegation glyph too. |
 | What it did | The right column's **Log** |
-| Autonomy per category with its agreement stats, charter, daily cap and spend, model, Disable | The right column's **Settings** |
+| Autonomy per category with its agreement stats, charter, daily cap and spend, model, personality, Disable | The right column's **Settings** |
 | **What needs you** | The Sessions pane's *Needs you*, as before — the one inbox. The workspace header's "N for you" takes you there (⌥⌘J). A card a reply raised also shows under that reply; settling either settles both. |
 | Pause, Kill, Resume | The workspace header, and the one-line **Supervisor** status at the top of the Sessions pane (Kill appears there while a wake runs). ⌃⌥⌘P / ⌃⌥⌘K from anywhere. |
 | Set up | The rail button or the pane's *Set up…* line, while it is off: the workspace opens on the set-up form. It has no default button — Return does nothing there. |
@@ -55,6 +55,15 @@ Delegation lives in MARVIN's data directory, never in your repository's `.marvin
 In shadow, every call the supervisor makes is checked and recorded as a **proposal**, and nothing happens: the tab keeps waiting for you. When you answer, MARVIN pairs your answer with its proposal. `GET /api/supervisor/stats` reports how often it agreed with you, per category.
 
 You switch a category to autonomous yourself, one at a time: `questions`, `nudges`, `posture`, `confirms`. MARVIN suggests a bar (20 proposals, 90 % agreement, no human-only act ever proposed as an act) and enforces none of it. Nothing graduates automatically.
+
+## Its personality
+
+The supervisor speaks in one of the tabs' three voices, **Ultron**, **MARVIN** or **Neutral**, picked under **Settings › Personality**. It starts in the app's default, Ultron. The voice is a style layer only: its rules, its authority and every refusal are the same in all three, and a test holds the prompt to that.
+
+- The voice is for its conversation with you and its reports. What it sends into a tab, its answers to a tab's questions and the recommendation on a card stay plain and instructional.
+- In no voice may it pressure you, flatter you toward a click, or word a card to steer your decision.
+- A change takes effect from its next wake. The current session ends and the next wake starts a fresh one in the new voice; your conversation, the charter and its recent ledger are re-read as on any new session. A wake already running finishes in the old voice.
+- It is your setting (`POST /api/supervisor {"action":"personality","personality":"marvin"}` with the token), ledgered like the others. The supervisor has no verb that changes it.
 
 ## Grounds
 

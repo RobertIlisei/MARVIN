@@ -127,6 +127,17 @@ describe("POST /api/supervisor — the §10.1 mutations", () => {
     const r4 = await POST(post("/api/supervisor", { projectId: "proj", action: "disable" }));
     expect(((await r4.json()) as { state: { mode: string } }).state.mode).toBe("off");
   });
+
+  it("personality: the user's setting, shown in the status, an unknown voice refused", async () => {
+    fakeLoop({ currentWake: null, queuedEvents: 0, oldestQueuedAt: null });
+    expect((await status()).personality).toBe("ultron");
+    const r = await POST(post("/api/supervisor", { projectId: "proj", action: "personality", personality: "marvin" }));
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { status: { personality: string } }).status.personality).toBe("marvin");
+    const bad = await POST(post("/api/supervisor", { projectId: "proj", action: "personality", personality: "glados" }));
+    expect(bad.status).toBe(400);
+    expect((await status()).personality).toBe("marvin");
+  });
 });
 
 describe("the watch row's shadow proposal, reveal and pairing — end to end", () => {

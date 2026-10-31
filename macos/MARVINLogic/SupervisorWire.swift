@@ -242,23 +242,29 @@ public struct SupervisorStatus: Decodable, Equatable, Sendable {
     public let suggestedBar: Bar?
     public let confirmsEligible: Bool?
     public let messageRetry: MessageRetry?
+    /// The voice it speaks to the user in: `marvin` | `neutral` | `ultron`. Absent from an older sidecar.
+    public let personality: String?
 
     public init(projectId: String? = nil, revision: Int, mode: String, autonomy: [String: String] = [:],
                 run: String, pause: Pause? = nil, currentWake: Wake? = nil, queuedEvents: Int = 0,
                 lastWake: LastWake? = nil, health: String = "ok", healthSince: String? = nil,
                 watchedTabs: Int = 0, openEscalations: Int = 0, budget: Budget, charter: Charter? = nil,
                 model: Model? = nil, stats: [String: CategoryStats]? = nil, suggestedBar: Bar? = nil,
-                confirmsEligible: Bool? = nil, messageRetry: MessageRetry? = nil) {
+                confirmsEligible: Bool? = nil, messageRetry: MessageRetry? = nil, personality: String? = nil) {
         self.projectId = projectId; self.revision = revision; self.mode = mode; self.autonomy = autonomy
         self.run = run; self.pause = pause; self.currentWake = currentWake; self.queuedEvents = queuedEvents
         self.lastWake = lastWake; self.health = health; self.healthSince = healthSince
         self.watchedTabs = watchedTabs; self.openEscalations = openEscalations; self.budget = budget
         self.charter = charter; self.model = model; self.stats = stats; self.suggestedBar = suggestedBar
         self.confirmsEligible = confirmsEligible; self.messageRetry = messageRetry
+        self.personality = personality
     }
 
     /// The four categories in the order the expanded block lists them.
     public static let categories = ["questions", "nudges", "posture", "confirms"]
+
+    /// The personalities the Settings picker offers, as `personality` names them, with their titles.
+    public static let personalities: [(id: String, title: String)] = [("ultron", "Ultron"), ("marvin", "MARVIN"), ("neutral", "Neutral")]
 
     public var autonomousCategories: [String] {
         Self.categories.filter { autonomy[$0] == "autonomous" }

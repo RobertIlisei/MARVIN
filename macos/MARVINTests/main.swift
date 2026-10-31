@@ -4623,6 +4623,10 @@ runner.suite("supervisor-wire-decode") {
         runner.expect(s?.autonomousCategories ?? [], equals: ["questions"], "autonomous categories in brief order")
         runner.expect(s?.budget.level, equals: "ok", "budget level")
         runner.expect(s?.stats?["questions"]?.agreementRate, equals: 0.94, "stats")
+        runner.expect(s?.personality, equals: nil, "an older sidecar sends no personality")
+        let withVoice = json.replacingOccurrences(of: #""confirmsEligible":false"#, with: #""confirmsEligible":false,"personality":"neutral""#)
+        runner.expect(SupervisorStatus.decodeEnvelope(Data(withVoice.utf8))?.personality, equals: "neutral", "personality")
+        runner.expect(SupervisorStatus.personalities.map(\.id), equals: ["ultron", "marvin", "neutral"], "the picker offers the sidecar's three, Ultron first")
     }
     runner.test("inbox items decode with server actions, raw act and display grounds") {
         let json = #"{"items":[{"id":"i1","revision":2,"createdAt":"2026-10-30T13:59:00Z","wakeId":"w","sessionId":"s1","tabTitle":"fix-flags","ledgerId":"l1","kind":"integration","escalatedBecause":{"code":"human-only","label":"Only you can push","rule":"§4.1 push"},"heuristic":null,"rawAct":{"toolName":"Bash","input":{"command":"git push origin marvin/tab/fix-flags"},"digest":"abc","summary":"git push origin marvin/tab/fix-flags","outward":true,"destructive":false},"preview":null,"question":null,"linkedConfirm":{"sessionId":"s1","turnId":"t","toolUseId":"tu","raisingRule":"supervisor-touched"},"recommendation":{"actionId":"deny","text":"Not in the plan."},"grounds":[{"kind":"plan-step","ref":"plan:[3]","tree":"main","label":"Step 3 keeps it local","provenance":"strong","resolved":true,"excerpt":null,"openTarget":null}],"actions":[{"id":"deny","label":"Deny","role":"refuse","recommended":true,"requiresExpanded":false},{"id":"allow","label":"Allow push","role":"consent","recommended":false,"requiresExpanded":true}],"newTab":null,"postureChange":null,"guardrail":null,"modeAtCreation":"shadow","state":"open","resolvedBy":null,"resolvedAt":null,"burstRank":0}]}"#

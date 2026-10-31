@@ -235,6 +235,20 @@ enum SupervisorMark {
                 Button("Change…") { modelsOpen = true }.rowChip(.neutral)
                     .help("Opens the Models dialog; the supervisor's row is under Helpers.")
             }
+            HStack(spacing: 6) {
+                Text("Personality").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(MarvinTheme.textMuted)
+                Spacer(minLength: 0)
+                Picker("Personality", selection: Binding(
+                    get: { s?.personality ?? "ultron" },
+                    set: { v in Task { await model.setPersonality(v) } })) {
+                    ForEach(SupervisorStatus.personalities, id: \.id) { Text($0.title).tag($0.id) }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+                .accessibilityLabel("Supervisor personality")
+                .help("The voice it speaks to you in. Takes effect from its next wake; its rules stay the same.")
+            }
             HStack {
                 Button("Disable supervisor…") { confirmDisable = true }.rowChip(.neutral)
                 Spacer(minLength: 0)
