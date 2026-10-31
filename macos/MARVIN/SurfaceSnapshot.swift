@@ -238,6 +238,13 @@ enum SurfaceSnapshot {
                 AnyView(AppStatusBar())
             }
 
+        let cost: [Surface] = SurfaceCostFixtures.cases.map { c in
+            Surface("cost-popover-\(c.id)", c.title, .fixture, widths: [360]) {
+                guard let summary = c.summary else { return nil }
+                return AnyView(CostHistoryPopover(summary: summary, now: SurfaceCostFixtures.now))
+            }
+        }
+
         let panes: [Surface] =
             pair("pane-files", "Left pane: Files", widths: paneWidths, height: paneHeight) { AnyView(FileTreeView()) }
             + pair("pane-search", "Left pane: Search", widths: paneWidths, height: paneHeight,
@@ -347,7 +354,7 @@ enum SurfaceSnapshot {
             },
         ]
 
-        return chat + topBar + statusBar + panes + editor + backlog + settings + live + supervisor
+        return chat + topBar + statusBar + cost + panes + editor + backlog + settings + live + supervisor
     }
 
     // MARK: - Per-surface preparation

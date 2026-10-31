@@ -76,6 +76,74 @@ final class CostService {
         }
     }
 
+    /// `/api/cost` → `CostSummary`; nil when the sidecar has no summary yet.
+    /// Static so the snapshot harness decodes its fixtures exactly as the app does.
+    nonisolated static func decode(_ data: Data) throws -> CostSummary? {
+        struct DailyWire: Codable {
+            let day: String; let costUsd: Double; let turns: Int
+        }
+        struct PeriodWire: Codable {
+            let costUsd: Double
+            let turns: Int
+            let inputTokens: Int
+            let outputTokens: Int
+            let cacheCreationTokens: Int?
+            let cacheReadTokens: Int?
+            let estimatedTurns: Int?
+            let unpricedTurns: Int?
+            let byAuthMode: [String: CostSummary.Aggregate]?
+
+            var period: CostSummary.Period {
+                CostSummary.Period(
+                    total: CostSummary.Aggregate(
+                        costUsd: costUsd, turns: turns, inputTokens: inputTokens, outputTokens: outputTokens,
+                        cacheCreationTokens: cacheCreationTokens, cacheReadTokens: cacheReadTokens,
+                        estimatedTurns: estimatedTurns, unpricedTurns: unpricedTurns),
+                    byAuthMode: byAuthMode ?? [:])
+            }
+        }
+        struct ByModelWire: Codable {
+            let today: [CostSummary.ModelRow]?
+            let week: [CostSummary.ModelRow]?
+        }
+        struct Wire: Codable {
+            let today: PeriodWire?
+            let week: PeriodWire?
+            let lifetime: PeriodWire?
+            let daily: [DailyWire]?
+            let byModel: ByModelWire?
+            let legacy: CostSummary.Legacy?
+            let openRouter: CostSummary.OpenRouterBalance?
+            let openRouterKey: CostSummary.OpenRouterKeyUsage?
+            let account: CostSummary.Account?
+            let claudeRateLimits: [CostSummary.ClaudeWindow]?
+        }
+        let w = try JSONDecoder().decode(Wire.self, from: data)
+        guard let todayAgg = w.today else { return nil }
+        var summary = CostSummary(
+            today: todayAgg.costUsd,
+            week: w.week?.costUsd ?? 0,
+            lifetime: w.lifetime?.costUsd ?? 0,
+            turns: w.lifetime?.turns ?? 0,
+            inputTokens: w.lifetime?.inputTokens ?? 0,
+            outputTokens: w.lifetime?.outputTokens ?? 0,
+            daily: (w.daily ?? []).map {
+                CostSummary.DailyEntry(day: $0.day, costUsd: $0.costUsd, turns: $0.turns)
+            },
+            openRouter: w.openRouter,
+            claudeWindows: w.claudeRateLimits ?? []
+        )
+        summary.todayPeriod = todayAgg.period
+        summary.weekPeriod = w.week?.period ?? .zero
+        summary.lifetimePeriod = w.lifetime?.period ?? .zero
+        summary.modelsToday = w.byModel?.today ?? []
+        summary.modelsWeek = w.byModel?.week ?? []
+        summary.legacy = w.legacy
+        summary.openRouterKey = w.openRouterKey
+        summary.account = w.account
+        return summary
+    }
+
     private func poll(force: Bool = false) async {
         guard force || NSApp.isActive else { return }
         guard let pid = currentProjectId,
@@ -91,42 +159,7 @@ final class CostService {
                 throw URLError(.badServerResponse)
             }
 
-            struct DailyWire: Codable {
-                let day: String; let costUsd: Double; let turns: Int
-            }
-            struct AggregateWire: Codable {
-                let costUsd: Double
-                let turns: Int
-                let inputTokens: Int
-                let outputTokens: Int
-            }
-            struct Wire: Codable {
-                let today: AggregateWire?
-                let week: AggregateWire?
-                let lifetime: AggregateWire?
-                let daily: [DailyWire]?
-                let openRouter: CostSummary.OpenRouterBalance?
-                let claudeRateLimits: [CostSummary.ClaudeWindow]?
-            }
-            let w = try JSONDecoder().decode(Wire.self, from: data)
-            guard let todayAgg = w.today else {
-                MarvinBridge.shared.costSummary = nil
-                consecutiveFailures = 0
-                return
-            }
-            MarvinBridge.shared.costSummary = CostSummary(
-                today: todayAgg.costUsd,
-                week: w.week?.costUsd ?? 0,
-                lifetime: w.lifetime?.costUsd ?? 0,
-                turns: w.lifetime?.turns ?? 0,
-                inputTokens: w.lifetime?.inputTokens ?? 0,
-                outputTokens: w.lifetime?.outputTokens ?? 0,
-                daily: (w.daily ?? []).map {
-                    CostSummary.DailyEntry(day: $0.day, costUsd: $0.costUsd, turns: $0.turns)
-                },
-                openRouter: w.openRouter,
-                claudeWindows: w.claudeRateLimits ?? []
-            )
+            MarvinBridge.shared.costSummary = try CostService.decode(data)
             consecutiveFailures = 0
         } catch {
             consecutiveFailures += 1
