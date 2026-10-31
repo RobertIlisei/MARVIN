@@ -324,17 +324,31 @@ import MARVINLogic
 
 // MARK: - Tool-call card (Phase 2d)
 
-/// The kind of one tool call, carried by a glyph. It used to be carried by
-/// colour — Bash orange, Edit green, Read blue — which collided with the
-/// Outcome Color Rule: green, orange and red mean what happened (a green
-/// check beside an orange Bash block, a red error under an orange one). The
-/// kind is now a neutral glyph; colour is left to the outcome (critique U10).
+/// The kind of one tool call, carried by a glyph and a tint. The tint once
+/// used the outcome hues — Bash orange, Edit green — which collided with the
+/// Outcome Color Rule: green, orange and red mean what happened (a green check
+/// beside an orange Bash block). The kinds now use teal, blue, indigo and
+/// purple, never green, orange or red, so the check and the failure stroke
+/// still read as outcome (critique U10, tint restored by request).
 private enum ToolStyle {
     case execute    // Bash, Task, AskUserQuestion — actions that run
     case read       // Read, Grep, Glob — read-only inspection
     case write      // Edit, Write, NotebookEdit — file mutations
     case web        // WebFetch, WebSearch — external IO
     case other      // anything we haven't mapped yet
+
+    var tint: Color {
+        switch self {
+        // Per-scheme hexes, not the system colours: the system teal / purple
+        // on their own 0.15 fill measure ~2.5-3.5:1 in light. These are all
+        // >= 4.5:1 for the caption label on its badge fill.
+        case .execute: MarvinTheme.adaptive(dark: "4FC9DD", light: "0B6B7D")
+        case .read: MarvinTheme.adaptive(dark: "6AAEFF", light: "0A4FB8")
+        case .write: MarvinTheme.adaptive(dark: "A3A1F9", light: "4338B8")
+        case .web: MarvinTheme.adaptive(dark: "CB94F4", light: "7B2FB0")
+        case .other: .secondary
+        }
+    }
 
     var symbol: String {
         switch self {
@@ -413,9 +427,9 @@ private enum ToolStyle {
             .padding(.vertical, 2)
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.primary.opacity(0.08))
+                    .fill(style.tint.opacity(0.15))
             )
-            .foregroundStyle(.secondary)
+            .foregroundStyle(style.tint)
             Text(inputSummary)
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
