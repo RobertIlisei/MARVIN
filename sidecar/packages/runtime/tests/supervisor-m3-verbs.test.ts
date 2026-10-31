@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clearTurnConfirms, getPendingConfirm, registerPendingConfirm } from "../src/confirm-registry";
 import type { SessionWatchRow } from "../src/session-watch";
+import { listInbox } from "../src/supervisor-inbox";
 import { readLedger } from "../src/supervisor-ledger";
 import { markTurnTouched, resetTouchesForTests } from "../src/supervisor-touch";
 import { endLiveTurn, getLiveTurn, registerLiveTurn } from "../src/turn-registry";
@@ -71,6 +72,7 @@ function row(id: string, overrides: Partial<SessionWatchRow> = {}): SessionWatch
 
 let rows: SessionWatchRow[];
 let refusals: Record<string, { code: string; reason: string }>;
+let failures: Record<string, number>;
 let ctx: VerbContext;
 
 beforeEach(() => {
@@ -89,6 +91,7 @@ beforeEach(() => {
   applySupervisorAction({ projectId: "proj", action: "delegate", marvinSessionId: "tab-conf", level: "answer-confirms" }, t);
   rows = [row("tab-1"), row("tab-obs"), row("tab-off"), row("tab-conf")];
   refusals = {};
+  failures = {};
   ctx = {
     projectId: "proj",
     workDir: mainRoot,
@@ -104,6 +107,7 @@ beforeEach(() => {
       readPlanText: () => "1. schema\n2. api\n3. ui\n4. tests",
       sendRefusal: (tab: string) => refusals[tab] ?? null,
       scopeMet: () => false,
+      failedTurnsInARow: (tab: string) => failures[tab] ?? 0,
       perform: SHADOW_PERFORM,
       modelLookup: async () => (id: string) =>
         ({ "claude-opus-5-5": { tier: "opus" }, "claude-sonnet-5-5": { tier: "sonnet" } })[id] ?? null,
@@ -172,6 +176,19 @@ describe("send — shadow only", () => {
   it("an instruction is not a nudge and does not count toward the cap", async () => {
     for (const m of ["one", "two", "three"]) await roomy().send({ marvinSessionId: "tab-1", message: `do ${m}`, kind: "instruction", grounds: GROUND });
     expect(last()).toMatchObject({ decision: "propose" });
+  });
+
+  // ADR-0127 §6 — repeated failed outcomes escalate rather than retry.
+  it("a tab whose last two turns errored is escalated, not sent to again — nudge or instruction", async () => {
+    failures["tab-1"] = 1;
+    await roomy().send({ marvinSessionId: "tab-1", message: "try again", kind: "nudge", grounds: GROUND });
+    expect(last()).toMatchObject({ decision: "propose" });
+    failures["tab-1"] = 2;
+    await roomy().send({ marvinSessionId: "tab-1", message: "try once more", kind: "nudge", grounds: GROUND });
+    expect(last()).toMatchObject({ decision: "escalate", reasonCode: "repeated-failures" });
+    await roomy().send({ marvinSessionId: "tab-1", message: "do it differently", kind: "instruction", grounds: GROUND });
+    expect(last()).toMatchObject({ decision: "escalate", reasonCode: "repeated-failures" });
+    expect(listInbox("proj", { state: "open" }).at(-1)).toMatchObject({ sessionId: "tab-1", escalatedBecause: { code: "repeated-failures" } });
   });
 });
 

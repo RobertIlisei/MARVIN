@@ -42,7 +42,7 @@ import {
   rememberSdkSessionId,
 } from "@marvin/runtime/session";
 import { clearActivity, noteActivityEvent, setActivity } from "@marvin/runtime/session-activity";
-import { nextScopeMetAt, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
+import { nextFailedTurnsInARow, nextScopeMetAt, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
 import { classifyTurnFailure } from "@marvin/runtime/session-recovery";
 import { ledgerDroppedSend, supervisorFireRefusal } from "@marvin/runtime/supervisor-send";
 import { noteSupervisorTabSpend } from "@marvin/runtime/supervisor-state";
@@ -490,8 +490,10 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     // through the EXISTING wakeup scheduler rather than a bespoke retry loop,
     // so ADR-0031's rails (pending cap, depth caps, same permission posture)
     // apply unchanged.
+    const outcome = failure.cancelled ? "stopped" : failure.interrupted ? "interrupted" : "error";
     updateSessionMeta(projectId, marvinSessionId, {
-      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: failure.cancelled ? "stopped" : failure.interrupted ? "interrupted" : "error", ...(bySupervisor ? { stoppedBy: "supervisor" as const } : {}), error: payload.error.slice(0, 200) },
+      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome, ...(bySupervisor ? { stoppedBy: "supervisor" as const } : {}), error: payload.error.slice(0, 200) },
+      failedTurnsInARow: nextFailedTurnsInARow(readSessionMeta(projectId, marvinSessionId)?.failedTurnsInARow, outcome),
     });
     // A turn the user stopped is never retried. `classifyTurnError` would not
     // call "Stopped." transient, but the intent must not rest on the wording.
@@ -536,6 +538,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   }
   updateSessionMeta(projectId, marvinSessionId, {
     lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: "completed" },
+    failedTurnsInARow: undefined,
     ...(nextScopeMetAt({ phase: "end", scopeMet: !!result.scopeMet }) ?? {}),
   });
   // ADR-0111 — the first turn that leaves a commit on the tab's branch names

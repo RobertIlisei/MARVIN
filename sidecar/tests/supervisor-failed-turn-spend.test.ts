@@ -68,6 +68,15 @@ describe("supervisor-started tab turns that fail", () => {
     expect(sessionCostTotals("proj").get("tab-s")?.costUsd).toBeCloseTo(0.5);
   });
 
+  it("count toward the tab's failure streak, which a completed turn clears (ADR-0127 §6)", async () => {
+    const { readSessionMeta } = await import("@marvin/runtime/session-meta");
+    await turn("t1", { ok: false, error: "boom" }, "supervisor");
+    await turn("t2", { ok: false, error: "boom again" });
+    expect(readSessionMeta("proj", "tab-s")?.failedTurnsInARow).toBe(2);
+    await turn("t3", { ok: true, costUsd: 0 });
+    expect(readSessionMeta("proj", "tab-s")?.failedTurnsInARow).toBeUndefined();
+  });
+
   it("a user's failed turn is not the supervisor's spend", async () => {
     await turn("t1", { ok: false, error: "boom", costUsd: 0.4, sessionId: "sdk-1", tokenUsage: tokens });
     const { getSupervisorState } = await import("@marvin/runtime/supervisor-state");

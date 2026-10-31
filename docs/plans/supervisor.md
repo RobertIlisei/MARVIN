@@ -74,7 +74,7 @@ Mostly from the advisor's review of the consent gate (go-with-caveats):
   - *A widening refused at perform time counts in `humanOnlyProposedAsAct`.*
 - **From the security audit:** a `charter` or `dod` ground resolved whenever its `ref` was any substring of the charter or brief. One character made a strong ground, and since [4] a strong ground is what lets the supervisor act. A quote now needs at least 12 characters and two words (`MIN_QUOTE_CHARS`).
 - **From the pre-landing review:** the polled watch route and every `confirm.resolved` now read the ledger. `readLedger` caches the parsed file on its (size, mtime); the file is append-only.
-  - *Not done here, stated:* the act's ledger line is written after the act, so a crash between them loses the line while the transcript cites its id. ADR-0127 §2 trigger 4 (wake on a scope-met handoff and read the claim against the evidence) is deferred to [5]; until then a scope-met tab is the one the supervisor does not look at. Parked: charging cancelled or failed supervisor-started turns to the cap, and escalating repeated failed outcomes (§6).
+  - *Not done here, stated:* the act's ledger line is written after the act, so a crash between them loses the line while the transcript cites its id. ADR-0127 §2 trigger 4 (wake on a scope-met handoff and read the claim against the evidence) is deferred to [5]; until then a scope-met tab is the one the supervisor does not look at. Parked here, both since done (2026-10-31): charging cancelled or failed supervisor-started turns to the cap (the failure path records and charges the turn's cost), and escalating repeated failed outcomes (§6 — `send` escalates with `repeated-failures` once a tab's last two turns ended in error, counted in its meta as `failedTurnsInARow`).
 - **A test-harness trap, recorded for the next milestone.** This worktree had no `node_modules`, so `@marvin/*` resolved to the main checkout's packages, and sidecar tests ran against main's runtime. With `isolate: false`, the global supervisor loop can also be subscribed to a `turn-registry` that another file reset. A route test that needs the loop starts its own.
 
 ## What milestone 5 changed from the text below
@@ -105,7 +105,7 @@ Mostly from the advisor's review of the consent gate (go-with-caveats):
   - *A symlinked secret.* A ground citing a link in the repository to a key outside it would have been excerpted. Symlinks are now resolved before the root and secret checks.
   - *A second lock in `resolveConfirm`.* For the supervisor it classifies the act against the human-only list again, so a gated card carrying a push is refused even if a caller skips the verb.
   - *The auditor's prompt* now wraps the inbox summaries as untrusted, because they can quote tool input.
-- **Deferred, stated:** the brief's `burstRank` is computed per tab among open items; the "+N more" grouping is the app's. `heuristic-miss` is not wired for confirms the supervisor answered. Charging cancelled or failed supervisor-started turns to the cap, and escalating repeated failed outcomes, stay parked from [4].
+- **Deferred, stated:** the brief's `burstRank` is computed per tab among open items; the "+N more" grouping is the app's. `heuristic-miss` is not wired for confirms the supervisor answered. Charging cancelled or failed supervisor-started turns to the cap, and escalating repeated failed outcomes, were parked from [4] and landed on 2026-10-31 (see [4]).
 
 ## What milestone 6 changed from the text below
 
