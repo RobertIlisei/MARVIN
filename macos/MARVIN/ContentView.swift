@@ -45,6 +45,8 @@ import SwiftUI
     @State private var goToLineOpen = false
     /// Latched once the preview has been opened, so the `WKWebView` is created
     /// lazily but never destroyed by a tab switch.
+    /// Brief §13.2 — the Supervisor workspace mounts on its first open.
+    @State private var supervisorWorkspaceMounted = false
     @State private var previewEverOpened = false
     @State private var shortcutsOpen = false
 
@@ -241,8 +243,23 @@ import SwiftUI
                                 .frame(height: brainHeight)
                             brainDivider
                         }
+                        // Brief §13.2 — while the Supervisor workspace is open and
+                        // the supervisor enabled, its inspector covers the chat.
+                        // An opaque overlay on a still-mounted, full-width chat
+                        // (the pinned tab's mechanism): nothing reflows, and no
+                        // transcript is zero-framed.
                         ChatPreviewView()
                             .frame(minHeight: 200, maxHeight: .infinity)
+                            .accessibilityHidden(supervisorCovers)
+                            // Covered, it is out of the key-view loop too (pr-review).
+                            .disabled(supervisorCovers)
+                            .overlay {
+                                if supervisorCovers {
+                                    SupervisorInspector(model: SupervisorModel.shared,
+                                                        showsStateLine: !bridge.panes.brain)
+                                        .transition(.opacity)
+                                }
+                            }
                     }
                     .frame(minWidth: 320, idealWidth: 480)
                 }
@@ -436,6 +453,7 @@ import SwiftUI
     /// for watching a running app.
     @ViewBuilder
     private var editorArea: some View {
+        let supervisor = SupervisorModel.shared
         ZStack {
             if bridge.selectedFilePath?.isEmpty == false {
                 FileViewerView().transition(.opacity)
@@ -447,10 +465,38 @@ import SwiftUI
                     .environment(bridge)
                     .keptMounted(active: bridge.panes.previewOpen)
             }
+            // Brief §13.2 — the Supervisor workspace ranks above the preview.
+            // Mounted on its first open and kept at full size afterwards, hidden
+            // by opacity, so its scroll position and composer draft survive a
+            // close without the zero-frame `keptMounted` gives a slot.
+            if supervisorWorkspaceMounted {
+                let open = supervisor.workspaceOpen
+                SupervisorWorkspaceCentre(model: supervisor)
+                    .opacity(open ? 1 : 0)
+                    .allowsHitTesting(open)
+                    .disabled(!open)
+                    .accessibilityHidden(!open)
+            }
         }
         .onChange(of: bridge.panes.previewOpen, initial: true) { _, open in
             if open { previewEverOpened = true }
         }
+        .onChange(of: supervisor.workspaceOpen, initial: true) { _, open in
+            if open { supervisorWorkspaceMounted = true }
+        }
+        // §13.8 — an open from OUTSIDE the workspace (Files, Search, Source
+        // Control, Quick Open) dismisses it; one from inside (a ground, a log
+        // link) is marked `innerOpenPath` and opens under it.
+        .onChange(of: bridge.selectedFilePath) { _, path in
+            guard supervisor.workspaceOpen, let path, !path.isEmpty, path != supervisor.innerOpenPath else { return }
+            supervisor.closeWorkspace()
+        }
+    }
+
+    /// §13.2 — the right column is the supervisor's only while it is enabled.
+    private var supervisorCovers: Bool {
+        let s = SupervisorModel.shared
+        return SupervisorWorkspace.coversRightColumn(open: s.workspaceOpen, mode: s.status?.mode)
     }
 
     /// The bottom panel: a tab strip and one visible pane (plan §D).

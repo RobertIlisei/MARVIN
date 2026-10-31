@@ -83,7 +83,7 @@ enum SupervisorCardSheet: Identifiable {
             }
             if chips.showReviewAct { Button("Show full act") { reviewAct() } }
             if !item.grounds.isEmpty { Button("Show grounds") { model.groundsShown.insert(item.id) } }
-            if let sid = item.sessionId { Button("Open tab") { MarvinBridge.shared.requestChatTab(.select(sid)) } }
+            if let sid = item.sessionId { Button("Open tab") { model.showTab(sid) } }
             if item.question != nil { Button("Answer differently") { present(.answer(item)) } }
         }
     }
@@ -298,7 +298,7 @@ enum SupervisorCardSheet: Identifiable {
     private var moreMenu: some View {
         Menu {
             if let sid = item.sessionId {
-                Button("Open tab") { MarvinBridge.shared.requestChatTab(.select(sid)) }
+                Button("Open tab") { model.showTab(sid) }
             }
             if item.question != nil {
                 Button("Answer differently…") { present(.answer(item)) }
@@ -489,7 +489,7 @@ enum SupervisorCardSheet: Identifiable {
                 if let a = item.actions.first(where: { $0.role == "consent" }) ?? item.actions.first {
                     Task { await model.act(item, actionId: a.id) }
                 } else {
-                    model.logExpanded = true
+                    model.openWorkspace(segment: .log)
                 }
             }
             .rowChip(.primary)
@@ -672,6 +672,9 @@ enum SupervisorCardSheet: Identifiable {
     let level: SupervisorDelegation
     let sharedCheckout: Bool
     let lastActAt: String?
+    /// The workspace's Tabs list names the level beside its glyph (§13.6);
+    /// the pane row keeps the glyph alone (§6.5).
+    var showsLabel: Bool = false
 
     var body: some View {
         Menu {
@@ -684,16 +687,19 @@ enum SupervisorCardSheet: Identifiable {
                 }
             }
         } label: {
-            Image(systemName: level.glyph)
-                .font(.system(size: 10, weight: level == .answerConfirms ? .semibold : .regular))
-                .foregroundStyle(level == .answerConfirms ? MarvinTheme.textPrimary : MarvinTheme.textMuted)
-                .frame(width: 18, height: 16)
-                .contentShape(Rectangle())
+            if showsLabel {
+                // A native pull-down: the level is a setting, and a setting
+                // reads as a control (§13.6).
+                Label(level.title, systemImage: level.glyph)
+            } else {
+                Image(systemName: level.glyph)
+                    .font(.system(size: 10, weight: level == .answerConfirms ? .semibold : .regular))
+                    .foregroundStyle(level == .answerConfirms ? MarvinTheme.textPrimary : MarvinTheme.textMuted)
+                    .frame(width: 18, height: 16)
+                    .contentShape(Rectangle())
+            }
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .padding(3)
+        .modifier(DelegationMenuStyle(labelled: showsLabel))
         .help("Supervisor delegation: \(level.spoken)" + (lastActAt.map { " · last act \($0.prefix(16).replacingOccurrences(of: "T", with: " "))" } ?? ""))
         .accessibilityLabel("Delegation for \(tabTitle)")
         .accessibilityValue(level.spoken)
@@ -852,5 +858,17 @@ extension SupervisorInboxItem {
         return ConfirmRequest(turnId: linkedConfirm?.turnId ?? "", toolUseId: linkedConfirm?.toolUseId ?? id,
                               toolName: "AskUserQuestion", input: input, reason: nil, title: nil,
                               description: nil, displayName: nil)
+    }
+}
+
+/// The pane row's glyph-only menu, or the workspace's native labelled pull-down.
+private struct DelegationMenuStyle: ViewModifier {
+    let labelled: Bool
+    func body(content: Content) -> some View {
+        if labelled {
+            content.menuStyle(.button).controlSize(.small).fixedSize()
+        } else {
+            content.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(3)
+        }
     }
 }

@@ -287,30 +287,26 @@ enum CommandRegistry {
             slot: .go, shortcut: "⌥⌘J", keywords: ["supervisor", "inbox", "needs you", "escalation"],
             isEnabled: { !sup.inbox.isEmpty }
         ) {
-            MarvinBridge.shared.revealLeftTab("sessions")
-            let layout = sup.layout
-            if let first = layout.tabless.first ?? layout.sessionIds.first.flatMap({ layout.byTab[$0]?.shown.first }) {
-                sup.expandedCards.insert(first.id)
-                VoiceOver.announce("Escalation: \(first.escalatedBecause.label)")
-            }
+            SupervisorWorkspace.showOldestItem(sup)
         })
+        // Brief §13.8 — the workspace: conversation in the centre, the Brain
+        // and the Tabs · Log · Settings inspector on the right. ⌃⌥⌘S sits with
+        // ⌃⌥⌘P / ⌃⌥⌘K and collides with nothing here (⌥⌘S is Save All).
+        c.append(AppCommand(
+            id: "supervisor.workspace", title: "Supervisor: Show Workspace",
+            slot: .view, shortcut: "^⌥⌘S", keywords: ["supervisor", "conversation", "chat", "brain", "settings"],
+            isEnabled: { hasProject && sup.status != nil }
+        ) { sup.toggleWorkspace() })
         c.append(AppCommand(
             id: "supervisor.showLog", title: "Supervisor: Show Log",
             slot: .view, keywords: ["supervisor", "ledger", "audit"],
             isEnabled: { sup.isEnabled }
-        ) {
-            MarvinBridge.shared.revealLeftTab("sessions")
-            sup.logExpanded = true
-            Task { await sup.refreshLedger() }
-        })
+        ) { sup.openWorkspace(segment: .log) })
         c.append(AppCommand(
             id: "supervisor.setUp", title: "Supervisor: Set Up…",
             slot: .view, keywords: ["supervisor", "start", "shadow"],
             isEnabled: { hasProject && !sup.isEnabled }
-        ) {
-            MarvinBridge.shared.revealLeftTab("sessions")
-            sup.setUpOpen = true
-        })
+        ) { sup.openWorkspace() })
         c.append(AppCommand(
             id: "view.skills", title: "Skills",
             slot: .view, keywords: ["catalog"], isEnabled: { hasProject }

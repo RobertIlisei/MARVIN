@@ -4,7 +4,22 @@ The supervisor is a MARVIN session that watches the other tabs of one project fo
 
 The decision behind it is [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md). The build plan is [`docs/plans/supervisor.md`](../plans/supervisor.md).
 
-> **Status.** The engine, the routes and the verbs are built, and so is the native surface (milestones 1–7). It lives in the Sessions pane: the supervisor strip, **Set up…** to start one, and the **…** menu for Charter, Settings and Show log. While it is enabled, a pinned **Supervisor** tab, first in the chat tab strip, is where you talk to it ([ADR-0128](../decisions/0128-the-user-talks-to-the-supervisor.md), below). The routes stay available for driving it from a Claude Code session in your terminal.
+> **Status.** The engine, the routes and the verbs are built, and so is the native surface (milestones 1–7). Since 2026-10-31 it is **one workspace** ([brief §13](../design/supervisor-brief.md)): the **binoculars** button in the activity rail (or ⌃⌥⌘S, *Supervisor: Show Workspace*) opens it. The routes stay available for driving it from a Claude Code session in your terminal.
+
+## Where things live
+
+| What | Where |
+|---|---|
+| The conversation with the supervisor | The workspace's centre — the wide area that shows "No file open" otherwise |
+| Its state: idle, waking, paused, at the cap, failed | The **Brain** at the top of the right column, which describes the supervisor while the workspace is open ("SUPERVISOR" over the state, then what it watches and follows). Close the workspace and the Brain describes your selected tab again. |
+| Which tabs it watches, and how far it may go on each | The right column's **Tabs** (the default). Each tab row in the Sessions pane keeps its delegation glyph too. |
+| What it did | The right column's **Log** |
+| Autonomy per category with its agreement stats, charter, daily cap and spend, model, Disable | The right column's **Settings** |
+| **What needs you** | The Sessions pane's *Needs you*, as before — the one inbox. The workspace header's "N for you" takes you there (⌥⌘J). A card a reply raised also shows under that reply; settling either settles both. |
+| Pause, Kill, Resume | The workspace header, and the one-line **Supervisor** status at the top of the Sessions pane (Kill appears there while a wake runs). ⌃⌥⌘P / ⌃⌥⌘K from anywhere. |
+| Set up | The rail button or the pane's *Set up…* line, while it is off: the workspace opens on the set-up form. It has no default button — Return does nothing there. |
+
+Opening the workspace selects the Sessions pane, so *Needs you* is beside you. Choosing a file in Files or Search, selecting a tab in the Sessions pane, or a card's ⋯ › *Open tab* closes it; a file you open from inside it (a ground's `file:line`) opens under it, with a **Show** link. Disabling the supervisor closes it.
 
 ## Starting it
 
@@ -75,7 +90,7 @@ Your click on the act is the consent. `POST /api/supervisor/inbox {id, actionId}
 
 ## Talking to the supervisor
 
-The pinned **Supervisor** tab is a conversation with the supervisor. Ask it how a tab is doing, why it escalated something, or for a tab to be opened. Return sends; ⇧Return starts a new line. It answers in text, and a message you send while it is working waits for the next wake: nothing you type is dropped, and a paused supervisor answers once you resume.
+The workspace's centre is a conversation with the supervisor. Ask it how a tab is doing, why it escalated something, or for a tab to be opened. Return sends; ⇧Return starts a new line. It answers in text, and a message you send while it is working waits for the next wake: nothing you type is dropped, and a paused supervisor answers once you resume.
 
 **Consent is a click.** Nothing you type in this tab is consent. "Yes, merge it", "approve", "I consent": none of them performs anything or settles any card. When your request needs an act the supervisor may not perform on its own, its reply carries a card, and your click on the act named on that card is the consent. The card shows the raw act first. A merge shows its preview, and an act that leaves this Mac or destroys work shows its consent chip only after you have opened the full act. There is no "Approve all", no chip is a default button, and Return in the composer only ever sends your message; it never reaches a chip.
 

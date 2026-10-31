@@ -278,6 +278,21 @@ The external Claude Code session can keep working through the routes with the to
 - [x] **Follow and report.** A tab opened from the chat is followed, and its scope-met review is reported in the chat. A merge card appears only for `until: "merge-ready"`. `refs` and `items` the server cannot resolve to this wake are dropped. *(Milestone [7.3].)*
 - [x] **The native tab** is built from the extended brief and rendered in every brief state at 260 and 420 pt, light and dark, and critique and polish ran on it. *(Milestone [7.1] builds it; milestone [7.4] finishes it.)*
 
+## Amendment — 2026-10-31: placement only, the conversation moves into the Supervisor workspace
+
+The user asked for the supervisor as one workspace, opened from the activity rail and using the centre of the window ([brief §13](../design/supervisor-brief.md)). This amendment changes **where** the conversation is drawn and nothing else: the channel, the routes, the verbs, the consent rule (no text is consent, the card is the inbox item, Return never reaches a chip), the containment and the guardrails are unchanged. The advisor reviewed the layout (go-with-caveats; brief §13.13).
+
+Clauses moved or removed:
+
+- **§1 "One per project, pinned … the first tab in the strip"** → the conversation is the centre of the Supervisor workspace (the editor slot, above the preview), opened by the rail's binoculars button or *Supervisor: Show Workspace* (⌃⌥⌘S). It is still one per project and still never a worktree tab.
+- **§1 "Closing the tab hides it"** → closing the workspace hides it; it stays mounted, so the draft and the scroll position survive. Pause and Kill still stop the supervisor.
+- **§1 "No tab while the supervisor is off; the off line is the one place to start it"** → while off, the rail button and the pane's off line both open the workspace on its set-up form. That form is the one set-up surface (ADR-0112), replacing the set-up sheet; it has no default button.
+- **Brief §12.1 "the strip's first stop for VoiceOver"** → the rail button and the registry command.
+- **Brief §12.1 "disabled while selected falls back to the last chat tab"** → disabling the supervisor closes the workspace.
+- **Code retired:** `SupervisorModel.chatSelected` (now `workspaceOpen`), the pinned tab in `ChatPreviewView.sessionTabs`, and `supervisorChatOverlay`. The overlay *mechanism* is reused: the workspace's inspector covers the still-mounted chat column the same way.
+- **The [7.4] fixtures' 260 / 420 pt chat columns** → the workspace composites at 960 / 1440 / 1920 pt windows (`sup-ws-*`); the chat-column fixtures stay as component renders.
+
+
 ## Related
 
 - ADR-0127 and its plan, milestones [1]–[6].

@@ -60,8 +60,10 @@ import SwiftUI
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
                 header
-                if bridge.activeProjectId != nil, supervisor.isEnabled || supervisor.tokenError != nil {
-                    SupervisorStatusStrip(model: supervisor, strip: supervisorStrip, onShowLog: { supervisor.logExpanded = true })
+                // Brief §13.7 — one line; the settings, the log and the
+                // conversation live in the Supervisor workspace it opens.
+                if bridge.activeProjectId != nil, let line = SupervisorPaneLine.make(supervisorStrip) {
+                    SupervisorPaneLineView(model: supervisor, line: line)
                 }
                 if rows.isEmpty && supervisorLayout.tabless.isEmpty {
                     if bridge.activeProjectId == nil {
@@ -104,7 +106,7 @@ import SwiftUI
         .onKeyPress(.downArrow) { moveFocus(1); return .handled }
         .onKeyPress(.return) {
             guard let id = focusedId, !id.hasPrefix("sup:") else { return .ignored }
-            bridge.requestChatTab(.select(id))
+            supervisor.showTab(id)
             return .handled
         }
         // Space expands or collapses the focused row's escalation card — how an
@@ -124,15 +126,6 @@ import SwiftUI
                 AccessibilityRotorEntry(item.tabTitle.map { "\($0): \(item.escalatedBecause.label)" } ?? "Supervisor: \(item.escalatedBecause.label)",
                                         id: item.id, in: escalationRotor)
             }
-        }
-        .sheet(isPresented: Binding(get: { supervisor.setUpOpen }, set: { supervisor.setUpOpen = $0 })) {
-            SupervisorSetUpSheet(model: supervisor,
-                                 tabs: registry.openTabs.compactMap { id in
-                                     guard !registry.isDraft(id) else { return nil }
-                                     return (id, title(registry.entry(id) ?? SessionEntry(id: id)))
-                                 },
-                                 modelLabel: supervisor.status?.model?.label,
-                                 onClose: { supervisor.setUpOpen = false })
         }
         .sheet(item: Binding(get: { supervisor.answerSheetItem }, set: { supervisor.answerSheetItem = $0 })) { item in
             if let req = item.asQuestionConfirm {
@@ -256,15 +249,12 @@ import SwiftUI
         }
     }
 
-    /// The off line, or the log, at the bottom of the pane (§5).
+    /// The off line at the bottom of the pane (§6.7). The log moved to the
+    /// workspace's inspector (§13.7).
     @ViewBuilder
     private var supervisorFooter: some View {
-        if bridge.activeProjectId != nil {
-            if supervisor.isEnabled {
-                SupervisorLogSection(model: supervisor, tabTitle: { id in title(registry.entry(id) ?? SessionEntry(id: id)) })
-            } else if supervisor.tokenError == nil {
-                SupervisorOffLine(model: supervisor)
-            }
+        if bridge.activeProjectId != nil, !supervisor.isEnabled, supervisor.tokenError == nil {
+            SupervisorOffLine(model: supervisor)
         }
     }
 
@@ -627,12 +617,12 @@ import SwiftUI
         .padding(.horizontal, 14)
         .padding(.vertical, 3)
         .contentShape(Rectangle())
-        .onTapGesture { focusedId = row.id; bridge.requestChatTab(.select(row.id)) }
+        .onTapGesture { focusedId = row.id; supervisor.showTab(row.id) }
         // The row is a tap gesture; give VoiceOver the same act (L24), and keep
         // the Allow / Deny chips inside it individually reachable.
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction(named: "Switch to tab") { focusedId = row.id; bridge.requestChatTab(.select(row.id)) }
+        .accessibilityAction(named: "Switch to tab") { focusedId = row.id; supervisor.showTab(row.id) }
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(selected ? MarvinTheme.rowSelected : Color.clear)
@@ -643,7 +633,7 @@ import SwiftUI
         )
         .help(help(e))
         .contextMenu {
-            Button("Switch to") { bridge.requestChatTab(.select(row.id)) }
+            Button("Switch to") { supervisor.showTab(row.id) }
             if e.isLive {
                 Button("Stop") { Task { await registry.stop(row.id) } }
             }
@@ -745,13 +735,13 @@ import SwiftUI
     private func action(for row: Row) -> some View {
         switch row.state {
         case .needsYou:
-            smallAction("Answer", role: .primary) { bridge.requestChatTab(.select(row.id)) }
+            smallAction("Answer", role: .primary) { supervisor.showTab(row.id) }
         case .working:
             smallAction("Stop", role: .neutral) { Task { await registry.stop(row.id) } }
         case .interrupted:
             smallAction("Resume", role: .neutral) { Task { await registry.resume(row.id) } }
         case .failed:
-            smallAction("Open", role: .neutral) { bridge.requestChatTab(.select(row.id)) }
+            smallAction("Open", role: .neutral) { supervisor.showTab(row.id) }
         case .idle, .draft:
             EmptyView()
         }

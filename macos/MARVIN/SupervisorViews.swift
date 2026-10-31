@@ -1,6 +1,6 @@
-// SupervisorViews — the supervisor's chrome in the Sessions pane (ADR-0127
-// milestone 6; design brief §5–§9): the off line, the set-up sheet, the status
-// strip and its settings block, and the Supervisor log.
+// SupervisorViews — the supervisor's settings, log and set-up (ADR-0127
+// milestone 6; design brief §5–§9), hosted since brief §13 by the Supervisor
+// workspace, plus the Sessions pane's off line.
 //
 // Built from the ADR-0114 vocabulary and nothing else: `PaneSectionHeader`,
 // row chips, `paneIconButton`, `PaneEnableToggle`, `PaneNoticeStrip`. No new
@@ -38,7 +38,7 @@ enum SupervisorMark {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 0)
-            Button("Set up…") { model.setUpOpen = true }
+            Button("Set up…") { model.openWorkspace() }
                 .rowChip(.neutral)
                 .help("Start a supervisor that watches the tabs you delegate. It starts in shadow, where it only proposes.")
         }
@@ -49,14 +49,13 @@ enum SupervisorMark {
     }
 }
 
-// MARK: - Set-up sheet (§6.7)
+// MARK: - Set-up form (§6.7; inline in the workspace since §13.9)
 
-@MainActor struct SupervisorSetUpSheet: View {
+@MainActor struct SupervisorSetUpForm: View {
     let model: SupervisorModel
     /// Open tabs as (id, title).
     let tabs: [(id: String, title: String)]
     let modelLabel: String?
-    let onClose: () -> Void
 
     @State private var charter = ""
     @State private var capUsd: Double = 20  // the server's DEFAULT_CAPS, measured in plan [7.1]
@@ -99,7 +98,7 @@ enum SupervisorMark {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Tabs to delegate").font(.system(size: 11, weight: .semibold))
                 if tabs.isEmpty {
-                    Text("No open tabs. You can delegate tabs later from the Sessions pane.")
+                    Text("No open tabs. You can delegate tabs later from the workspace's Tabs list.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 ForEach(tabs, id: \.id) { tab in
@@ -130,235 +129,28 @@ enum SupervisorMark {
                     .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
             }
 
-            HStack {
-                Spacer()
-                // Cancel is the default (Return cancels); nothing here can
-                // switch on autonomy, and "Start in shadow" is never Return.
-                Button("Cancel", action: onClose).keyboardShortcut(.defaultAction)
+            HStack(spacing: 10) {
+                // No default button and no Return binding (§13.9): nothing here
+                // can switch on autonomy, and starting is never a keystroke away.
+                // The workspace's × closes it; there is no Cancel.
                 Button("Start in shadow") {
                     starting = true
                     let picks = tabs.filter { included.contains($0.id) }.map { ($0.id, levels[$0.id] ?? .answerQuestions) }
                     Task {
                         await model.startInShadow(charter: charter, capUsd: capUsd, delegations: picks)
                         starting = false
-                        onClose()
                     }
                 }
                 .disabled(starting)
+                if starting { ProgressView().controlSize(.small) }
+                Spacer(minLength: 0)
             }
         }
-        .padding(20)
-        .frame(width: 460)
         .onAppear { included = Set(tabs.map(\.id)) }
     }
 }
 
-// MARK: - Status strip (§6.1, §7)
-
-@MainActor struct SupervisorStatusStrip: View {
-    let model: SupervisorModel
-    let strip: SupervisorStrip
-    var onShowLog: () -> Void = {}
-
-    @State private var confirmDisable = false
-    @State private var charterOpen = false
-    @State private var modelsOpen = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            line1
-            modeLine
-            line2
-            // Persistent (never auto-dismissed, ADR-0114), but the ✕ works: it
-            // hides this failure until a different one arrives. Its verb sits
-            // on its own line — beside the notice it crushed the text at 260.
-            if let f = strip.failure, model.dismissedFailure != f.headline + (f.detail ?? "") {
-                PaneNoticeStrip(notice: PaneNotice(kind: .error, headline: f.headline, detail: f.detail),
-                                onDismiss: { model.dismissedFailure = f.headline + (f.detail ?? "") })
-                    .padding(.horizontal, -10)
-                if strip.state != .tokenUnavailable {
-                    Button("Open log") { onShowLog() }
-                        .rowChip(.neutral)
-                        .padding(.leading, 17)
-                }
-            }
-            if let n = model.controlNotice {
-                PaneNoticeStrip(notice: n, onDismiss: { model.controlNotice = nil })
-                    .padding(.horizontal, -10)
-            }
-            if model.stripExpanded { SupervisorSettingsBlock(model: model, charterOpen: $charterOpen, modelsOpen: $modelsOpen,
-                                                             confirmDisable: $confirmDisable) }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: MarvinTheme.Radius.card, style: .continuous)
-                .fill(MarvinTheme.elevated)
-                .overlay(RoundedRectangle(cornerRadius: MarvinTheme.Radius.card, style: .continuous)
-                    .stroke(MarvinTheme.border, lineWidth: 1))
-        )
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Supervisor")
-        .accessibilityValue(strip.accessibilityValue)
-        .accessibilityAddTraits(.isHeader)
-        .confirmationDialog("Disable the supervisor?", isPresented: $confirmDisable) {
-            Button("Disable supervisor", role: .destructive) { Task { await model.disable() } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("It stops watching and stops waking. The log is kept.")
-        }
-        .sheet(isPresented: $charterOpen) {
-            SupervisorCharterSheet(model: model, onClose: { charterOpen = false })
-        }
-        .sheet(isPresented: $modelsOpen) {
-            ModelsDialog()
-        }
-    }
-
-    private var line1: some View {
-        HStack(spacing: 5) {
-            Group {
-                if strip.showsProgress {
-                    ProgressView().controlSize(.mini).frame(width: 12, height: 12)
-                } else {
-                    Image(systemName: SupervisorMark.symbol)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(MarvinTheme.textMuted)
-                        .frame(width: 12)
-                }
-            }
-            .accessibilityHidden(true)
-            Text("Supervisor")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(MarvinTheme.textPrimary)
-                .lineLimit(1)
-                .layoutPriority(1)
-            Spacer(minLength: 0)
-            primaryControl
-            if strip.showKill {
-                Button { Task { await model.kill() } } label: {
-                    Label("Kill", systemImage: "stop.fill")
-                }
-                .rowChip(.tinted(GitDecorationColor.deleted))
-                .help("Abort the wake in flight and pause. Never asks: stopping is never the dangerous direction.")
-                .accessibilityLabel("Kill current wake")
-            }
-            optionsMenu
-            Button {
-                model.stripExpanded.toggle()
-            } label: {
-                Image(systemName: model.stripExpanded ? "chevron.down" : "chevron.right")
-            }
-            .paneIconButton(9)
-            .help(model.stripExpanded ? "Hide supervisor settings" : "Show supervisor settings")
-            .accessibilityLabel(model.stripExpanded ? "Hide supervisor settings" : "Show supervisor settings")
-        }
-    }
-
-    @ViewBuilder
-    private var primaryControl: some View {
-        switch strip.primary {
-        case .pause:
-            Button { Task { await model.pause() } } label: { Image(systemName: "pause.fill") }
-                .paneIconButton(10)
-                .disabled(!strip.controlsEnabled)
-                .help("Pause the supervisor (⌃⌥⌘P)")
-                .accessibilityLabel("Pause supervisor")
-        case .resume(let enabled):
-            Button("Resume") { Task { await model.resume() } }
-                .rowChip(.primary)
-                .disabled(!enabled || !strip.controlsEnabled)
-                .help(enabled ? "Resume the supervisor (⌃⌥⌘P)" : "Raise the daily cap above today's spend to resume")
-                .accessibilityLabel("Resume supervisor")
-        case .restart:
-            Button("Restart") { Task { await model.wakeNow() } }
-                .rowChip(.primary)
-                .help("Resume and wake it now for the queued events")
-        case .retry:
-            Button("Retry") {
-                Task { if strip.state == .tokenUnavailable { await model.refreshStatus() } else { await model.wakeNow() } }
-            }
-            .rowChip(.neutral)
-            .accessibilityLabel(strip.state == .tokenUnavailable ? "Retry reading the token" : "Retry the wake")
-        }
-    }
-
-    private var optionsMenu: some View {
-        Menu {
-            Button("Kill") { Task { await model.kill() } }
-                .disabled(!strip.controlsEnabled)
-            Button("Settings…") { model.stripExpanded = true }
-            Button("Charter…") { charterOpen = true }
-            Button("Show log") { onShowLog() }
-            Divider()
-            Button("Disable supervisor…") { confirmDisable = true }
-        } label: {
-            Image(systemName: "ellipsis")
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Supervisor options")
-        .accessibilityLabel("Supervisor options")
-    }
-
-    /// The state gets a line of its own: beside Resume, ⋯ and the chevron it
-    /// truncated to "⚠ …" at 260 pt, and the state is what a glance is for.
-    private var modeLine: some View {
-        HStack(spacing: 4) {
-            if let g = strip.glyph {
-                Image(systemName: g)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(toneColor)
-                    .frame(width: 12)
-                    .accessibilityHidden(true)
-            }
-            Text(strip.modeLabel)
-                .font(.system(size: 11, weight: strip.tone == .neutral ? .regular : .medium))
-                .foregroundStyle(strip.tone == .neutral ? MarvinTheme.textMuted : toneColor)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
-        }
-        .padding(.leading, strip.glyph == nil ? 17 : 5)
-        .help(strip.help ?? strip.modeLabel)
-        .accessibilityHidden(true)
-    }
-
-    private var line2: some View {
-        HStack(spacing: 6) {
-            if let m = strip.meter {
-                BudgetMeter(meter: m)
-                    .accessibilityElement()
-                    .accessibilityLabel("Daily budget")
-                    .accessibilityValue(strip.meterAccessibilityValue ?? "")
-                if m.level == "reached" {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(GitDecorationColor.deleted)
-                        .accessibilityHidden(true)
-                }
-            }
-            Text(strip.detail)
-                .font(.system(size: 10.5, design: .monospaced))
-                .monospacedDigit()
-                .foregroundStyle(MarvinTheme.textMuted)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .accessibilityHidden(true)
-            Spacer(minLength: 0)
-        }
-        .padding(.leading, 17)
-    }
-
-    private var toneColor: Color {
-        switch strip.tone {
-        case .neutral: return MarvinTheme.textMuted
-        case .warning: return .orange
-        case .error: return GitDecorationColor.deleted
-        }
-    }
-}
+// MARK: - Budget meter (§6.1; the workspace header and the pane line, §13)
 
 /// A 4 pt bar, radius 3 (badge). Muted below 80 %, orange from 80 %, red at the
 /// cap — where a glyph also appears, so colour is never the only signal.
@@ -392,12 +184,14 @@ enum SupervisorMark {
     @Binding var charterOpen: Bool
     @Binding var modelsOpen: Bool
     @Binding var confirmDisable: Bool
+    /// The strip drew a rule above the block; the inspector has its own.
+    var leadingDivider = true
     @State private var capDraft: Double? = nil
 
     var body: some View {
         let s = model.status
         VStack(alignment: .leading, spacing: 8) {
-            MarvinDivider()
+            if leadingDivider { MarvinDivider() }
             Text("Autonomy").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(MarvinTheme.textMuted)
             ForEach(SupervisorStatus.categories, id: \.self) { cat in
                 autonomyRow(cat, s)
@@ -517,38 +311,20 @@ enum SupervisorMark {
                                                        ("Refusals", "refuse"), ("Proposals", "propose")]
 
     var body: some View {
+        // The workspace inspector's Log segment (brief §13.6): always open;
+        // the segment picker is its header.
         VStack(alignment: .leading, spacing: 4) {
-            Button {
-                model.logExpanded.toggle()
-                if model.logExpanded { Task { await model.refreshLedger() } }
-            } label: {
-                PaneSectionHeader(title: "Supervisor log", count: model.ledgerTodayCount, collapsed: !model.logExpanded) {
-                    if model.ledgerTodayCount > 0 {
-                        Text("today").font(.system(size: 9.5)).foregroundStyle(MarvinTheme.textMuted)
-                    }
-                }
-                .contentShape(Rectangle())
+            filterRow
+            if model.ledger.isEmpty {
+                Text("Nothing logged yet. Every proposal, act, refusal and escalation lands here.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .buttonStyle(.plain)
-            .accessibilityAddTraits(.isHeader)
-            .accessibilityLabel("Supervisor log, \(model.ledgerTodayCount) today")
-            .accessibilityHint(model.logExpanded ? "Collapse" : "Expand")
-
-            if model.logExpanded {
-                filterRow
-                if model.ledger.isEmpty {
-                    Text("Nothing logged yet. Every proposal, act, refusal and escalation lands here.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 14)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                ForEach(model.ledger) { e in row(e) }
-                if model.ledgerHasMore {
-                    Button("Show 50 earlier") { Task { await model.refreshLedger(earlier: true) } }
-                        .rowChip(.neutral)
-                        .padding(.leading, 14)
-                }
+            ForEach(model.ledger) { e in row(e) }
+            if model.ledgerHasMore {
+                Button("Show 50 earlier") { Task { await model.refreshLedger(earlier: true) } }
+                    .rowChip(.neutral)
             }
         }
     }
@@ -614,7 +390,7 @@ enum SupervisorMark {
                     model.ledgerTabFilter = sid
                     Task { await model.refreshLedger() }
                 }
-                Button("Open tab") { MarvinBridge.shared.requestChatTab(.select(sid)) }
+                Button("Open tab") { model.showTab(sid) }
             }
             Button("Copy line as JSON") {
                 NSPasteboard.general.clearContents()

@@ -2423,7 +2423,6 @@ final class ChatPreviewModel {
         }
         // ADR-0128 brief §12.1 — the pinned Supervisor tab replaces everything
         // below the strip; the chat model underneath stays loaded as it was.
-        .overlay(alignment: .top) { supervisorChatOverlay }
         .frame(minWidth: 280, minHeight: 200)
         .preferredColorScheme(bridge.preferredColorScheme)
         // Names the scope by count before anything dies. "Stop everything?"
@@ -2828,21 +2827,8 @@ final class ChatPreviewModel {
         }
     }
 
-    private var supervisor: SupervisorModel { SupervisorModel.shared }
-    /// The pinned tab is selected and still exists (a disabled supervisor falls back to the chat).
-    private var supervisorShown: Bool { supervisor.chatSelected && supervisor.chatTabVisible }
-
-    /// Brief §12.1 — below the strip (32 pt + the 1 pt divider), the conversation;
-    /// the strip itself stays live above it.
-    @ViewBuilder private var supervisorChatOverlay: some View {
-        if supervisorShown {
-            VStack(spacing: 0) {
-                Color.clear.frame(height: 33).allowsHitTesting(false)
-                SupervisorChatView(model: supervisor)
-                    .background(MarvinTheme.background)
-            }
-        }
-    }
+    // Brief §13 — the supervisor's conversation is no longer a pinned tab in
+    // this strip; it lives in the Supervisor workspace (rail button, ⌃⌥⌘S).
 
     /// Cursor-style chat tab strip at the very top of the chat: recent
     /// sessions as one-click tabs (active highlighted) + a `+` for a new
@@ -2857,8 +2843,7 @@ final class ChatPreviewModel {
             // gone", which is what the user reported.
             GeometryReader { geo in
                 let ids = model.openTabSessionIds
-                let pinned = supervisor.chatTabVisible ? 1 : 0
-                let count = max(1, ids.count + (model.loadedSessionId == nil ? 1 : 0) + pinned)
+                let count = max(1, ids.count + (model.loadedSessionId == nil ? 1 : 0))
                 let available = max(0, geo.size.width - 16)
                 let tabWidth = min(190, max(84, floor(available / CGFloat(count)) - 4))
                 ScrollViewReader { proxy in
@@ -2867,32 +2852,19 @@ final class ChatPreviewModel {
                             // A brand-new chat (nothing loaded yet) shows as its
                             // own active "New chat" tab until the first turn mints
                             // a session id that joins the open tabs.
-                            // ADR-0128 — pinned first while the supervisor is on; no close ×
-                            // (closing would only hide it; Pause and Kill stop it).
-                            if supervisor.chatTabVisible {
-                                chatTab(title: "Supervisor", systemImage: "binoculars",
-                                        active: supervisor.chatSelected, width: tabWidth,
-                                        onSelect: {
-                                            supervisor.chatSelected = true
-                                            Task { await supervisor.refreshChat() }
-                                        },
-                                        onClose: nil)
-                                .accessibilityLabel("Supervisor conversation")
-                            }
                             if model.loadedSessionId == nil {
                                 chatTab(title: "New chat", systemImage: "bubble.left.fill",
-                                        active: !supervisorShown, width: tabWidth,
-                                        onSelect: { supervisor.chatSelected = false }, onClose: nil)
+                                        active: true, width: tabWidth,
+                                        onSelect: {}, onClose: nil)
                             }
                             ForEach(ids, id: \.self) { sid in
                                 chatTab(
                                     title: tabTitle(forSessionId: sid),
                                     systemImage: "bubble.left",
-                                    active: sid == model.loadedSessionId && !supervisorShown,
+                                    active: sid == model.loadedSessionId,
                                     state: SessionRegistry.shared.rowState(sid),
                                     width: tabWidth,
                                     onSelect: {
-                                        supervisor.chatSelected = false
                                         model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
                                     },
                                     onClose: { requestCloseTab(sid) }
@@ -2964,7 +2936,6 @@ final class ChatPreviewModel {
             guard let request else { return }
             switch request {
             case .select(let id):
-                supervisor.chatSelected = false
                 model.selectSession(id, fallbackProjectId: bridge.activeProjectId)
             case .close(let id):
                 requestCloseTab(id)

@@ -216,9 +216,8 @@ final class SupervisorModel {
     var expandedTabs: Set<String> = []
     var fullActShown: Set<String> = []
     var groundsShown: Set<String> = []
-    var stripExpanded = false
-    var logExpanded = false
-    var setUpOpen = false
+    /// The inspector shows the log: live ledger lines are fetched, not just counted.
+    private var logShown: Bool { workspaceOpen && inspectorSegment == .log }
     var revealed: Set<String> = []
     /// "Answer…" / "Answer differently…" — AskQuestionSheet, nothing pre-selected.
     var answerSheetItem: SupervisorInboxItem?
@@ -259,8 +258,44 @@ final class SupervisorModel {
     var chatPendingImages: [String] = []
     /// The server's reason for a refused send; the text stays in the composer.
     var chatError: String?
-    /// The pinned tab is selected in place of the chat body.
-    var chatSelected = false
+    /// Brief §13 — the Supervisor workspace is open: the conversation in the
+    /// centre and, while enabled, the Brain and inspector on the right.
+    var workspaceOpen = false
+    /// §13.6 — the inspector's segment. Tabs by default; never restored to Settings.
+    var inspectorSegment: SupervisorInspectorSegment = .tabs {
+        didSet { if let pid = projectId { UserDefaults.standard.set(inspectorSegment.rawValue, forKey: Self.segmentKey(pid)) } }
+    }
+    /// §13.8 — a file the workspace itself opened (a ground, a log link): the
+    /// editor shows it UNDER the workspace instead of dismissing it.
+    var innerOpenPath: String?
+    /// Bumped on every open: the composer takes focus (§13.8).
+    var composerFocusToken = 0
+    private static func segmentKey(_ pid: String) -> String { "marvin.supervisor.inspector.\(pid)" }
+
+    func openWorkspace(segment: SupervisorInspectorSegment? = nil) {
+        if let segment { inspectorSegment = segment }
+        workspaceOpen = true
+        composerFocusToken &+= 1
+        // The desk's inbox is the Sessions pane (§13.8, open decision 1).
+        MarvinBridge.shared.selectLeftTabIfVisible("sessions")
+        if inspectorSegment == .log { Task { await refreshLedger() } }
+        Task { await refreshChat() }
+    }
+
+    func closeWorkspace() {
+        workspaceOpen = false
+        innerOpenPath = nil
+    }
+
+    func toggleWorkspace() { workspaceOpen ? closeWorkspace() : openWorkspace() }
+
+    /// Navigation away from the workspace (a ref, a card's ⋯ › Open tab, a pane
+    /// row): the tab's chat is under the inspector, so the workspace closes.
+    /// Consent chips never call this (§13.4).
+    func showTab(_ id: String) {
+        closeWorkspace()
+        MarvinBridge.shared.requestChatTab(.select(id))
+    }
     /// [7.2] — the inbox items replies list, by id, in any state: open ones are cards, settled ones one line.
     var chatItems: [String: SupervisorInboxItem] = [:]
     /// [7.3] — `GET /api/supervisor/follows`: open follows first, then recently ended.
@@ -315,14 +350,14 @@ final class SupervisorModel {
     func open(ref: SupervisorChatMessage.Ref) {
         switch SupervisorChat.refTarget(ref) {
         case .tab(let id):
-            MarvinBridge.shared.requestChatTab(.select(id))
+            showTab(id)
         case .item(let id):
+            // Needs you is the one inbox (§13.7): the card opens there.
             expandedCards.insert(id)
             MarvinBridge.shared.revealLeftTab("sessions")
         case .ledger:
-            logExpanded = true
+            inspectorSegment = .log
             Task { await refreshLedger() }
-            MarvinBridge.shared.revealLeftTab("sessions")
         case nil:
             break
         }
@@ -389,7 +424,9 @@ final class SupervisorModel {
         chat = []
         chatSending = false
         chatError = nil
-        chatSelected = false
+        workspaceOpen = false
+        innerOpenPath = nil
+        inspectorSegment = SupervisorInspectorSegment.restored(UserDefaults.standard.string(forKey: Self.segmentKey(pid)))
         chatItems = [:]
         follows = []
         chatSheet = nil
@@ -400,7 +437,7 @@ final class SupervisorModel {
     }
 
     func refreshAll() {
-        Task { await refreshStatus(); await refreshInbox(); if logExpanded { await refreshLedger() } }
+        Task { await refreshStatus(); await refreshInbox(); if logShown { await refreshLedger() } }
     }
 
     func refreshStatus() async {
@@ -466,7 +503,7 @@ final class SupervisorModel {
             // One item, two places (ADR-0128 §3): a card in the conversation settles with it.
             if chatItems[id] != nil { Task { await refreshChatItems() } }
         case .ledger:
-            if logExpanded { Task { await refreshLedger() } }
+            if logShown { Task { await refreshLedger() } }
             else { ledgerTodayCount += 1 }
         case .message(_, let from):
             if SupervisorChat.needsReload(after: event) {
@@ -479,6 +516,8 @@ final class SupervisorModel {
     }
 
     private func setStatus(_ s: SupervisorStatus) {
+        // §13.8 — disabling closes the workspace; it does not swap to the set-up form.
+        if !SupervisorWorkspace.staysOpen(after: status?.mode, s.mode) { closeWorkspace() }
         status = s
         announceStripChange()
     }

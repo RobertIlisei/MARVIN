@@ -657,3 +657,338 @@ One column, oldest at the top, the newest pinned to the bottom like the chat.
 | A new message or reply | `supervisor.message {projectId, id, from}` on the project feed (ids only); the app re-reads the `GET` |
 | The working indicator | `GET /api/supervisor` `currentWake` (`wakeId`, `startedAt`, `itemCount`) |
 | Waiting messages | a user message with no reply whose `origin.messageIds` names it |
+
+## 13. The Supervisor workspace — one place for the supervisor (supersedes §5's strip and log placement, §6.1's expanded block, §6.7's sheet and §12.1)
+
+- **Status:** shaped 2026-10-31 (Impeccable `shape`), approved, and **built 2026-10-31** (departures 23–29 below; renders `sup-ws-*` at 960 / 1440 / 1920, light and dark; critique 30/40, `.impeccable/critique/2026-10-31T22-20-00Z__macos-marvin-supervisorworkspaceview-swift.md`). It was requested by the user through their supervisor session: move the supervisor's configuration out of the Sessions pane, open it from one rail button, use the centre area ("No file open"), and include the Brain. **Layout only. No authority changes:** every verb, policy, delegation level, switch, budget and ledger rule is ADR-0127's and ADR-0128's as they stand.
+- **Visual authority:** unchanged. "The Quiet Instrument", the one mark (`binoculars` plus "supervisor" in SF Mono, §3), and §6.8's outlined, unfilled supervisor shape. No new colour, radius, material, shadow or component family. The workspace is assembled from parts that already exist:
+  - `SupervisorChatView` (§12);
+  - `SupervisorItemCard` and the escalation card (§6.2);
+  - the strip's settings block (§6.1);
+  - the ledger section (§6.6);
+  - the delegation chip (§6.5);
+  - `PaneNoticeStrip`;
+  - `BrainPaneView`.
+- **Mode:** Operate.
+- **Comps:** `.impeccable/supervisor-workspace/renders/` (§13.15). They are HTML mockups rendered with Playwright from `comps.html`, using DESIGN.md's tokens and the real orb cropped from `docs/assets/marvin-ide.png`. Glyphs are SF Symbol stand-ins. They are **not** native renders: the build re-renders every state in the snapshot harness (§13.14).
+- **Advisor:** consulted on the draft. Verdict **go-with-caveats**, 16 conditions, all adopted (§13.13). It preferred a centre-only layout; I kept centre plus right for the reasons in §13.2.
+
+### 13.1 Job, audience and hierarchy
+
+**Who and when.** The same user as §1, now *sitting down with* the supervisor rather than glancing at it. They come to the workspace to:
+
+- talk to it;
+- settle what it raised;
+- see what it is doing and what it has done;
+- set what it may do.
+
+The glance job (§1, job 2) stays in the Sessions pane. The workspace serves the session.
+
+**Jobs, in order, and where each lives:**
+
+| # | Job | Primary home | On demand |
+|---|---|---|---|
+| 1 | Talk to it, and settle what the conversation raised | **Centre: the conversation** (wide, primary) with its reply-anchored cards | — |
+| 2 | What needs me? | **Sessions pane, *Needs you*** (the only inbox list). The workspace header's "N for you" chip goes there | The conversation shows only the cards its own replies raised |
+| 3 | Is it alive, and what is it doing right now? | **Right: the supervisor Brain** (state, watching, follows) and the header's mode and budget | — |
+| 4 | Which tabs does it watch, and how far may it go on each? | **Right inspector, *Tabs*** (the default segment) | The delegation glyph on each pane row (§6.5), kept |
+| 5 | What did it do? | **Right inspector, *Log*** | Each wake line in the conversation opens its entries |
+| 6 | What may it do? Charter, cap, model | **Right inspector, *Settings*** (never the default segment) | — |
+| 7 | Stop it, now | Header Pause / Kill, the pane line's Pause / Kill, ⌃⌥⌘P / ⌃⌥⌘K | — |
+
+**Thesis: *the whole window becomes the supervisor's desk.*** The inbox is on the left, the conversation in the middle, and on the right the watcher's state with the tabs it watches. Nothing is drawn twice as a list. The one exception is the same item shown in its own two anchored hosts, as §12.2 already allows.
+
+### 13.2 Placement and topology
+
+**Decision: centre plus right, by content swap.** The split is not restructured.
+
+- **While the workspace is open and the supervisor is enabled:**
+  - The **centre** (the `editorArea` slot, `ContentView.swift:438-454`) shows the workspace header and the conversation. This uses the preview's precedence and keep-mounted pattern, and the workspace ranks above the preview, which ranks above the file viewer.
+  - In the **right column**, `BrainPaneView` stays where it is and is re-targeted (§13.5), and an **inspector** covers `ChatPreviewView`.
+- **The cover is an opaque overlay on a still-mounted, full-width `ChatPreviewView`.** It is exactly the mechanism the pinned tab ships today (`supervisorChatOverlay`, `ChatPreviewView.swift:2804-2812`). It is **not** `keptMounted`, which zero-frames its view (`PaneSlot.swift:25`). The transcript keeps its width, so nothing reflows, and there is no zero-width `LazyVStack` of prose.
+  - The covered chat is `.accessibilityHidden(true)` and takes no hit testing.
+  - Opening the workspace moves keyboard focus to the supervisor composer, so the hidden chat composer cannot keep first responder.
+- **The `HSplitView` topology and its autosaved dividers are untouched.** There is no nested split (ADR-0062: split inside split was the crash) and no conditional split child (a removed child resets the autosave, `ContentView.swift:215-221`).
+- **While the supervisor is off,** the workspace takes the **centre only**: the set-up form (§13.9). The right column keeps the selected tab's Brain and chat, because there is no supervisor to describe.
+
+**Why not centre only (the advisor's preference).** Centre only would keep the selected tab's chat beside the supervisor, and that has real overwatch value. It was rejected for three reasons:
+
+- **Width.** At the default 1280 pt window the centre is about 496 pt. The conversation, tabs, log and settings would share it, so the conversation would no longer be the wide, primary thing the request asks for.
+- **The Brain.** The orb would keep describing the tab, so "include the brain" would be met only by leaving it where it is. A second orb in the centre would put two animated Metal orbs on one screen, which breaks Flat-by-Default and makes a sibling component.
+- **The tab is still in view.** The Sessions pane stays on screen beside the workspace, so the user still sees every tab's state. One click (a pane row, or a card's ⋯ › Open tab) returns to a tab's chat.
+
+**Fallback, recorded:** if the build's probe (§13.14) shows the covered transcript oscillating, ship centre-only with the inspector as a segment strip under the header. In that fallback the orb stays the tab's.
+
+### 13.3 The workspace header (centre, 38 pt)
+
+The header sits on `chrome` (the same height as the pane header, so the rail's first icon and the editor's tab bar line up), with a hairline beneath. Items in reading order:
+
+1. `binoculars` 11 pt in `textMuted`, then "Supervisor" at 12 pt semibold.
+2. **Mode:** "· Shadow", "· Autonomous · 2 of 4", "· Paused by you 14:02", "· Paused — daily cap", "· Wake failed", "· Not waking", "· status unknown — reconnecting". It is 11 pt `.secondary`, tail-truncated, and its tooltip lists the autonomous categories.
+3. `Spacer(minLength: 0)`.
+4. **Budget:** §6.1's fixed 56 pt meter (`textMuted`, orange from 80 %, red with `exclamationmark.triangle.fill` at the cap), then "$3.20 / $10" in 10.5 pt mono with monospaced digits. **Both are hidden while the feed is disconnected** (§7).
+5. **"✋ N for you"** is a neutral chip. It opens the Sessions pane and expands the oldest item: the ⌥⌘J behaviour (§11, departure 3). It is hidden at N = 0.
+6. **Kill:** `.rowChip(.tinted(red))` with `stop.fill`, **only during a wake** (§11, open decision 3).
+7. **Pause / Resume:** `paneIconButton` `pause.fill`. While paused or killed it is replaced by a **Resume** primary chip. At the cap Resume is disabled until the cap is above spend.
+   - **Not waking:** a neutral **Restart** chip (resume plus wake now) appears before it.
+8. **⋯ menu:** Kill (also while idle), Wake now, Settings, Disable supervisor…, and, at tier 4, Close workspace.
+9. **× Close workspace,** an icon button.
+
+**Overflow, by count and by `ViewThatFits`.** This is no measured width and no `GeometryReader`; the chat header's posture pill already uses the same mechanism (DESIGN.md, U8). There are four candidates, tried in order:
+
+| Tier | What yields |
+|---|---|
+| 1 | Nothing |
+| 2 | The mode text (the orb caption carries the state) |
+| 3 | The "$ / $" text (the meter stays; at the cap it keeps its warning glyph), and "N for you" (the rail badge and *Needs you* carry the count) |
+| 4 | × moves into ⋯ |
+
+**Kill, Pause / Resume and ⋯ never yield.** At the centre's minimum (about 336 pt at a 960 pt window) tier 4 renders as: glyph · Supervisor · meter · [Kill] · Pause / Resume · ⋯ (`narrow-dark-cap.png`).
+
+Persistent notices sit **under the header, across the centre:**
+
+- **wake failed:** error kind, with Retry and Open log on their own line (§11, departure 12);
+- **token unavailable** and **feed disconnected:** §7's notices.
+
+They are never auto-dismissed.
+
+### 13.4 The conversation (centre)
+
+- **`SupervisorChatView` as it is** (§12.2–§12.7: user bubble, reply with its label above, reply-anchored cards, wake lines, working indicator, composer and its focus rule), **in a reading column capped at 760 pt and centred.** The composer shares the column.
+  - At the centre's minimum (about 336 pt) the column is the full width, which is wider than the 260 pt the chat already passes at.
+  - At 1920 pt windows the centre is about 1136 pt, and the cap keeps lines readable (`wide-*.png`).
+- **The 56 pt reply indent stays.** §11 departure 14 left it at a quarter of a 260 pt column; at 336 pt and up it costs less.
+- **Cards are unchanged in behaviour:**
+  - reversible acts take one click;
+  - outward and destructive acts show **Review act…** first, then the act chip (discovery answer 2);
+  - no consent chip carries `.defaultAction` or a Return binding;
+  - **Return in the composer sends the composer and never reaches a chip** (ADR-0128 §1);
+  - **consent chips never navigate.** Only ⋯ › *Open tab* (navigation) leaves the workspace; the new-tab card's primary *Open tab* is the consent, shows its spinner and outcome in the card, and stays.
+- **Empty state:** §12.5, centred in the column.
+
+### 13.5 The supervisor Brain (right column, top)
+
+**Decision: the existing orb, re-targeted. No sibling.** DESIGN.md decides it:
+
+- **Flat-by-Default:** one animated element on screen, never two.
+- **No new component family:** a second orb, or a supervisor-styled one, would be one.
+- **The rule it follows** — while the workspace is open there is one conversation on screen, so *the orb describes the conversation on screen* — keeps the user's 2026-09-01 rule ("brain status should reflect the session I select") intact. Selecting the workspace is selecting the supervisor. The rule is not carried into any layout where a tab's chat is visible.
+
+**How it is re-targeted.** This is a **view-level override inside `BrainPaneView`**, which reads `SupervisorModel` while the workspace is open. It is **never** `setMarvinState`, and it never changes `activeMarvinSessionId`: that gate (`Bridge.swift:253-279`) also feeds the status bar's per-session counters, and it would drop the live tab's writes. Closing the workspace hands the orb back to the selected tab with no state to restore.
+
+**State mapping,** using existing `BrainState` profiles only:
+
+| Supervisor | Orb | Caption line 2 |
+|---|---|---|
+| enabled, no wake | `idle` | "idle" |
+| `currentWake` set | `thinking` | "waking · 3 items" |
+| last wake failed | `error` | "wake failed" with `xmark.octagon.fill` |
+| paused / killed / at the cap | `idle` through the existing Reduce Motion path (no new "still" profile) | "paused · by you 14:02" / "paused · wake aborted" / "paused · daily cap" (with glyph) |
+| not waking (stale) | `idle` | "not waking" with the warning glyph |
+| feed disconnected / token unavailable | `idle`, Reduce Motion path | "unknown" |
+
+**Caption:**
+
+- **Line 1** reads `binoculars` "SUPERVISOR" (9 pt mono, tracked 2.5, `.tertiary` as today), replacing "STATE", so the user can tell which entity the orb describes.
+- **Line 2** is the state (12 pt mono, `.secondary`).
+- **Line 3** (new, 10.5 pt `.secondary`, one line, tail-truncated) is the summary: "watching 4 of 6 · following fix-flags · woke 2m ago". When paused it reads "3 events queued · watching 4 of 6", and at the cap "$10.00 / $10 · resets 00:00".
+
+**Brain pane hidden** (`bridge.panes.brain == false`). The inspector gains one 22 pt line at its top, `binoculars` plus line 2 plus line 3, so the state is never lost.
+
+### 13.6 The inspector (right column, below the Brain)
+
+A native small segmented `Picker`, **Tabs · Log · Settings**, then the segment's content in a `ScrollView`.
+
+- **Default segment: Tabs.** The last choice persists per project. **Settings is never the default:** the autonomy switches sit one deliberate step from a fluent reply (§1, rubber-stamping).
+- **There is deliberately no *Needs you* segment.** The Sessions pane is the one inbox list (discovery answer 1, ADR-0112). See §13.13, caveat 1.
+
+The segments:
+
+- **Tabs** is the management view of the per-tab chips.
+  - *Watching (N)*: one row per open tab whose delegation is `observe` or wider. The tab title is 11.5 pt, then a 10.5 pt `.secondary` line with the last supervisor act or wait ("escalated a push 14:06 · waiting on you") and, for shared-checkout tabs, §6.5's note. Trailing is the delegation `Menu`, shown with its label ("Answers questions ▾"), with §6.5's items and subtitles.
+  - A followed tab adds `binoculars` "Following until it is ready to merge" with **Stop following** on its own line (§11, departure 19).
+  - *Not watched (N)*: the remaining tabs, with the same menu.
+  - Setting a level is the user's act and applies at once, unconfirmed, as in §6.5.
+- **Log** is §6.6's ledger section, opened: filter chips, then rows, then "Show 50 earlier". A wake line in the conversation opens this segment filtered to that wake.
+- **Settings** is §6.1's expanded block, moved as it is:
+  - Autonomy: four switches, each with its stats line, the "below suggested bar" text and the human-only warning, and Confirms disabled with its reason;
+  - Charter with Edit…;
+  - Daily cap, a stepper plus "$8.20 today · own $2.10 · tabs $6.10";
+  - Model with Change…;
+  - Disable supervisor….
+
+The inspector is 320–480 pt wide and more, which already contains the pane widths (260–420) these components were built and rendered for. They drop in **without** new width rules.
+
+### 13.7 What stays in the Sessions pane
+
+- **One supervisor line,** replacing the three-line strip (§6.1, §11 departure 11). It is a `paneRow`-shaped button that opens the workspace, carrying:
+  - a state glyph;
+  - "Supervisor" at 11 pt semibold;
+  - **one short state word from a fixed list:** Shadow, Autonomous, At daily cap, Wake failed, Not waking, Reconnecting, No control;
+  - from 80 % of the cap, the 56 pt orange meter instead of the word;
+  - Pause, or **Kill while a wake is in flight** (§13.13, caveat 5);
+  - a › chevron.
+- **When the line carries a chip** (Kill while waking, Resume while paused or killed), **the state word is dropped.** The glyph (spinner, `pause.fill`, `stop.fill`) and the chip say it. The full sentence is the line's help text and VoiceOver value. This is what keeps it to one untruncated line at 260 pt; the first comp truncated to "Wa…" and "Pause…".
+- ***Needs you* is unchanged,** including:
+  - tab rows with their escalation cards;
+  - the shadow "would answer" line;
+  - **tabless supervisor rows** (new-tab proposals and guardrails with *Raise cap…* / *Resume*).
+
+  ⌥⌘J still reaches every item.
+- **Delegation glyphs stay on tab rows** (§6.5). They answer "what is it allowed to do here" at a glance; the Tabs segment is where many are managed (ADR-0112: the strip switches, the pane manages many).
+- **Leaves the pane:** the expanded settings block and the Supervisor log section. Both move to the inspector.
+- **Off:** §6.7's line stays where it is, "Supervisor · off  Set up…". *Set up…* now opens the workspace on its set-up form instead of a sheet, so set-up stays in one place (ADR-0112). With no project open, nothing is shown.
+
+### 13.8 The rail button, opening and closing
+
+- **The rail button** (being added by tab `1c944150`) is a **workspace toggle, not a pane selector.**
+  - Every other rail item selects what fills the sidebar and carries the 2 pt accent leading bar.
+  - This one shows `row-selected` fill and a primary-colour glyph **without the bar** while the workspace is open, so the bar keeps one meaning.
+  - Its badge is the open-item count.
+  - It is shown in every supervisor mode, off included; off opens the set-up form.
+- **Opening** the workspace:
+  - selects the **Sessions** pane in the sidebar, because the desk's inbox is there. A collapsed sidebar stays collapsed, and the header's "N for you" chip expands it.
+  - focuses the composer;
+  - re-targets the orb;
+  - covers the chat.
+- **Registry command:** *Supervisor: Show Workspace* is a toggle that appears in the menu, ⇧⌘P and ⌘/. It proposes ⌃⌥⌘S, beside ⌃⌥⌘P / ⌃⌥⌘K; the builder checks it against every binding.
+- **Closing,** by the header × (or ⋯ › Close), the rail button, or the command. The workspace stays mounted, so its scroll position and composer draft survive.
+- **What dismisses it,** and what does not:
+  - **Dismisses:** an open that **originates outside** the workspace, which is a file chosen in Files, Search or Source Control, a chat tab selected from the Sessions pane, or a card's ⋯ › *Open tab*.
+  - **Does not dismiss:** an open **from inside** it (a ground's `file:line`, a log row's link, *Copy act*). That opens the file in the editor slot **under** the workspace and leaves the workspace in place, with a one-line notice in the header row: "Opened src/a.ts:42 — Show". This lets the user check a ground without losing the card they are about to consent on.
+- **Disabling the supervisor** while the workspace is open **closes it.** It does not swap to the set-up form.
+
+### 13.9 Off: the set-up form (centre only)
+
+§6.7's sheet becomes an inline form in a 520 pt column, under a header that reads "Supervisor · off" with ×. It holds:
+
+- the two-sentence explanation;
+- the charter field;
+- the daily cap (default $20);
+- the open tabs, each with a level `Picker` (default `answer-questions`);
+- the model as a label;
+- **Start in shadow,** a bordered button.
+
+It has **no default button and no Return binding**, and no Cancel (× closes it). There is no path to autonomy from it. The right column is the normal tab Brain and chat (`off-light.png`, `off-dark-narrow.png`).
+
+### 13.10 States
+
+Every row of §7 and §12.6 still applies, with the hosts changed:
+
+| State | Header | Orb caption | Pane line | Elsewhere |
+|---|---|---|---|---|
+| Off | "· off", × | (tab's orb) | §6.7 off line | Centre is the set-up form |
+| Shadow · idle | · Shadow, meter, $, Pause, ⋯, × | idle | Shadow, Pause | — |
+| Waking | adds **Kill** | waking · N items | spinner, **Kill**, Pause | Composer stays enabled; the §12.4 indicator shows in the conversation |
+| Autonomous | · Autonomous · 2 of 4 | idle · "autonomous: questions, nudges" | Autonomous | Autonomous acts go to Log and the tab transcript |
+| Paused by you | **Resume** primary | paused · by you 14:02 | pause glyph, Resume | §12.4 paused notice above the composer |
+| Killed | Resume | paused · wake aborted | stop glyph, Resume | Already-ledgered items stay |
+| Near cap (≥ 80 %) | orange meter | idle | the meter replaces the word | — |
+| At the cap | red meter with warning glyph, Resume disabled | paused · daily cap | warning glyph, At daily cap | Budget card at the foot of the conversation (§11, departure 17); guardrail row with *Raise cap…* in *Needs you* |
+| Wake failed | · Wake failed; error notice under the header with Retry · Open log | wake failed | Wake failed | — |
+| Not waking | **Restart** chip | not waking | Not waking | — |
+| Feed disconnected | numbers hidden | unknown · reconnecting… | Reconnecting | Cards greyed and disabled; Pause and Kill stay enabled |
+| Token unavailable | notice under the header | unknown | No control | Composer and cards disabled with the reason |
+| *Needs you*, N items | "✋ N for you" | — | — | Rail badge N; the pane's section is unchanged; burst rules per §7 |
+| A conversation with cards | — | — | — | §12.2; settling a card here settles it in *Needs you*, and the reverse |
+
+### 13.11 Widths
+
+MARVIN's shell window is minimum 960, default 1280 and ideal 1440 (DESIGN.md). With the rail (44), sidebar (260) and right column (default 480, minimum 320):
+
+| Window | Centre | Right | Comp |
+|---|---|---|---|
+| 960 (narrow) | about 336, header at tier 4 | 320 | `narrow-dark-cap.png`, `off-dark-narrow.png` |
+| 1440 (typical) | about 656 | 480 | `typical-dark.png`, `typical-light.png`, `off-light.png`, `states-*.png` |
+| 1920 (wide) | about 1136, conversation capped at 760 | 480 | `wide-light-auto.png`, `wide-dark-paused.png` |
+
+At the 1280 default the centre is about 496: between narrow and typical, the header is at tier 2 or 3. None of these widths is measured: the header uses `ViewThatFits`, the conversation a `maxWidth`, and the inspector the components' existing `minWidth: 0` rules.
+
+### 13.12 Keyboard and VoiceOver
+
+- **Focus order:** header controls, the conversation (each reply one stop, its cards after it), the composer, then the inspector (the segmented picker, then the segment). §9.1 holds: no single-key consent, always Tab to the chip and then Space.
+- **The workspace** is a container labelled "Supervisor workspace".
+- **The header** title is `.isHeader`. It is one `.contain` element whose value is the mode plus the budget in words ("Shadow. 3 dollars 20 of 10 dollars today"). Its controls are labelled children: "Pause supervisor", "Kill current wake", "Resume supervisor", "2 items need you — show in Sessions", "Supervisor options" and "Close supervisor workspace".
+- **The orb block** is one element, label "Supervisor state", value "waking, 3 items. Watching 4 of 6 tabs. Following fix-flags." The tab orb's existing element is unchanged when it is not re-targeted.
+- **The inspector** picker is labelled "Supervisor inspector". Segment content keeps every label §9.2 already gives it: delegation menus, toggles with their agreement value, and ledger rows.
+- **The pane line** is a button labelled "Supervisor", value the full state sentence, hint "Opens the supervisor workspace". Pause and Kill are separate, labelled buttons.
+- **Announcements are unchanged** (§9.2, §12.7): one coalesced arrival, state changes, "Supervisor replied".
+- **Reduce Motion:** arrivals use opacity only, and the orb follows the system setting as today. **Increase Contrast:** nothing new.
+
+### 13.13 Advisor conditions, and what this design does with each
+
+All of the conditions are adopted:
+
+1. **No *Needs you* list in the workspace.** The pane is the one inbox; the header chip goes there.
+2. **Tabless supervisor rows stay in the pane** (§13.7).
+3. **The orb is re-targeted at view level** from `SupervisorModel`, never through `setMarvinState` or `activeMarvinSessionId` (§13.5).
+4. **Before the right-column cover is built, run `LayoutOscillationProbe`** with a long, streaming transcript under the cover. If it oscillates, use the centre-only fallback (§13.2). The cover is the shipped overlay mechanism rather than `keptMounted`, which removes the zero-width case the advisor named. The probe stays a precondition.
+5. **Kill is on the pane line during a wake** (§13.7).
+6. **The header has a count-based overflow** with a stated yield order, rendered at the centre's minimum (§13.3).
+7. **An open from inside the workspace does not dismiss it** (§13.8).
+8. **Consent chips never navigate;** only ⋯ › *Open tab* does (§13.4).
+9. **The inline set-up form has no default action and no Return binding** (§13.9).
+10. **Disabling closes the workspace** (§13.8).
+11. **The delegation glyph stays on pane rows** (§13.7).
+12. **The rail button's selected semantics are defined:** a toggle, with fill and no bar (§13.8).
+13. **Settings is never the default segment** (§13.6).
+14. **The ADR-0128 amendment lists every removed clause** (§13.14).
+15. **The fixtures are re-rendered at the new widths,** light and dark (§13.14).
+16. **No new "still" `BrainState` profile;** the Reduce Motion path is used (§13.5).
+
+### 13.14 What the build changes elsewhere
+
+- **ADR-0128 gets a dated amendment (placement only)** that lists every clause it removes or moves:
+  - §1 "one per project, pinned … first tab in the strip" → the workspace;
+  - §1 "closing the tab hides it" → closing the workspace hides it;
+  - §1 "no tab while off; the off line is the one place to start it" → the rail button and the off line both open the set-up form, which is still one place;
+  - §12.1 "the strip's first stop for VoiceOver" → the rail button and the registry command;
+  - §12.1 "disabled while selected falls back to the last chat tab" → disabling closes the workspace;
+  - the code it retires: `supervisor.chatSelected` / `chatTabVisible` and `supervisorChatOverlay` (`ChatPreviewView.swift:2798-2862`) are retired as the pinned tab; the overlay mechanism is reused for the inspector cover;
+  - the [7.4] fixtures' 260 / 420 chat-column widths.
+
+  No authority clause changes.
+- **The supervisor guide** (`docs/guides/supervisor.md`): "Talking to the supervisor" describes the workspace instead of the pinned tab.
+- **Fixtures** (`SurfaceSnapshotSupervisor`):
+  - each §13.10 row at the centre's minimum (336) and at the 760 cap;
+  - the inspector at 320 and 480;
+  - the pane line at 260 and 420;
+  - light and dark.
+
+  After those, `impeccable critique`, then `polish`.
+- **Coordination:**
+  - `SupervisorChatView` and the composer are being changed by tab `supervisor-chat-parity`, and the workspace hosts that view as it lands;
+  - the rail icon and badge come from tab `1c944150`, and §13.8 is the behaviour it binds to.
+
+  The build starts after both have merged.
+
+### 13.15 Comps
+
+Every file is under `.impeccable/supervisor-workspace/renders/`. Regenerate them with `sh .impeccable/supervisor-workspace/render.sh`.
+
+| File | Width | Theme | Shows |
+|---|---|---|---|
+| `typical-dark.png` | 1440 | dark | Waking: Kill in the header and on the pane line, a conversation with an outward card (collapsed) and a settled card, the orb thinking, Tabs with a follow, *Needs you* 2 with a tabless row |
+| `typical-light.png` | 1440 | light | Shadow idle, Log segment |
+| `narrow-dark-cap.png` | 960 | dark | At the cap: header tier 4, pane line, guardrail row with *Raise cap…*, Settings segment at 320 |
+| `wide-light-auto.png` | 1920 | light | Autonomous · 2 of 4, the 760 pt column, Settings with two switches on |
+| `wide-dark-paused.png` | 1920 | dark | Paused by you: Resume primary in the header and on the pane line, the orb paused |
+| `off-light.png` / `off-dark-narrow.png` | 1440 / 960 | light / dark | Off: the set-up form in the centre, the tab's Brain and chat kept on the right |
+| `states-dark.png` / `states-light.png` | sheet | both | Header, pane line at 260 and orb caption for ten states: shadow, waking, autonomous, paused, killed, at cap, near cap, failed, not waking, disconnected |
+
+### 13.16 Open decisions for the reviewer
+
+1. **Opening the workspace selects the Sessions pane** (§13.8). The alternative leaves the sidebar alone, which means the inbox may be off screen while the user is at the supervisor's desk.
+2. **⌃⌥⌘S for *Show Workspace***, pending the builder's collision check.
+3. **An open from inside the workspace stays under it,** with a "Show" notice (§13.8). The alternative is an inline file peek inside the card, which would be a new component.
+
+### 13.17 Departures in the build (2026-10-31)
+
+23. **A follow's *Stop following* stays in the conversation's follow strip.** The Tabs row names the follow in words only. One control, one place: the strip already carried it, and two Stop buttons for one record would invite the question which one is real.
+24. **The workspace hides by opacity, not `keptMounted`.** Once mounted, the centre stays at full size and is hidden with opacity, hit-testing off, `disabled` and `accessibilityHidden`. `keptMounted` zero-frames a slot, and a zero-width transcript was the advisor's ADR-0062 concern. The inspector covers the chat the way the pinned tab's overlay did, with the chat hidden from VoiceOver.
+25. **The composer focuses on open through an opt-in `focusToken` on `ChatTextEditor`.** It is nil for the chat composer, which is unchanged.
+26. **The header drops the strip's " · N waiting"** (`SupervisorWorkspace.headerMode`), because "N for you" beside it said the same thing.
+27. **Delegation in the Tabs list is a native pull-down** (`Menu`, `.button` style) with the level's name. On pane rows it stays the glyph-only menu (§6.5).
+28. **Polish after the critique.** The failed-wake notice keeps only *Open log*, since Retry is the header's. The Brain's summary puts "woke" before "following". The pane line's open state is a selected fill plus the `.isSelected` trait, not a reversed chevron.
+29. **The offscreen harness does not draw Metal.** The orb area is empty in every render, and the caption was judged instead. The orb's profile and still state are pinned by `SupervisorBrainFace` tests, not by pixels.
+30. **The conversation's paused notice drops its own *Resume*.** The conversation now always sits under the workspace header, whose primary control while paused is Resume, so the notice keeps only its words. The Sessions pane line keeps its Resume, as a separate host for when the workspace is closed.
