@@ -20,11 +20,13 @@ public enum ComposerReturn: Equatable, Sendable {
         keyCode: UInt16,
         shift: Bool,
         option: Bool,
-        hasMarkedText: Bool
+        hasMarkedText: Bool,
+        returnSubmits: Bool = true
     ) -> ComposerReturn {
         // 36 is the main Return key; NSEvent has no typed constant for it.
         guard keyCode == 36 else { return .notReturn }
         if hasMarkedText { return .deferToInputMethod }
-        return shift || option ? .newline : .submit
+        // An editor in front of a consent button (ADR-0128): Return is only ever a newline.
+        return shift || option || !returnSubmits ? .newline : .submit
     }
 }

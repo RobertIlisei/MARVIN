@@ -4173,6 +4173,112 @@ runner.suite("composer-return") {
         runner.expect(d(0), equals: .notReturn, "a letter")
         runner.expect(d(0, marked: true), equals: .notReturn, "a letter mid-composition goes to the input method on its own")
     }
+
+    runner.test("an editor in front of a consent button never submits on Return (ADR-0128)") {
+        let noSubmit = ComposerReturn.decide(keyCode: 36, shift: false, option: false, hasMarkedText: false, returnSubmits: false)
+        runner.expect(noSubmit, equals: .newline, "plain Return is a newline")
+        runner.expect(ComposerReturn.decide(keyCode: 36, shift: false, option: false, hasMarkedText: true, returnSubmits: false),
+                      equals: .deferToInputMethod, "an IME composition still owns Return")
+    }
+}
+
+// MARK: - New-tab Edit… sheet: narrowing options only (ADR-0128 §5)
+
+runner.suite("new-tab-edit-narrowing") {
+    typealias E = SupervisorNewTabEdit
+
+    runner.test("strategy: the proposal and every narrower one, never wider (posture.ts STRATEGY_ORDER)") {
+        runner.expect(E.strategies(proposed: "full"), equals: ["full", "auto", "gated"], "from full")
+        runner.expect(E.strategies(proposed: "auto"), equals: ["auto", "gated"], "auto never offers full")
+        runner.expect(E.strategies(proposed: "gated"), equals: ["gated"], "nothing narrower than gated")
+        runner.expect(E.strategies(proposed: ""), equals: [], "unknown: nothing offered")
+    }
+
+    runner.test("mode: Agent narrows to Plan or Ask; Plan and Ask stay put (judged by the advisor's price)") {
+        runner.expect(E.modes(proposed: "agent"), equals: ["agent", "plan", "ask"], "from agent")
+        runner.expect(E.modes(proposed: "plan"), equals: ["plan"], "plan never offers agent or ask")
+        runner.expect(E.modes(proposed: "ask"), equals: ["ask"], "ask never offers agent or plan")
+    }
+
+    runner.test("effort: the proposal and lower; unknown offers nothing") {
+        runner.expect(E.efforts(proposed: "high"), equals: ["high", "medium", "low"], "from high")
+        runner.expect(E.efforts(proposed: "max"), equals: ["max", "xhigh", "high", "medium", "low"], "from max")
+        runner.expect(E.efforts(proposed: "low"), equals: ["low"], "from low")
+        runner.expect(E.efforts(proposed: ""), equals: [], "not stated")
+    }
+
+    runner.test("delegation: answer-questions → observe → off, only lowered") {
+        runner.expect(E.delegations(proposed: "answer-questions"), equals: ["answer-questions", "observe", "off"], "from answer-questions")
+        runner.expect(E.delegations(proposed: "observe"), equals: ["observe", "off"], "observe never offers answer-questions")
+        runner.expect(E.delegations(proposed: "off"), equals: ["off"], "off stays off")
+    }
+
+    runner.test("model: no pricier when priced, no higher tier when unpriced, else only the proposal") {
+        let tiered: [E.CatalogModel] = [.init(id: "o", displayName: "O", tier: "opus"), .init(id: "s", displayName: "S", tier: "sonnet"),
+                                        .init(id: "h", displayName: "H", tier: "haiku"), .init(id: "x", displayName: "X", tier: "other")]
+        runner.expect(E.models(proposed: "o", catalog: tiered).map(\.id), equals: ["o", "s", "h"], "opus offers sonnet and haiku, not an unranked tier")
+        runner.expect(E.models(proposed: "s", catalog: tiered).map(\.id), equals: ["s", "h"], "sonnet never offers opus")
+        runner.expect(E.models(proposed: "h", catalog: tiered).map(\.id), equals: ["h"], "haiku offers nothing else")
+        let priced: [E.CatalogModel] = [.init(id: "a", displayName: "A", tier: "other", promptPrice: 0.00001),
+                                        .init(id: "b", displayName: "B", tier: "other", promptPrice: 0.000003),
+                                        .init(id: "c", displayName: "C", tier: "other", promptPrice: 0.00002),
+                                        .init(id: "u", displayName: "U", tier: "haiku")]
+        runner.expect(E.models(proposed: "a", catalog: priced).map(\.id), equals: ["a", "b"], "cheaper only; pricier and unpriced are wider")
+        runner.expect(E.models(proposed: "gone", catalog: priced).map(\.id), equals: ["gone"], "a model the catalogue lacks: only itself")
+        runner.expect(E.models(proposed: "o", catalog: []).map(\.id), equals: ["o"], "no catalogue yet: only the proposal")
+    }
+
+    let item = SupervisorInboxItem(
+        id: "i", createdAt: "2026-10-31T10:00:00Z", sessionId: nil, kind: "new-tab",
+        escalatedBecause: .init(code: "human-only", label: "Only you can open a tab"),
+        rawAct: .init(toolName: "new_session", input: .object(["title": .string(" Retry backoff ")]), summary: "Open a new tab"),
+        actions: [],
+        newTab: .init(firstMessage: "Do the thing", posture: .init(model: "o", effort: "high", strategy: "full", mode: "agent"),
+                      delegation: "answer-questions"))
+
+    runner.test("the proposed fields are read from the card, the title from the server-built raw act") {
+        let f = E.Fields(item)
+        runner.expect(f.title, equals: "Retry backoff", "title trimmed")
+        runner.expect(f.delegation, equals: "answer-questions", "delegation")
+        runner.expect(f.strategy, equals: "full", "strategy")
+        let bare = SupervisorInboxItem(id: "j", createdAt: "2026-10-31T10:00:00Z", sessionId: nil, kind: "new-tab",
+                                       escalatedBecause: .init(code: "human-only", label: "x"), actions: [],
+                                       newTab: .init(firstMessage: "m"))
+        runner.expect(E.Fields(bare).delegation, equals: "off", "no delegation on the card: the server's default, off")
+        runner.expect(E.Fields(bare).mode, equals: "agent", "no mode: agent, as the server reads it")
+    }
+
+    runner.test("edits: the first message always, the rest only when changed, posture under the server's keys") {
+        let proposed = E.Fields(item)
+        let same = E.edits(proposed: proposed, chosen: proposed)
+        runner.expect(Set(same.keys), equals: ["firstMessage"], "unchanged: only the first message")
+        var c = proposed
+        c.firstMessage = "  Do the other thing\n"
+        c.title = "Backoff"
+        c.delegation = "observe"
+        c.strategy = "gated"
+        c.mode = "plan"
+        c.model = "s"
+        c.effort = "low"
+        let e = E.edits(proposed: proposed, chosen: c)
+        runner.expect(e["firstMessage"] as? String ?? "", equals: "Do the other thing", "trimmed")
+        runner.expect(e["title"] as? String ?? "", equals: "Backoff", "title")
+        runner.expect(e["delegation"] as? String ?? "", equals: "observe", "delegation")
+        let p = e["posture"] as? [String: Any] ?? [:]
+        runner.expect(Set(p.keys), equals: ["permissionStrategy", "mode", "model", "thinkingMode"], "patch keys validatePosturePatch accepts")
+        runner.expect(p["thinkingMode"] as? String ?? "", equals: "low", "effort is thinkingMode")
+    }
+
+    runner.test("sheet size: 70 % of the window, at least the minimum, never past the window, the remembered size wins") {
+        let typical = E.sheetSize(window: CGSize(width: 1440, height: 900), remembered: nil)
+        runner.expect(typical, equals: CGSize(width: 1008, height: 630), "70 % of 1440×900")
+        let narrow = E.sheetSize(window: CGSize(width: 700, height: 500), remembered: nil)
+        runner.expect(narrow, equals: E.minSize, "a small window: the minimum")
+        let kept = E.sheetSize(window: CGSize(width: 1440, height: 900), remembered: CGSize(width: 800, height: 700))
+        runner.expect(kept, equals: CGSize(width: 800, height: 700), "remembered")
+        let clamped = E.sheetSize(window: CGSize(width: 1000, height: 700), remembered: CGSize(width: 1400, height: 900))
+        runner.expect(clamped, equals: CGSize(width: 960, height: 660), "a remembered size larger than this window is clamped to it")
+    }
 }
 
 // MARK: - Git status colours meet contrast in both appearances (audit L4)

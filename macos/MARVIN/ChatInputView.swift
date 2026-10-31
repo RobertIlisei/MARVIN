@@ -84,6 +84,8 @@ import UniformTypeIdentifiers
     /// (the Supervisor workspace focuses its composer on open, brief §13.8).
     /// nil — the chat composer — never takes focus this way.
     var focusToken: Int? = nil
+    /// false: Return inserts a newline and never submits (an editor in front of a consent button).
+    var returnSubmits = true
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = ChatNSTextView.scrollableTextView()
@@ -97,6 +99,7 @@ import UniformTypeIdentifiers
         textView.onImagePaste = { image in onImagePaste(image) }
         textView.onFilePaste = { urls in onFilePaste(urls) }
         textView.onAtTrigger = { onAtTrigger() }
+        textView.returnSubmits = returnSubmits
         textView.font = .systemFont(ofSize: NSFont.systemFontSize)
         textView.isRichText = false
         textView.allowsUndo = true
@@ -131,6 +134,7 @@ import UniformTypeIdentifiers
         textView.onCommandMove = { delta in onCommandMove(delta) }
         textView.onCommandAccept = { onCommandAccept() }
         textView.onCommandDismiss = { onCommandDismiss() }
+        textView.returnSubmits = returnSubmits
         textView.isEditable = !isDisabled
         textView.isSelectable = true
         if let token = focusToken, token != context.coordinator.focusToken {
@@ -226,6 +230,8 @@ final class ChatNSTextView: NSTextView {
     var onCommandAccept: (() -> Void)?
     /// Dismiss the popup (⎋ while open).
     var onCommandDismiss: (() -> Void)?
+    /// Set by the wrapper. false → Return is a newline, never a submit.
+    var returnSubmits = true
 
     override func keyDown(with event: NSEvent) {
         // Slash-command popup navigation. Checked FIRST and gated on the popup
@@ -262,7 +268,7 @@ final class ChatNSTextView: NSTextView {
         let isCommand = mods.contains(.command)
         switch ComposerReturn.decide(
             keyCode: event.keyCode, shift: isShift, option: isOption,
-            hasMarkedText: hasMarkedText()
+            hasMarkedText: hasMarkedText(), returnSubmits: returnSubmits
         ) {
         case .submit:
             // Enter alone (or ⌘⏎) → submit.

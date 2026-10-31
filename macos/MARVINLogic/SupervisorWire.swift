@@ -399,10 +399,12 @@ public struct SupervisorInboxItem: Decodable, Equatable, Sendable, Identifiable 
         public let posture: Posture?
         public let wider: [String]?
         public let requestedBy: RequestedBy?
+        /// ADR-0128 §5 — what the tab is delegated at on accept; the edit may only lower it.
+        public let delegation: String?
         public init(firstMessage: String, tree: Tree? = nil, posture: Posture? = nil, wider: [String]? = nil,
-                    requestedBy: RequestedBy? = nil) {
+                    requestedBy: RequestedBy? = nil, delegation: String? = nil) {
             self.firstMessage = firstMessage; self.tree = tree; self.posture = posture; self.wider = wider
-            self.requestedBy = requestedBy
+            self.requestedBy = requestedBy; self.delegation = delegation
         }
     }
     public struct PostureChange: Decodable, Equatable, Sendable {

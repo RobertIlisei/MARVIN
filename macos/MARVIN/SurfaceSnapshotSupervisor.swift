@@ -123,6 +123,32 @@ import SwiftUI
                           wider: [], requestedBy: .init(kind: "user-message", ref: "m-7", at: iso(4))))
     }
 
+    /// A long brief from an Agent / full / Opus proposal, so every field has narrower choices to show.
+    static var longBriefNewTabItem: SupervisorInboxItem {
+        let brief = (1...32).map { i in
+            i % 8 == 1 ? "## Milestone \(i / 8 + 1)" : "\(i). Step \(i) of the retry-backoff work — read the plan, change only the files it names, run the suite, and tick the step."
+        }.joined(separator: "\n")
+        return SupervisorInboxItem(
+            id: "inbox-newtab-long", createdAt: iso(3), sessionId: nil, kind: "new-tab",
+            escalatedBecause: .init(code: "human-only", label: "Only you can open a tab"),
+            rawAct: .init(toolName: "new_session", input: .object(["title": .string("Retry backoff"), "tree": .string("worktree")]),
+                          summary: "Open a new tab: Retry backoff"),
+            actions: [.init(id: "open", label: "Open tab", role: "consent", recommended: true),
+                      .init(id: "edit", label: "Edit…", role: "edit"),
+                      .init(id: "dismiss", label: "Dismiss", role: "dismiss")],
+            newTab: .init(firstMessage: brief,
+                          tree: .init(baseRef: "main", baseSha: "85a0492e1c", mode: "worktree"),
+                          posture: .init(model: "claude-opus-5-5", modelLabel: "Opus 5.5", effort: "high", strategy: "full", mode: "agent"),
+                          wider: [], requestedBy: .init(kind: "user-message", ref: "m-7", at: iso(4)),
+                          delegation: "answer-questions"))
+    }
+
+    static let modelCatalog: [SupervisorNewTabEdit.CatalogModel] = [
+        .init(id: "claude-opus-5-5", displayName: "Opus 5.5", tier: "opus"),
+        .init(id: "claude-sonnet-5-5", displayName: "Sonnet 5.5", tier: "sonnet"),
+        .init(id: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", tier: "haiku"),
+    ]
+
     static func guardrail(code: String, label: String, detail: String, verb: String) -> SupervisorInboxItem {
         SupervisorInboxItem(
             id: "inbox-guard-\(code)", createdAt: iso(0.5), sessionId: nil, kind: "guardrail",

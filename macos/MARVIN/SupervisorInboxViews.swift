@@ -708,58 +708,184 @@ enum SupervisorCardSheet: Identifiable {
 
 // MARK: - Sheets the inbox opens
 
-/// "Edit…" on a new-tab proposal: the first message can change, and the
-/// posture can only narrow — never widen past what the card shows (§6.3).
+/// "Edit…" on a new-tab proposal (ADR-0128 §5): the first message and the
+/// title change freely; the posture can only narrow and the delegation only
+/// lower — each picker offers only what the server accepts (`SupervisorNewTabEdit`).
+/// The `edit` action opens the tab, so its button names that act, and nothing
+/// here is a default button: Return is a newline in the brief, Esc cancels.
 @MainActor struct SupervisorNewTabEditSheet: View {
+    typealias Edit = SupervisorNewTabEdit
     let model: SupervisorModel
     let item: SupervisorInboxItem
     let onClose: () -> Void
-    @State private var message = ""
-    @State private var mode = "agent"
-    @State private var strategy = "gated"
+    private let proposed: Edit.Fields
+    @State private var chosen: Edit.Fields
+    @State private var catalog: [Edit.CatalogModel]
+    private let loadsCatalog: Bool
+    @State private var size: CGSize
+    @State private var sending = false
+    // Remembered like the chat composer's height (`marvin.chat.editorHeight`).
+    @AppStorage("marvin.supervisor.newTabEdit.width") private var savedWidth: Double = 0
+    @AppStorage("marvin.supervisor.newTabEdit.height") private var savedHeight: Double = 0
 
-    private static let modes = ["agent", "plan", "ask"]          // widest first
-    private static let strategies = ["full", "auto", "gated"]    // widest first
+    /// `catalog` / `window`: fixed inputs for the snapshot harness; nil reads `/api/models` and the key window.
+    init(model: SupervisorModel, item: SupervisorInboxItem, onClose: @escaping () -> Void,
+         catalog: [SupervisorNewTabEdit.CatalogModel]? = nil, window: CGSize? = nil) {
+        self.model = model
+        self.item = item
+        self.onClose = onClose
+        let fields = Edit.Fields(item)
+        proposed = fields
+        _chosen = State(initialValue: fields)
+        _catalog = State(initialValue: catalog ?? [])
+        loadsCatalog = catalog == nil
+        let w = UserDefaults.standard.double(forKey: "marvin.supervisor.newTabEdit.width")
+        let h = UserDefaults.standard.double(forKey: "marvin.supervisor.newTabEdit.height")
+        _size = State(initialValue: Edit.sheetSize(
+            window: window ?? (NSApp.keyWindow ?? NSApp.mainWindow)?.frame.size,
+            remembered: window == nil && w > 0 && h > 0 ? CGSize(width: w, height: h) : nil))
+    }
 
     var body: some View {
-        let proposed = item.newTab?.posture
-        let modeChoices = Array(Self.modes.drop { $0 != (proposed?.mode ?? "agent") })
-        let strategyChoices = Array(Self.strategies.drop { $0 != (proposed?.strategy ?? "gated") })
         VStack(alignment: .leading, spacing: 12) {
             Text("Edit the new tab").font(.headline)
-            Text("You can change the first message and narrow the posture. Opening the tab stays your click.")
+            Text("Change the first message and the title. The posture and the delegation can only narrow from what the card proposed. Opening the tab stays your click.")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            TextEditor(text: $message)
-                .font(.system(size: 12))
-                .frame(height: 140)
+            briefHeader
+            ChatTextEditor(text: $chosen.firstMessage, onSubmit: {}, returnSubmits: false)
+                .frame(minHeight: 120, maxHeight: .infinity)
                 .overlay(RoundedRectangle(cornerRadius: MarvinTheme.Radius.chip).stroke(MarvinTheme.border, lineWidth: 1))
                 .accessibilityLabel("First message")
-            HStack(spacing: 12) {
-                Picker("Mode", selection: $mode) { ForEach(modeChoices, id: \.self) { Text($0.capitalized).tag($0) } }
-                    .frame(width: 150)
-                Picker("Strategy", selection: $strategy) { ForEach(strategyChoices, id: \.self) { Text($0).tag($0) } }
-                    .frame(width: 170)
-            }
+                .accessibilityHint("Return inserts a new line")
+                .layoutPriority(1)
+            fields
             HStack {
                 Spacer()
-                Button("Cancel", action: onClose).keyboardShortcut(.cancelAction)
-                Button("Save") {
-                    let id = item.actions.first { $0.id == "edit" }?.id ?? "edit"
+                Button("Cancel", action: onClose)
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityLabel("Cancel, keep the card as proposed")
+                // No default action: Return never consents (ADR-0128).
+                Button("Open with these changes") {
+                    sending = true
                     Task {
-                        await model.act(item, actionId: id, edits: ["firstMessage": message,
-                                                                    "posture": ["mode": mode, "permissionStrategy": strategy]])
+                        await model.act(item, actionId: "edit", edits: Edit.edits(proposed: proposed, chosen: chosen))
                         onClose()
                     }
                 }
+                .disabled(sending || SupervisorChat.sendable(chosen.firstMessage) == nil)
+                .accessibilityLabel("Open the tab with these changes")
             }
         }
         .padding(20)
-        .frame(width: 460)
-        .onAppear {
-            message = item.newTab?.firstMessage ?? ""
-            mode = proposed?.mode ?? "agent"
-            strategy = proposed?.strategy ?? "gated"
+        .frame(minWidth: Edit.minSize.width, idealWidth: size.width, maxWidth: .infinity,
+               minHeight: Edit.minSize.height, idealHeight: size.height, maxHeight: .infinity)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { s in
+            savedWidth = Double(s.width.rounded())
+            savedHeight = Double(s.height.rounded())
+        }
+        .task { if loadsCatalog { await loadCatalog() } }
+    }
+
+    private var briefHeader: some View {
+        let edited = chosen.firstMessage != proposed.firstMessage
+        return HStack(spacing: 8) {
+            Text("First message").font(.system(size: 12, weight: .semibold))
+            Text(edited ? "edited" : "as proposed")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            Spacer()
+            if chosen.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines).count > SupervisorChat.maxMessageChars {
+                Text("Over \(SupervisorChat.maxMessageChars) characters — shorten it to open the tab")
+                    .font(.system(size: 11)).foregroundStyle(.orange)
+            }
+            if edited {
+                Button("Restore proposed") { chosen.firstMessage = proposed.firstMessage }
+                    .buttonStyle(.link).font(.system(size: 11))
+                    .accessibilityLabel("Restore the proposed first message")
+            }
+        }
+    }
+
+    private var fields: some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 8) {
+            row("Title", proposed: proposed.title.isEmpty ? "none, named from the first commit" : proposed.title) {
+                TextField("Title", text: $chosen.title, prompt: Text("Named from the first commit"))
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Tab title")
+            }
+            pickerRow("Delegation", spoken: "Supervisor delegation", field: \.delegation,
+                      choices: Edit.delegations(proposed: proposed.delegation),
+                      display: { SupervisorDelegation(rawValue: $0)?.title ?? $0 })
+            pickerRow("Strategy", spoken: "Permission strategy", field: \.strategy,
+                      choices: Edit.strategies(proposed: proposed.strategy), display: { $0 })
+            pickerRow("Mode", spoken: "Mode", field: \.mode,
+                      choices: Edit.modes(proposed: proposed.mode), display: { $0.capitalized })
+            pickerRow("Model", spoken: "Model", field: \.model,
+                      choices: Edit.models(proposed: proposed.model, catalog: catalog).map(\.id),
+                      display: modelName)
+            pickerRow("Effort", spoken: "Reasoning effort", field: \.effort,
+                      choices: Edit.efforts(proposed: proposed.effort), display: { $0 })
+        }
+    }
+
+    private func modelName(_ id: String) -> String {
+        if id == proposed.model, let l = item.newTab?.posture?.modelLabel, !l.isEmpty { return l }
+        return catalog.first { $0.id == id }?.displayName ?? (id.isEmpty ? "default" : id)
+    }
+
+    private func row<C: View>(_ label: String, proposed: String, @ViewBuilder _ control: () -> C) -> some View {
+        GridRow {
+            Text(label).font(.system(size: 12)).foregroundStyle(.secondary)
+                .gridColumnAlignment(.trailing)
+                .accessibilityHidden(true)
+            control().frame(minWidth: 150, maxWidth: 300, alignment: .leading)
+            Text("proposed: \(proposed)")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.tail)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// One choice → shown, not pickable: nothing narrower is something the server would accept.
+    private func pickerRow(_ label: String, spoken: String, field: WritableKeyPath<Edit.Fields, String>,
+                           choices: [String], display: @escaping (String) -> String) -> some View {
+        let was = proposed[keyPath: field].isEmpty ? "not stated" : display(proposed[keyPath: field])
+        let selection = $chosen[dynamicMember: field]
+        return row(label, proposed: was) {
+            if choices.isEmpty {
+                Text("as proposed (not stated)")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .accessibilityLabel("\(spoken): as proposed, not stated; nothing narrower can be chosen")
+            } else {
+                Picker(label, selection: selection) {
+                    ForEach(choices, id: \.self) { Text(display($0)).tag($0) }
+                }
+                .labelsHidden()
+                .disabled(choices.count < 2)
+                .help(choices.count < 2 ? "Nothing narrower than the proposal can be chosen here" : "Only the proposal and narrower choices are offered")
+                .accessibilityLabel(spoken)
+                .accessibilityValue(display(selection.wrappedValue))
+                .accessibilityHint(choices.count < 2
+                    ? "Fixed at the proposed \(was); nothing narrower can be chosen"
+                    : "Proposed \(was); only the proposal and narrower choices are offered")
+            }
+        }
+    }
+
+    private func loadCatalog() async {
+        struct Wire: Decodable {
+            struct Pricing: Decodable { let prompt: String? }
+            struct Model: Decodable { let id: String; let displayName: String; let tier: String; let pricing: Pricing? }
+            let models: [Model]
+        }
+        var req = URLRequest(url: ServerConfig.baseURL.appendingPathComponent("api/models"))
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        // A failed fetch leaves only the proposed model on offer — never a wider one.
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let wire = try? JSONDecoder().decode(Wire.self, from: data) else { return }
+        catalog = wire.models.map {
+            Edit.CatalogModel(id: $0.id, displayName: $0.displayName, tier: $0.tier,
+                              promptPrice: $0.pricing?.prompt.flatMap(Double.init))
         }
     }
 }
