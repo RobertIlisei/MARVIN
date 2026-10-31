@@ -21,7 +21,7 @@ import { readSessionMeta } from "./session-meta";
 import { announceProjectEvent } from "./turn-registry";
 
 export type LedgerDecision = "propose" | "act" | "escalate" | "refuse" | "drop";
-export type GroundKind = "plan" | "dod" | "adr" | "memory" | "charter" | "file";
+export type GroundKind = "plan" | "dod" | "adr" | "memory" | "charter" | "file" | "message";
 export type GroundProvenance = "strong" | "weak" | "unresolved";
 
 export interface LedgerGround {
@@ -84,6 +84,12 @@ export interface LedgerEntryInput {
   inboxItemId?: string;
   /** A one-line, server-built summary of the arguments (milestone 5) — never the supervisor's prose. */
   argSummary?: string;
+  /**
+   * ADR-0128 §7 — the user messages a message wake carried. Stamped by
+   * `appendLedgerEntry` on every line of that wake, from `setWakeOrigin`: the
+   * runtime knows which wake a line is for, the model never labels it.
+   */
+  origin?: { kind: "message"; messageIds: string[] };
 }
 
 /** Labels, not the tab's content: each capped, at most twenty. */
@@ -166,12 +172,23 @@ function titleOf(projectId: string, tab: string | null): string | null {
   }
 }
 
+/** wakeId → the origin every line of that wake carries. Set by the loop for a message wake's lifetime. */
+const wakeOrigins = new Map<string, NonNullable<LedgerEntryInput["origin"]>>();
+
+/** The loop names a message wake's messages before the wake runs, and clears them after its last line. */
+export function setWakeOrigin(wakeId: string, origin: LedgerEntryInput["origin"] | null): void {
+  if (origin) wakeOrigins.set(wakeId, { kind: "message", messageIds: [...origin.messageIds] });
+  else wakeOrigins.delete(wakeId);
+}
+
 export function appendLedgerEntry(projectId: string, input: LedgerEntryInput): LedgerEntry {
   ensureSupervisorDir(projectId);
+  const origin = input.origin ?? (input.wakeId ? wakeOrigins.get(input.wakeId) : undefined);
   const entry: LedgerEntry = {
     at: new Date().toISOString(),
     projectId,
     ...input,
+    ...(origin ? { origin } : {}),
     id: input.id ?? newLedgerId(),
     tabTitle: input.tabTitle !== undefined ? input.tabTitle : titleOf(projectId, input.tab),
   };

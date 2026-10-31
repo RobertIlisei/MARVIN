@@ -49,7 +49,9 @@ export type EscalationCode =
   | "budget"
   | "breaker"
   | "refusals"
-  | "repeated-failures";
+  | "repeated-failures"
+  /** ADR-0128 §6 — the user wrote to the supervisor during the wake; its acts wait for the user. */
+  | "message-hold";
 
 export interface RawAct {
   toolName: string;

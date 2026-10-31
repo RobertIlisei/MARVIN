@@ -15,7 +15,9 @@
  *      both servers load up front.
  *
  * The SDK session is resumed across wakes and rotated when the context passes
- * half the window or the day turns; every rotation is ledgered.
+ * 22.5 % of the model's window (measured) or the day turns; every rotation is ledgered.
+ * Rotation costs money, never correctness: a rotated message wake's packet
+ * carries the last 20 conversation messages (ADR-0128 §6).
  */
 
 import { existsSync, realpathSync } from "node:fs";
@@ -27,10 +29,11 @@ import { isSecretFileName } from "@marvin/tools/fs-constants";
 import { SUBAGENT_DISPATCH_TOOLS } from "@marvin/tools/policy";
 
 import { buildSubprocessEnv } from "./auth";
-import { ensureProviderModelId } from "./models";
+import { contextWindowFor, ensureProviderModelId } from "./models";
 import { resolveRoleModel } from "./role-models";
 import { appendLedgerEntry, readLedger, supervisorRoot } from "./supervisor-ledger";
 import { createSupervisorMcpServer, SUPERVISE_SERVER_NAME, type VerbContext } from "./supervisor-mcp";
+import { listMessages } from "./supervisor-messages";
 import { renderWakePacket, SUPERVISOR_SYSTEM_PROMPT, type WakeItem } from "./supervisor-prompt";
 import { getSupervisorState, pauseSupervisorForFault, updateSupervisorRuntime } from "./supervisor-state";
 
@@ -49,8 +52,21 @@ export const SUPERVISOR_DISALLOWED_TOOLS: readonly string[] = [
   "TodoWrite",
 ];
 
-/** Half of a 200K window: past it, the next wake starts a fresh session from the packet and the ledger. */
-export const ROTATE_AT_INPUT_TOKENS = 100_000;
+/**
+ * Past this share of the model's window the next wake starts a fresh session
+ * from the packet and the ledger (ADR-0128 §6). Measured in plan milestone
+ * [7.1] on ten real conversation wakes: a fresh session's wake ends at
+ * 35–39K tokens and costs $0.07–0.08; resumed wakes grew 4–6K tokens each and
+ * cost $0.18 at 52K, $0.33 at 63K and $0.60 at 81K. Resuming never beat a
+ * fresh session past the first resume, so rotate just above a fresh
+ * session's context: 45K on a 200K window, not the 40 % first planned.
+ */
+export const ROTATE_AT_WINDOW_FRACTION = 0.225;
+export const rotateAtTokens = (window: number): number => Math.round(window * ROTATE_AT_WINDOW_FRACTION);
+/** The threshold on the default 200K window. */
+export const ROTATE_AT_INPUT_TOKENS = rotateAtTokens(200_000);
+/** Conversation messages a rotated (or first) session's message packet carries. */
+export const ROTATED_CONVERSATION_MESSAGES = 20;
 
 const SUPERVISE_PREFIX = `mcp__${SUPERVISE_SERVER_NAME}__`;
 const GRAPH_PREFIX = "mcp__marvin-graph__";
@@ -242,9 +258,12 @@ export function buildSupervisorQueryOptions(args: SupervisorQueryArgs): { prompt
 export interface WakeDeps {
   query: typeof sdkQuery;
   resolveModel: () => Promise<string | undefined>;
+  /** The model's window, for the rotation threshold. Absent: the default 200K. */
+  contextWindow?: (model: string | undefined) => Promise<number>;
 }
 
 const defaultWakeDeps: WakeDeps = {
+  contextWindow: (model) => contextWindowFor(model ?? null),
   query: sdkQuery,
   resolveModel: async () =>
     ensureProviderModelId(await resolveRoleModel("supervisor").then((r) => (r === "inherit" ? null : r))) ?? undefined,
@@ -267,7 +286,9 @@ export async function runSupervisorWake(
   const { projectId } = args;
   const st = getSupervisorState(projectId);
   const today = new Date().toISOString().slice(0, 10);
-  const stale = !!st.sdkSessionId && (st.lastInputTokens > ROTATE_AT_INPUT_TOKENS || dayOf(st.sdkSessionStartedAt) !== today);
+  const model = await deps.resolveModel().catch(() => undefined);
+  const rotateAt = deps.contextWindow ? rotateAtTokens(await deps.contextWindow(model).catch(() => 200_000)) : ROTATE_AT_INPUT_TOKENS;
+  const stale = !!st.sdkSessionId && (st.lastInputTokens > rotateAt || dayOf(st.sdkSessionStartedAt) !== today);
   const fresh = !st.sdkSessionId || stale;
   const wakeId = args.verbCtx.wakeId;
 
@@ -278,17 +299,21 @@ export async function runSupervisorWake(
       tab: null,
       wakeId,
       mode: st.mode,
-      reason: st.lastInputTokens > ROTATE_AT_INPUT_TOKENS ? `context ${st.lastInputTokens} tokens > ${ROTATE_AT_INPUT_TOKENS}` : "a new day",
+      reason: st.lastInputTokens > rotateAt ? `context ${st.lastInputTokens} tokens > ${rotateAt}` : "a new day",
     });
   }
   appendLedgerEntry(projectId, { kind: "wake", verb: "start", tab: null, wakeId, mode: st.mode, reason: `${args.items.length} item(s)` });
 
+  // A conversation wake's spend is counted apart from watching (ADR-0128 §7) — one cap still stops both.
+  const conversation = args.items.some((i) => i.trigger === "message");
   const prompt = renderWakePacket({
     items: args.items,
     charter: st.charter,
     freshSession: fresh,
     autonomy: st.autonomy,
     ...(fresh ? { ledgerTail: readLedger(projectId, { limit: 50 }) } : {}),
+    // Correctness never rests on the session's memory: a new session re-reads the conversation.
+    ...(fresh && conversation ? { conversation: listMessages(projectId, { limit: ROTATED_CONVERSATION_MESSAGES }) } : {}),
   });
 
   let sessionId: string | undefined;
@@ -312,25 +337,31 @@ export async function runSupervisorWake(
       workDir: args.workDir,
       prompt,
       resume: fresh ? null : st.sdkSessionId,
-      model: await deps.resolveModel(),
+      model,
       verbCtx: args.verbCtx,
       abortController,
       onProvenanceRefusal,
     });
+    const contextOf = (u: Record<string, unknown>) => {
+      const n = (k: string) => (typeof u[k] === "number" ? (u[k] as number) : 0);
+      return n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
+    };
+    // The context the session ends at is the LAST model call's input. The result's usage sums every
+    // call of the wake (measured 2026-10-31: 97K reported for a ~33K context), which would rotate every wake.
+    let lastCallContext = 0;
     for await (const ev of deps.query({ prompt, options })) {
-      const e = ev as { type?: string; subtype?: string; session_id?: unknown; total_cost_usd?: unknown; usage?: Record<string, unknown> };
+      const e = ev as { type?: string; subtype?: string; session_id?: unknown; total_cost_usd?: unknown; usage?: Record<string, unknown>; message?: { usage?: Record<string, unknown> } };
       if (typeof e.session_id === "string") sessionId = e.session_id;
+      if (e.type === "assistant" && e.message?.usage) lastCallContext = contextOf(e.message.usage) || lastCallContext;
       if (e.type === "result") {
         if (typeof e.total_cost_usd === "number") costUsd = e.total_cost_usd;
-        const u = e.usage ?? {};
-        const n = (k: string) => (typeof u[k] === "number" ? (u[k] as number) : 0);
-        inputTokens = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
+        inputTokens = lastCallContext || contextOf(e.usage ?? {});
         if (e.subtype && e.subtype !== "success") throw new Error(`supervisor turn ended: ${e.subtype}`);
       }
     }
   } catch (err) {
     const error = (err as Error).message || String(err);
-    updateSupervisorRuntime(projectId, { addSpendUsd: costUsd });
+    updateSupervisorRuntime(projectId, { addSpendUsd: costUsd, spendKind: conversation ? "conversation" : "watching" });
     appendLedgerEntry(projectId, { kind: "wake", verb: "end", tab: null, wakeId, mode: st.mode, reason: `failed: ${error}`, costUsd });
     return { ok: false, error, costUsd };
   }
@@ -340,6 +371,7 @@ export async function runSupervisorWake(
     ...(fresh ? { sdkSessionStartedAt: new Date().toISOString() } : {}),
     lastInputTokens: inputTokens,
     addSpendUsd: costUsd,
+    spendKind: conversation ? "conversation" : "watching",
   });
   appendLedgerEntry(projectId, { kind: "wake", verb: "end", tab: null, wakeId, mode: st.mode, reason: "done", costUsd });
   return { ok: true, costUsd, ...(sessionId ? { sdkSessionId: sessionId } : {}) };

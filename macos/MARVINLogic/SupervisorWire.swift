@@ -621,6 +621,8 @@ public enum SupervisorFeedEvent: Equatable, Sendable {
     case state(revision: Int, mode: String)
     case inbox(change: String, id: String, sessionId: String?, state: String, resolvedBy: String?)
     case ledger(seq: Int, sessionId: String?, decision: String?)
+    /// ADR-0128 — a line was added to the conversation (`supervisor.message`).
+    case message(id: String, from: String)
 
     public static func decode(name: String, data: Data) -> SupervisorFeedEvent? {
         let d = JSONDecoder()
@@ -637,6 +639,10 @@ public enum SupervisorFeedEvent: Equatable, Sendable {
             struct L: Decodable { let seq: Int; let sessionId: String?; let decision: String? }
             guard let l = try? d.decode(L.self, from: data) else { return nil }
             return .ledger(seq: l.seq, sessionId: l.sessionId, decision: l.decision)
+        case "supervisor.message":
+            struct M: Decodable { let id: String; let from: String }
+            guard let m = try? d.decode(M.self, from: data) else { return nil }
+            return .message(id: m.id, from: m.from)
         default:
             return nil
         }

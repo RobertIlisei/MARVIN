@@ -47,6 +47,13 @@ export interface GroundContext {
   planSeeded: boolean;
   /** When the tab started; a memory fact written after it is the tab's own. */
   tabStartedAt: number | null;
+  /**
+   * ADR-0128 §2 — the user's conversation with the supervisor. `lookup`
+   * returns only the user's own messages (a reply is never a ground);
+   * `wakeMessageIds` are the messages the current wake carries. Absent: no
+   * `message:` ground resolves.
+   */
+  messages?: { lookup(id: string): { text: string } | null; wakeMessageIds: readonly string[] };
 }
 
 const ADR_DIRS = ["docs/decisions", "docs/adr", "docs/adrs"];
@@ -119,6 +126,19 @@ export function resolveGround(g: GroundRef, ctx: GroundContext): LedgerGround & 
       const mtime = statSync(file).mtimeMs;
       if (ctx.tabStartedAt !== null && mtime >= ctx.tabStartedAt) return out("weak", "written after the tab started");
       return out("strong");
+    }
+    case "message": {
+      // `<id>#<quote>`: the quote must be the user's words, verbatim (ADR-0128 §2).
+      const hash = ref.indexOf("#");
+      const id = hash > 0 ? ref.slice(0, hash).trim() : "";
+      const quote = hash > 0 ? ref.slice(hash + 1).trim() : "";
+      if (!id || !quote) return out("unresolved", "expected <message id>#<quote>");
+      if (!isQuote(quote)) return out("unresolved", `a message ground quotes at least ${MIN_QUOTE_CHARS} characters and two words`);
+      const m = ctx.messages?.lookup(id) ?? null;
+      if (!m) return out("unresolved", `no message ${id} from the user`);
+      if (!m.text.includes(quote)) return out("unresolved", "not a quote from that message");
+      // Strong only in the wake the message started: a later wake citing it may be an injected transcript's doing.
+      return ctx.messages?.wakeMessageIds.includes(id) ? out("strong") : out("weak", "the message belongs to an earlier wake");
     }
     case "file": {
       const m = /^(main|tab):(.+?)(?::(\d+))?$/.exec(ref);

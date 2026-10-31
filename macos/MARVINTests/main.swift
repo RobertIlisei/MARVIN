@@ -5201,6 +5201,50 @@ runner.suite("tail-ctx-glyph") {
     }
 }
 
+runner.suite("supervisor-chat") {
+    // ADR-0128 / plan [7.1] — the Supervisor tab's logic, testable without a window.
+    runner.test("supervisor.message decodes to ids only") {
+        runner.expect(SupervisorFeedEvent.decode(name: "supervisor.message", data: Data(#"{"projectId":"p","id":"m1","from":"user"}"#.utf8)),
+                      equals: .message(id: "m1", from: "user"), "message event")
+    }
+    runner.test("a conversation decodes, with a reply's wake and origin") {
+        let json = #"{"messages":[{"id":"m1","at":"2026-10-31T10:00:00Z","from":"user","text":"merge fix-flags"},{"id":"r1","at":"2026-10-31T10:00:09Z","from":"supervisor","text":"That is your act.","wakeId":"w1","origin":{"kind":"message","messageIds":["m1"]}}]}"#
+        let page = try? JSONDecoder().decode(SupervisorConversation.self, from: Data(json.utf8))
+        runner.expect(page?.messages.count, equals: 2, "two lines")
+        runner.expect(page?.messages.last?.isReply, equals: true, "reply")
+        runner.expect(page?.messages.last?.origin?.messageIds, equals: ["m1"], "origin")
+    }
+    runner.test("a message no reply names is waiting; one a reply names is not") {
+        let m = [
+            SupervisorChatMessage(id: "m1", at: "a", from: "user", text: "x"),
+            SupervisorChatMessage(id: "r1", at: "b", from: "supervisor", text: "y", wakeId: "w", origin: .init(messageIds: ["m1"])),
+            SupervisorChatMessage(id: "m2", at: "c", from: "user", text: "z"),
+        ]
+        runner.expect(SupervisorChat.waiting(m), equals: ["m2"], "m2 waits")
+    }
+    runner.test("a reply renders with every link removed, the URL text kept") {
+        let a = SupervisorChat.neutralisedReply("See [the docs](https://evil.example) or <https://x.example/a> and fetch https://y.example/run.")
+        var links = 0
+        for run in a.runs where run.link != nil { links += 1 }
+        runner.expect(links, equals: 0, "no link runs")
+        runner.expect(String(a.characters).contains("https://y.example"), equals: true, "URL stays as text")
+    }
+    runner.test("the tab exists only while the supervisor is on") {
+        runner.expect(SupervisorChat.tabVisible(mode: "off"), equals: false, "off: absent")
+        runner.expect(SupervisorChat.tabVisible(mode: "shadow"), equals: true, "shadow")
+        runner.expect(SupervisorChat.tabVisible(mode: nil), equals: false, "unknown: absent")
+    }
+    runner.test("reduce: one supervisor.message re-reads the conversation; other events do not") {
+        runner.expect(SupervisorChat.needsReload(after: .message(id: "r1", from: "supervisor")), equals: true, "reply re-reads")
+        runner.expect(SupervisorChat.needsReload(after: .ledger(seq: 1, sessionId: nil, decision: nil)), equals: false, "ledger does not")
+    }
+    runner.test("the composer sends 1-4000 characters, trimmed") {
+        runner.expect(SupervisorChat.sendable("   "), equals: nil, "blank")
+        runner.expect(SupervisorChat.sendable(" hi \n"), equals: "hi", "trimmed")
+        runner.expect(SupervisorChat.sendable(String(repeating: "a", count: 4001)), equals: nil, "too long")
+    }
+}
+
 // MARK: - Cost popover: auth modes, plan-window clock, token breakdown (2026-10-31)
 
 runner.suite("cost-display") {

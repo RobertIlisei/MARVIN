@@ -265,7 +265,7 @@ The proposal is **blind by default.** Revealing it shows "would answer Option B"
 - **"Set up…" opens the set-up sheet,** a native sheet about 460 pt wide:
   - a two-sentence explanation: it watches the tabs you delegate, and starts in shadow, where it only proposes;
   - the charter, a multi-line field ("What should it know about your goals?");
-  - the daily cap (default $10);
+  - the daily cap (default $20 — raised from $10 by the plan [7.1] measurement);
   - a checklist of open tabs to delegate, each with a level `Picker` (default `answer-questions`);
   - the model, as a label;
   - buttons "Cancel" (default) and "Start in shadow".
@@ -555,3 +555,86 @@ A `supervisor` role row with `role`, `label`, `description`, `default: {kind: "t
 11. **The status strip has three lines, not two.** Beside Resume, ⋯ and the chevron, line 1 truncated the state to "⚠ …" at 260 pt (critique P1, 2026-10-30); the state now has its own line between the title and the budget line.
 12. **Notice strips inside the surface carry no inline verb.** A guardrail's or failed wake's verb chip sits on its own line under the notice; inline, it wrapped the detail one word per line at 260 pt. The failed-wake notice's ✕ hides that failure until a different one arrives.
 13. **An escalated tab always has a row.** A tab that is neither open nor live still appears in *Needs you* when it has open items, titled from the inbox's snapshot; otherwise its items were counted but never drawn.
+
+## 12. The Supervisor tab (ADR-0128, plan milestone 7)
+
+- **Status:** shaped 2026-10-31 (Impeccable `shape`), before any Swift for it ([7.1]). Milestone [7.1] builds the minimal tab: placement, composer, the conversation, the working indicator, the empty state. Milestone [7.2] adds the cards, [7.3] refs and follows, and [7.4] the remaining states and the renders.
+- **Visual authority:** unchanged. "The Quiet Instrument", §3's one mark (`binoculars` plus "supervisor" in SF Mono) and §6.8's outlined, unfilled supervisor shape. **No new colour, radius or component family.** The tab is assembled from the chat strip's `chatTab`, the transcript's user bubble (`ChatMessageRow`), its prose renderer (`RichText`), the composer's `ChatTextEditor`, §6.2's escalation card (from [7.2]) and `PaneNoticeStrip`.
+- **Discovery answer** (2026-10-31, given by Robert's supervisor session; the recommended option): **the reply is drawn like an assistant turn** — left gutter, no bubble. §6.8's dashed bubble keeps one meaning only: a supervisor message inside a tab's transcript, input to that tab. In its own tab the supervisor is the other party.
+- **Thesis: *a conversation with the watcher, where the only buttons are the inbox's.*** The supervisor talks in text. Anything that can act is a card the server built, never a line the supervisor wrote.
+
+### 12.1 Placement
+
+- **Pinned first in the chat tab strip** (`ChatPreviewView.sessionTabs`), before every chat tab and before a "New chat" tab.
+  - Glyph `binoculars`, title "Supervisor". It uses `chatTab`'s geometry and compression, so it shares the strip's width budget and is never wider than a chat tab.
+  - It has **no close ×** (ADR-0128 §1: closing hides; Pause and Kill stop). It has no branch chip, no posture pill and no mode toolbar.
+  - It does not join ⇧⌘[ / ⇧⌘] or the overflow menu's tab list; those walk *chat* tabs. It is one click, or the strip's first stop for VoiceOver.
+- **Shown only while the supervisor is enabled** (`mode != "off"`), paused included. When it is off, the tab is absent and §6.7's off line stays the one place to start it. There is no second *Set up…* (ADR-0112).
+- **Selecting it replaces the chat body** (transcript, tray and composer) with the Supervisor conversation. The project's chat model is not touched: the selected chat tab stays loaded, and choosing a chat tab returns to it as it was. The conversation never goes through `ChatPreviewModel` or `/api/chat` (ADR-0127 §2).
+- **If the supervisor is disabled while the tab is selected,** the strip falls back to the last selected chat tab.
+
+### 12.2 The conversation
+
+One column, oldest at the top, the newest pinned to the bottom like the chat.
+
+- **The user's message.** Exactly the transcript's user bubble (`ChatMessageRow`, role user): right-aligned, the accent-tinted fill, radius 12, 12 × 8 padding, the "you" label. The user's words are the user's (ADR-0128 §2.1), so they are drawn as the user's.
+- **The supervisor's reply.** Left-aligned with the transcript's 56 pt role gutter, like an assistant turn, never right-aligned and never filled.
+  - **Gutter label:** `binoculars` plus "SUPERVISOR" in caption2 mono, tracked, uppercase, in `textMuted` — §6.8's label, so the supervisor reads the same in a tab's transcript and here.
+  - **Body:** the reply's Markdown in the transcript's prose style (`RichText`), with **every link removed**: no Markdown link, no autolink, no file link, no pointer cursor. A URL stays visible as inert text (ADR-0128 §3, "the supervisor's text cannot draw a card").
+  - **Footer** in caption `.secondary`: the time. From [7.3], the server-resolved `refs` render here as links; they are the only links a reply ever carries.
+- **Every other wake: one collapsed line** ([7.4]). A hairline-free meta row in caption `.secondary`: "Woke for 3 items: answered a question in *fix-flags*, escalated a merge", with a chevron that opens the matching entries in the Supervisor log. No tool calls are shown here; they are the log's.
+- **Cards ([7.2]).** An inbox item a message wake raised renders **under the reply that lists it**, with §6.2's escalation card component and the server's `actions`, indented to the reply's text column. It is the inbox item, not a copy: settling it here settles it in *Needs you*, and the reverse. A settled card collapses to its one-line outcome ("Done — you merged fix-flags"). Outward and destructive acts expand first (discovery answer 2).
+- **Width.** The chat column, not the pane: the reply's text column is the transcript's, so the 260 / 420 pt rule of §5 does not apply. The transcript's existing `minWidth: 0` and truncation rules do.
+
+### 12.3 The composer and its focus rule
+
+- **The chat composer's text editor** (`ChatTextEditor`), with no mode toolbar, no model chip, no attachment button, no slash commands and no image paste. Placeholder: "Message the supervisor — it can propose, never consent for you".
+- **Return sends; ⇧Return inserts a newline.** The send button is the chat's. It is disabled while the text is empty or over 4,000 characters, and while a send is in flight.
+- **Focus stays in the composer.** Sending keeps it there. A reply, and from [7.2] a card, never takes focus. **Return in the composer sends the composer and never reaches a chip** (ADR-0128 §1).
+- **A refused send stays in the composer** with a `PaneNoticeStrip` of the error kind above it, carrying the server's reason ("the message carries a secret-shaped string — it was not sent"). Nothing the user typed is lost.
+- **Sending is never refused for rate** (ADR-0128 §6). A message sent while a wake is running shows under the running indicator and is answered by the next wake.
+
+### 12.4 The working indicator
+
+- **While `currentWake` is set,** a meta row at the bottom of the conversation: a mini `ProgressView`, then "Supervisor is reading…" in caption `.secondary`. It is the same for a message wake and any other wake, because a wake started by a tab still holds the user's next message until it ends.
+- **A message the next wake will carry** shows its bubble at once, with "Waiting for the current wake" under it in caption `.secondary` until a wake carries it.
+- **Paused or killed:** no spinner. A `PaneNoticeStrip` of the warning kind above the composer reads "Paused — your message waits until you resume", with the strip's *Resume* chip on its own line beneath it (§11, departure 12). Messages still send; none is dropped.
+
+### 12.5 The empty conversation
+
+- A centred `PaneEmptyView`-style block: `binoculars` in `textMuted`, "Talk to the supervisor", and one line of `.secondary` text: "Ask it about your tabs, or for a tab to be opened. What it may not do on its own comes back as a card you click."
+- No sample prompts and no suggestion chips: a chip in this tab would read as an act.
+
+### 12.6 States
+
+| State | Strip | Conversation | Composer |
+|---|---|---|---|
+| **Off** | Tab absent | — | — |
+| **Enabled, empty** | Pinned tab | §12.5 | Enabled |
+| **Message sending** | — | The bubble at once; it disappears again only if the server refuses it | Disabled until the route answers |
+| **Wake working** | — | §12.4 indicator | Enabled |
+| **Reply arrived** | — | Reply under the message, after one `supervisor.message` event | Focus unchanged |
+| **Paused / killed / over budget** | Tab stays | §12.4 notice; at the cap, [7.2]'s inline budget `guardrail` item with *Raise cap…* | Enabled |
+| **Token unavailable** | Tab stays | §7's notice | Disabled, with the reason |
+| **Feed disconnected** | — | Conversation stays; "reconnecting…" under the last message | Enabled; the route is a separate connection |
+
+[7.4] renders every row at 260 and 420 pt wide chat columns, light and dark, plus the [7.2]/[7.3] card, follow and report states.
+
+### 12.7 Keyboard and VoiceOver
+
+- **Keyboard.** Selecting the tab focuses the composer. Tab order: the conversation (each reply is one stop; [7.2] cards follow their reply), then the composer. No single-key consent anywhere (§9.1).
+- **The tab** reads "Supervisor conversation, tab", with value "working" during a wake.
+- **A user message** reads "You: …". **A reply** reads "Supervisor reply, not from you: …" — never "you" (ADR-0128 §1, [7.4] DoD). Each is one combined element.
+- **Announcements.** A reply is announced once, at polite priority: "Supervisor replied". A refused send is announced with its reason.
+- **Reduce Motion.** Arrivals use opacity only. **Increase Contrast** changes nothing new: the reply has no outline to strengthen, and the user bubble is the chat's.
+
+### 12.8 Backend fields
+
+| Need | Field / source |
+|---|---|
+| Whether the tab exists | `GET /api/supervisor` `mode`, plus the `supervisor.state` feed event |
+| The conversation | `GET /api/supervisor/message?projectId=` → `messages[]`: `id`, `at`, `from` (`user` / `supervisor`), `text`; a reply also carries `wakeId` and `origin` (`{kind: "message", messageIds}`). [7.2] adds `items[]`, [7.3] `refs[]` and `kind: "report"` |
+| Sending | `POST /api/supervisor/message {projectId, text}` with the token → `{id, at}`; 400 / 409 carry `error` |
+| A new message or reply | `supervisor.message {projectId, id, from}` on the project feed (ids only); the app re-reads the `GET` |
+| The working indicator | `GET /api/supervisor` `currentWake` (`wakeId`, `startedAt`, `itemCount`) |
+| Waiting messages | a user message with no reply whose `origin.messageIds` names it |

@@ -153,6 +153,17 @@ final class SupervisorService {
     func reveal(projectId: String, ledgerId: String) async throws {
         _ = try await call("api/supervisor/reveal", method: "POST", body: ["projectId": projectId, "ledgerId": ledgerId])
     }
+
+    // ADR-0128 — the Supervisor tab. Never `/api/chat`: the conversation is the supervisor's routes only.
+    func conversation(projectId: String) async throws -> [SupervisorChatMessage] {
+        let data = try await call("api/supervisor/message", query: [URLQueryItem(name: "projectId", value: projectId)])
+        do { return try JSONDecoder().decode(SupervisorConversation.self, from: data).messages }
+        catch { throw SupervisorServiceError.transport("unreadable conversation") }
+    }
+
+    func sendMessage(projectId: String, text: String) async throws {
+        _ = try await call("api/supervisor/message", method: "POST", body: ["projectId": projectId, "text": text])
+    }
 }
 
 /// What the Sessions pane draws for the supervisor, in one observable place.
@@ -215,6 +226,51 @@ final class SupervisorModel {
 
     var isEnabled: Bool { (status?.mode ?? "off") != "off" }
 
+    // MARK: - The Supervisor tab (ADR-0128, brief §12)
+
+    /// The conversation, oldest first, as the GET returns it.
+    var chat: [SupervisorChatMessage] = []
+    var chatSending = false
+    /// The server's reason for a refused send; the text stays in the composer.
+    var chatError: String?
+    /// The pinned tab is selected in place of the chat body.
+    var chatSelected = false
+
+    /// Brief §12.1 — the pinned tab exists only while the supervisor is on.
+    var chatTabVisible: Bool { SupervisorChat.tabVisible(mode: status?.mode) }
+
+    func refreshChat() async {
+        guard !offline, let pid = projectId, chatTabVisible else { return }
+        do {
+            let lines = try await SupervisorService.shared.conversation(projectId: pid)
+            guard projectId == pid else { return }
+            chat = lines
+        } catch SupervisorServiceError.token(let path) {
+            tokenError = path
+        } catch {
+            NSLog("[SupervisorModel] conversation failed: \(error)")
+        }
+    }
+
+    /// True when the server took it; false keeps the text in the composer with `chatError`.
+    func sendChat(_ raw: String) async -> Bool {
+        guard let pid = projectId, let text = SupervisorChat.sendable(raw), !chatSending else { return false }
+        chatSending = true
+        defer { chatSending = false }
+        do {
+            try await SupervisorService.shared.sendMessage(projectId: pid, text: text)
+            chatError = nil
+            await refreshChat()
+            return true
+        } catch SupervisorServiceError.refused(_, let message, _) {
+            chatError = message
+        } catch {
+            chatError = "The message did not reach the sidecar — it was not sent."
+        }
+        VoiceOver.announce(chatError ?? "")
+        return false
+    }
+
     // MARK: - Lifecycle
 
     func start(projectId pid: String) {
@@ -223,6 +279,10 @@ final class SupervisorModel {
         status = nil
         inbox = []
         ledger = []
+        chat = []
+        chatSending = false
+        chatError = nil
+        chatSelected = false
         announcer = SupervisorAnnouncer()
         expandedCards = []
         expandedTabs = []
@@ -296,6 +356,11 @@ final class SupervisorModel {
         case .ledger:
             if logExpanded { Task { await refreshLedger() } }
             else { ledgerTodayCount += 1 }
+        case .message(_, let from):
+            if SupervisorChat.needsReload(after: event) {
+                Task { await refreshChat() }
+                if from == "supervisor" { VoiceOver.announce("Supervisor replied") }
+            }
         }
     }
 
