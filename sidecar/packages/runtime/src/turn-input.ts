@@ -17,9 +17,12 @@
  * durable queue (ADR-0069) — no message is ever dropped.
  */
 
+/** A content block of a user message: text, or (ADR-0129) a base64 image. */
+export type TurnContentBlock = { type: "text"; text: string } | { type: "image"; source: { type: "base64"; media_type: "image/png" | "image/jpeg"; data: string } };
+
 export interface TurnUserMessage {
   type: "user";
-  message: { role: "user"; content: string };
+  message: { role: "user"; content: string | TurnContentBlock[] };
   parent_tool_use_id: null;
 }
 
@@ -92,7 +95,7 @@ export class TurnInputChannel {
     return out;
   }
 
-  async *stream(first: string): AsyncGenerator<TurnUserMessage> {
+  async *stream(first: string | TurnContentBlock[]): AsyncGenerator<TurnUserMessage> {
     yield wrap(first);
     while (true) {
       if (this.queue.length > 0) {
@@ -116,10 +119,10 @@ export class TurnInputChannel {
   }
 }
 
-function wrap(text: string): TurnUserMessage {
+function wrap(content: string | TurnContentBlock[]): TurnUserMessage {
   return {
     type: "user",
-    message: { role: "user", content: text },
+    message: { role: "user", content },
     parent_tool_use_id: null,
   };
 }

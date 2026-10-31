@@ -300,6 +300,44 @@ import SwiftUI
         }
     }
 
+    /// ADR-0129 — a screenshot-like picture on disk, for the chip and the bubble.
+    static var sampleImagePath: String {
+        let path = NSTemporaryDirectory() + "marvin-snapshot-terminal.png"
+        if FileManager.default.fileExists(atPath: path) { return path }
+        let img = NSImage(size: NSSize(width: 640, height: 360), flipped: false) { r in
+            NSColor(calibratedWhite: 0.12, alpha: 1).setFill(); r.fill()
+            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedSystemFont(ofSize: 22, weight: .regular), .foregroundColor: NSColor.systemRed]
+            ("✗ retry.test.ts  expected 3 attempts, got 1" as NSString).draw(at: NSPoint(x: 24, y: 300), withAttributes: attrs)
+            ("  at backoff (src/http/retry.ts:42)" as NSString).draw(at: NSPoint(x: 24, y: 260), withAttributes: attrs.merging([.foregroundColor: NSColor.lightGray]) { $1 })
+            return true
+        }
+        if let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: path))
+        }
+        return path
+    }
+
+    static let markdownReply = """
+    The retry tab's test fails because **`backoff` never retries** on a timeout:
+
+    1. `retry.ts:42` returns on the first `ETIMEDOUT`.
+    2. The test expects three attempts.
+
+    ```ts
+    if (err.code === "ETIMEDOUT") return err
+    ```
+
+    I can ask the tab to fix it — see [the failing run](https://ci.example/run/812).
+    """
+
+    static func imageChatModel(reply: String?) -> SupervisorModel {
+        model(status()) { m in
+            m.chat = earlier + [SupervisorChatMessage(id: "m-9", at: iso(2), from: "user", text: "Why does the retry tab's test fail like this?",
+                                                      attachments: [.init(id: "a-1", mediaType: "image/png", bytes: 41_000, path: sampleImagePath)])]
+                + (reply.map { [SupervisorChatMessage(id: "r-9", at: iso(1.5), from: "supervisor", text: $0, wakeId: "w-50", origin: .init(messageIds: ["m-9"]))] } ?? [])
+        }
+    }
+
     /// An earlier exchange, answered — the conversation a later state continues.
     private static var earlier: [SupervisorChatMessage] {
         [SupervisorChatMessage(id: "m-8", at: iso(40), from: "user", text: "How far along is the retry tab?"),

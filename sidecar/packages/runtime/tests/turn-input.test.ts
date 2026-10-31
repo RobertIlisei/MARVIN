@@ -8,10 +8,10 @@ import { TurnInputChannel } from "../src/turn-input";
 // delivered in order, close ends the stream, and nothing is ever lost —
 // what the SDK didn't consume comes back out of `drainUnconsumed`.
 
-async function collect(gen: AsyncGenerator<{ message: { content: string } }>, n: number) {
+async function collect(gen: AsyncGenerator<{ message: { content: string | unknown[] } }>, n: number) {
   const out: string[] = [];
   for await (const m of gen) {
-    out.push(m.message.content);
+    out.push(String(m.message.content));
     if (out.length === n) break;
   }
   return out;
