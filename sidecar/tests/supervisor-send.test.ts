@@ -207,6 +207,9 @@ describe("spend: a supervisor-started tab turn counts against the supervisor's c
     state.applySupervisorAction({ projectId: "proj", action: "start" }, token);
     state.setSupervisorCapsForTests("proj", { dailyBudgetUsd: 0.2 });
     await send.sendAsSupervisor(message);
+    // The send returns once the turn has started; spend lands at its end.
+    const { getLiveTurn } = await import("@marvin/runtime/turn-registry");
+    await vi.waitFor(() => expect(getLiveTurn("tab-s")?.ended ?? true).toBe(true));
     const st = state.getSupervisorState("proj");
     expect(st.spend.tabsUsd).toBeCloseTo(0.25);
     expect(st.spend.usd).toBeCloseTo(0.25);
@@ -225,7 +228,8 @@ describe("spend: a supervisor-started tab turn counts against the supervisor's c
     const { startScheduledTurn } = await import("../src/lib/turn-orchestrator");
     const { buildResumeRecord } = await import("@marvin/runtime/session-recovery");
     const { readSessionMeta } = await import("@marvin/runtime/session-meta");
-    await startScheduledTurn(buildResumeRecord(readSessionMeta("proj", "tab-s")!, { prompt: "go on" }));
+    await (await startScheduledTurn(buildResumeRecord(readSessionMeta("proj", "tab-s")!, { prompt: "go on" })))?.done;
+    expect(captured).toHaveLength(1);
     expect(state.getSupervisorState("proj").spend.tabsUsd ?? 0).toBe(0);
   });
 });

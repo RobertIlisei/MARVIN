@@ -5342,6 +5342,18 @@ runner.suite("supervisor-chat") {
         runner.expect(SupervisorChat.card("i1", items: ["i1": open]), equals: .open(open), "open: the inbox card")
         runner.expect(SupervisorChat.card("i2", items: ["i1": open]), equals: .missing, "unknown: nothing drawn")
     }
+    // 2026-10-31 — the server now attaches the items a wake raised, so a reply the model wrote without `items` still carries its new-tab card.
+    runner.test("a reply carrying a server-attached new-tab item draws it as that inbox card") {
+        let json = #"{"messages":[{"id":"r1","at":"t","from":"supervisor","text":"It's in your inbox now.","wakeId":"w","origin":{"kind":"message","messageIds":["m1"]},"items":["nt1"]}]}"#
+        let page = try? JSONDecoder().decode(SupervisorConversation.self, from: Data(json.utf8))
+        runner.expect(SupervisorChat.cardIds(page?.messages ?? []), equals: ["nt1"], "the new-tab id is fetched")
+        let newTab = SupervisorInboxItem(id: "nt1", createdAt: "t", sessionId: nil, tabTitle: nil, kind: "new-tab",
+                                         escalatedBecause: .init(code: "human-only", label: "Opening a tab is yours"),
+                                         rawAct: nil,
+                                         actions: [.init(id: "open", label: "Open tab", role: "consent", recommended: true, requiresExpanded: false)],
+                                         state: "open", resolvedBy: nil)
+        runner.expect(SupervisorChat.card("nt1", items: ["nt1": newTab]), equals: .open(newTab), "open: the same card as Needs you")
+    }
     runner.test("a settled card collapses to one line, with the server's summary, wherever it was settled") {
         runner.expect(SupervisorChat.settledLine(sendItem("resolved", "user", "shadow")), equals: "Done — Send to tab tab-obs: Run the tests first.", "done by you")
         runner.expect(SupervisorChat.settledLine(sendItem("dismissed", "user", "shadow")), equals: "Dismissed — Send to tab tab-obs: Run the tests first.", "dismissed")

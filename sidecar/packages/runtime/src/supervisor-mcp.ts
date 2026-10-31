@@ -1314,7 +1314,10 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     if (!text || text.length > MAX_SUPERVISOR_MESSAGE_CHARS) return note("reply", null, "refuse", "text", `a reply needs 1–${MAX_SUPERVISOR_MESSAGE_CHARS} characters`);
     if (containsSecretShape(text)) return note("reply", null, "refuse", "secret", "the reply carries a secret-shaped string (ADR-0127 §6)");
     // ADR-0128 §3 — only the items this wake raised for these messages or this follow; the rest are dropped, never rendered.
-    const rawItems = Array.isArray(args.items) ? args.items : [];
+    // The open items this wake raised ride on the reply whether or not the model lists them: the chat and Needs you show
+    // the same card, never one the model forgot (2026-10-31). The model's `items` only add to them, under the same filter.
+    const raised = ctx.wakeId ? listInbox(projectId, { state: "open" }).filter((i) => i.wakeId === ctx.wakeId).map((i) => i.id) : [];
+    const rawItems = [...raised, ...(Array.isArray(args.items) ? args.items : [])];
     const items = followId ? itemsForFollow(projectId, rawItems, followId) : itemsForConversation(projectId, rawItems, ctx.conversation?.messageIds ?? []);
     const refs = resolveRefs(Array.isArray(args.refs) ? args.refs : []);
     const m = ctx.deps.postReply(text, items, { refs, wakeId: ctx.wakeId, ...(followId ? { followId } : {}) });
@@ -1558,8 +1561,8 @@ export function supervisorToolDefs(ctx: VerbContext) {
     tool(
       "reply",
       "Answer the user in your conversation with them (their messages reach you as `message` items), or — in a wake a tab you " +
-        "follow for them started — report on it with `followId`. A reply authorises nothing. List in `items` the inbox item ids " +
-        "this wake raised for their request or that follow: each shows under your reply as the card the user clicks. Link tabs, " +
+        "follow for them started — report on it with `followId`. A reply authorises nothing. The open inbox items this wake raised " +
+        "for their request or that follow are attached for you: each shows under your reply as the card the user clicks. Link tabs, " +
         "ledger lines and inbox items in `refs`. Ids from another wake, another follow or that do not exist are dropped.",
       {
         text: z.string().min(1).max(4_000),

@@ -712,8 +712,14 @@ async function startQueuedTurn(prev: DetachedTurnParams, message: string): Promi
  * dispatches via {@link runDetachedTurn}. The wakeup turn's own
  * `schedule_wakeup` calls inherit `record.depth` so the chain-depth guard
  * keeps counting.
+ *
+ * Resolves once the turn has STARTED (registered, `turn.started` written) —
+ * never when it ends; `done` settles at its end. Null when nothing started
+ * (refused, deferred, worktree missing). Every `fireNow` caller waits on this
+ * handler, so waiting for the end held an inbox consent, the resume route and
+ * the supervisor's send open for a tab's whole turn (2026-10-31).
  */
-export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
+export async function startScheduledTurn(record: WakeupRecord): Promise<{ done: Promise<void> } | null> {
   const turnId = randomUUID();
   const { projectId, marvinSessionId } = record;
   // ADR-0107 — pre-0107 records carry no workDir; for them cwd IS the root.
@@ -730,7 +736,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
       error: `wakeup skipped — the session's worktree is missing (${resolved.cwd})`,
       code: "worktree-missing",
     });
-    return;
+    return null;
   }
   const cwd = resolved.cwd;
   const sessionTree = meta?.tree;
@@ -744,7 +750,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     const refusal = supervisorFireRefusal(record);
     if (refusal) {
       ledgerDroppedSend(record, refusal);
-      return;
+      return null;
     }
   }
   const message = fromSupervisor ? record.prompt : `[scheduled wakeup — ${record.reason}]\n\n${record.prompt}`;
@@ -764,7 +770,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
   // still runs once the session is free. Must happen BEFORE the
   // `turn.user` append so a deferred wakeup leaves no orphan prompt in the
   // transcript.
-  if (deferIfSessionBusy(record)) return;
+  if (deferIfSessionBusy(record)) return null;
 
   appendSessionTurn(projectId, marvinSessionId, {
     type: "turn.user",
@@ -821,7 +827,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     ...turnStartedPayload,
   });
 
-  await runDetachedTurn({
+  const done = runDetachedTurn({
     liveTurn,
     projectId,
     marvinSessionId,
@@ -842,7 +848,11 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     appendSystemPrompt,
     personality: record.personality,
     wakeupDepth: record.depth,
+  }).catch((err) => {
+    // runDetachedTurn never throws by contract; nobody awaits it now, so a break of that contract is logged, not unhandled.
+    console.error(`[turn-orchestrator] scheduled turn ${turnId} threw:`, err);
   });
+  return { done };
 }
 
 // Wire the fire handler onto the scheduler's global singleton AT MODULE LOAD.

@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type RunInput = Record<string, unknown>;
 let captured: RunInput[];
+/** Replaces the stubbed turn's outcome for one test — a turn that never ends, say. */
+let runAgentImpl: ((input: RunInput) => Promise<unknown>) | null;
 let dataDir: string;
 let repo: string;
 const prev = process.env.MARVIN_DATA_DIR;
@@ -34,12 +36,14 @@ beforeEach(() => {
   git("add", ".");
   git("commit", "-qm", "init");
   captured = [];
+  runAgentImpl = null;
   vi.doMock("@marvin/runtime/sdk-runner", async (importOriginal) => {
     const orig = await importOriginal<typeof import("@marvin/runtime/sdk-runner")>();
     return {
       ...orig,
       runAgent: async (input: RunInput) => {
         captured.push(input);
+        if (runAgentImpl) return runAgentImpl(input);
         return { ok: true, costUsd: 0.1 };
       },
     };
@@ -162,6 +166,81 @@ describe("an accepted new-tab item opens exactly one tab", () => {
     expect(captured).toEqual([]);
     const { listInbox } = await import("@marvin/runtime/supervisor-inbox");
     expect(listInbox(projectId).find((i) => i.id === item.id)?.state).toBe("open");
+  });
+});
+
+// 2026-10-31, first live test: the open waited on the tab's whole first turn,
+// so the item stayed open, nothing was ledgered and a second click answered
+// "in-flight". Opening returns once the turn has started.
+describe("opening a tab returns when its first turn has started, not when it ends", () => {
+  it("settles the item and ledgers the consent once while the first turn still runs; a second click is told it is settled", async () => {
+    let endTurn: () => void = () => {};
+    runAgentImpl = () => new Promise((done) => (endTurn = () => done({ ok: true, costUsd: 0 })));
+    const { projectId, consent } = await setup();
+    const item = await proposeTab(projectId, { mode: "plan" });
+    const hung = new Promise<"hung">((r) => setTimeout(() => r("hung"), 2_000));
+    const r = await Promise.race([consent({ id: item.id, actionId: "open" }), hung]);
+    expect(r).not.toBe("hung");
+    const res = r as Response;
+    expect(res.status).toBe(200);
+    const { outcome } = (await res.json()) as { outcome: { marvinSessionId: string } };
+    // The turn started and is still running.
+    expect(captured).toHaveLength(1);
+    const { getLiveTurn } = await import("@marvin/runtime/turn-registry");
+    expect(getLiveTurn(outcome.marvinSessionId)?.ended).toBe(false);
+    const { listInbox } = await import("@marvin/runtime/supervisor-inbox");
+    expect(listInbox(projectId).find((i) => i.id === item.id)).toMatchObject({ state: "resolved", resolvedBy: "user" });
+    const { readLedger } = await import("@marvin/runtime/supervisor-ledger");
+    expect(readLedger(projectId).filter((e) => e.verb === "inbox.consent" && e.inboxItemId === item.id)).toHaveLength(1);
+    const again = await consent({ id: item.id, actionId: "open" });
+    expect(again.status).toBe(409);
+    const body = (await again.json()) as { code?: string; error: string };
+    expect(body.code).not.toBe("in-flight");
+    expect(body.error).toMatch(/already resolved/);
+    endTurn();
+    await vi.waitFor(() => expect(getLiveTurn(outcome.marvinSessionId)?.ended ?? true).toBe(true));
+  });
+});
+
+// 2026-10-31, first live test: the reply said "it's in your inbox" and carried
+// no card, because cards came only from the model's `items`. The chat and
+// Needs you show the same item whether or not the model lists it (ADR-0128).
+describe("a message wake's reply carries the items the wake raised", () => {
+  it("a new-tab item raised in the wake rides on a reply that lists no items; the GET returns it", async () => {
+    const { projectId } = await setup();
+    const { addUserMessage, listMessages } = await import("@marvin/runtime/supervisor-messages");
+    const { setWakeOrigin } = await import("@marvin/runtime/supervisor-ledger");
+    const { createSupervisorVerbs } = await import("../packages/runtime/src/supervisor-mcp");
+    const { defaultVerbDeps } = await import("@marvin/runtime/supervisor-loop");
+    const { ActionLimiter } = await import("../packages/runtime/src/supervisor-policy");
+    const { getSupervisorState, currentSupervisorToken } = await import("@marvin/runtime/supervisor-state");
+    const { listInbox } = await import("@marvin/runtime/supervisor-inbox");
+    const msg = addUserMessage(projectId, "Open a tab to fix the flags page.");
+    setWakeOrigin("w-chat", { kind: "message", messageIds: [msg.id] });
+    const verbs = createSupervisorVerbs({
+      projectId,
+      workDir: repo,
+      wakeId: "w-chat",
+      wake: { acts: 0 },
+      limiter: new ActionLimiter(() => getSupervisorState(projectId).caps),
+      deps: defaultVerbDeps(projectId, repo, { wakeId: "w-chat", messageIds: [msg.id] }),
+      conversation: { messageIds: [msg.id] },
+    });
+    expect(await verbs.new_session({ requestId: msg.id, firstMessage: "Fix the flags page.", title: "flags", posture: { mode: "plan" } })).toMatch(/Escalated/);
+    const item = listInbox(projectId, { state: "open" }).find((i) => i.kind === "new-tab");
+    expect(item).toBeDefined();
+    expect(await verbs.reply({ text: "It's in your inbox now — confirm it there." })).toBe("Sent to the user.");
+    setWakeOrigin("w-chat", null);
+    expect(listMessages(projectId).find((m) => m.from === "supervisor")?.items).toEqual([item!.id]);
+    const { NextRequest } = await import("next/server");
+    const route = await import("../src/app/api/supervisor/message/route");
+    const res = await route.GET(
+      new NextRequest(`http://localhost:3030/api/supervisor/message?projectId=${projectId}`, {
+        headers: { "x-marvin-client": "1", "x-marvin-supervisor-token": currentSupervisorToken() as string },
+      }),
+    );
+    const { messages } = (await res.json()) as { messages: Array<{ from: string; items?: string[] }> };
+    expect(messages.find((m) => m.from === "supervisor")?.items).toEqual([item!.id]);
   });
 });
 
