@@ -8,6 +8,89 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-10-31 — v1.0.0: MARVIN's first 1.0 — cost and plan accounting corrected, three interface faults fixed, the Supervisor settled (ADR-0127, ADR-0128; 5 commits since v0.1.119).**
+
+  Robert chose to call this release 1.0 rather than v0.1.120. The functional
+  changes since v0.1.119 are the five commits below; 1.0 is also the
+  culmination of what v0.1.119 introduced (the in-app Supervisor, Impeccable
+  across the native UI, the accessibility layer, the app icon, the worktree
+  data-loss fix), none of which is repeated in detail here.
+
+  *Plan and cost accounting, corrected* (`d586299`). **Before 1.0 the cost
+  panel overstated spend by about 3.8×.** The SDK's `total_cost_usd` and
+  `modelUsage` are running totals across a resumed session; the tracker
+  recorded each as one turn's cost, so every resumed turn re-counted all the
+  turns before it. One real session's five turns were recorded as
+  $8.53 / 11.73 / 11.83 / 28.70 / 32.32 — $93 against a true $32 — and the
+  whole ledger read $1,190.93. Each turn now records its own increase against
+  the previous entry of the same SDK session (a drop is a reset; a zero total
+  is never a baseline). Entries written before the fix are reported apart as
+  `legacy`, never added into a total and not rewritten.
+  - *What a turn records now:* model, advisor model, auth mode, SDK session,
+    cache-write TTL split and per-model usage, with a per-model breakdown
+    (today / 7 days) in the popover. Input is split into **new, cache read and
+    cache write**. The cost file is written atomically; a corrupt file is moved
+    aside rather than overwritten.
+  - *Auth mode comes from the SDK first* (`accountInfo()` — `apiProvider`,
+    `apiKeySource`, `subscriptionType`), MARVIN's OpenRouter routing above it,
+    the environment last. New modes: gateway, cloud-provider. Email and
+    organization are never stored.
+  - *Labels per billing source, never one unlabelled total:* a Claude plan is
+    "API-equivalent, not a bill"; an Anthropic API key is billed (an estimate
+    where the CLI had no price); OpenRouter is an estimate in OpenRouter's
+    prices — never the ~10× rate-card figure — beside OpenRouter's own
+    key-level usage from `/api/v1/key`. The status chip marks ≈ / ~.
+  - *The plan name comes from the SDK's `accountInfo()`* and is shown as given
+    ("Claude plan · Ultra"); MARVIN holds no list of plan names.
+  - *Plan windows expire.* A bar is hidden once its `resetsAt` has passed with
+    no report since, dimmed with "not in the latest report" when the newest
+    report omits it, and marked "last reported". A verified Ultra account —
+    whose 5-hour window Anthropic is removing in stages from 2026-10-30 —
+    therefore shows only its weekly bar, with no plan rule hard-coded.
+  - *Verification:* snapshot fixtures for Ultra with and without `five_hour`,
+    API key, gateway, OpenRouter and stale windows; the pre-fix ledger is
+    unchanged on disk.
+
+  *Search, Files and Practice no longer push the left column under the title
+  bar* (`566bf7a`). Measured, not guessed: the three pane roots were
+  `minWidth: 0`, so AppKit took their minimum height at ~0 pt wide, where
+  fixed-size empty-state text wraps a character per line — Search 1013 pt,
+  Files tree 668 pt, Practice 746 pt. A screen-bounded window cannot grow to
+  that, so the whole column, activity rail included, overflowed upward under
+  the title bar. Each root now gives up its height claim (`minHeight: 0`,
+  top-aligned). In a 700 pt window with a 52 pt title bar, rail top before →
+  after: Search 156.5 pt high → 52, Files 25 pt high → 52, Practice 22.5 pt
+  high → 52; Source Control, Sessions, Skills and Plugins were and stay at 52,
+  at both widths. Latent since v0.1.112, not a v0.1.119 regression. New:
+  `MARVIN_SNAPSHOT_VIEW=window-left-pane` renders every left-pane tab at 260
+  and 420 in a titled, screen-bounded window with a per-tab `RAIL OK/SHIFTED`
+  line. 1346 Swift assertions green.
+
+  *The Sessions feed reads as connected when the stream attaches* (`1084c5e`).
+  An all-idle project produced no `SessionFeedEvent`, so `feedConnected` stayed
+  false and the Sessions header and Supervisor strip said "Reconnecting" on a
+  live stream. `announce.attached` now decodes to `SessionFeedEvent.attached`:
+  the registry marks the feed connected and the ledger ignores it.
+  Reconnect/backoff are unchanged. The stale Status note in the supervisor
+  guide (M6 had shipped) was corrected in the same commit.
+
+  *Decided, not built: the user talks to the supervisor* (`4193451`,
+  [ADR-0128](../decisions/0128-the-user-talks-to-the-supervisor.md)). A pinned
+  Supervisor tab per project is an input channel, not new authority: same
+  runtime-dispatched read-only wakes, verbs, policy, delegation and ledger. The
+  user's words there may ground a request but are never consent; every act the
+  supervisor may not perform on its own appears as a card that is the inbox
+  item, and the click on its raw act is the consent. This is planned for 1.1
+  and is **not** in 1.0.
+
+  *Stable and in flight at 1.0.* Stable: the single-assistant loop and its
+  enforced gates, the graph-first rail, the plan spine, per-tab worktrees and
+  batched integration, the Practice loop, the in-app Supervisor (ADR-0127,
+  milestones 1–6) and the cost accounting above. In flight: the supervisor
+  conversation (1.1) and the items on the roadmap. Release artefacts are
+  unchanged in shape: ad-hoc signed, minisign-signed zip built by `release.yml`.
+  This commit changes documentation and the version only.
+
 - **2026-10-30 — v0.1.119: the in-app Supervisor, an interface audited and repaired, and a data-loss fix (ADR-0127; 68 commits since v0.1.118).**
 
   *The Supervisor* ([ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md),

@@ -2,8 +2,8 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.119
-(2026-10-30). Where this document and the repository disagree, the
+code. Written for contributors and deep evaluators. Covers v1.0.0
+(2026-10-31). Where this document and the repository disagree, the
 repository wins.*
 
 > **Since v0.1.55.** Subsystems added after this document's original scope,
@@ -72,6 +72,20 @@ repository wins.*
 > and a Helpers section in the Models dialog. **Claude's server-side advisor**
 > (ADR-0125) is a role too: off by default, `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`
 > when off, `settings.advisorModel` when on.
+> v1.0.0 (2026-10-31): **cost and plan accounting** — the tracker
+> (`runtime` cost tracker, `CostService.swift`) records each turn's *increase*
+> against the previous entry of the same SDK session (the SDK's
+> `total_cost_usd` / `modelUsage` are cumulative across a resumed session;
+> recording them raw overstated spend about 3.8×); pre-fix entries are
+> `legacy`, reported apart. Per turn: model, advisor model, auth mode (SDK
+> `accountInfo()` first, OpenRouter routing above it), SDK session, per-model
+> usage, input split new / cache read / cache write; labels per billing source.
+> The plan name is `accountInfo().subscriptionType`; plan windows are hidden
+> once `resetsAt` has passed with no report since. **Left-pane fix** — Search,
+> Files and Practice roots give up their height claim (`minHeight: 0`);
+> `MARVIN_SNAPSHOT_VIEW=window-left-pane` measures the rail. **Sessions feed**
+> — `announce.attached` decodes to `SessionFeedEvent.attached`. **ADR-0128**
+> (talk to the supervisor in its own tab) is decided and planned for 1.1.
 > v0.1.119 (2026-10-30): **the in-app Supervisor** (ADR-0127, milestones 1–6;
 > §5), with the native surface in the Sessions pane, transcript
 > marking and `session.posture` announced to the app. **Impeccable across the
@@ -1227,5 +1241,5 @@ repo:
 ---
 
 *Compiled against the 2026-07-02 full feature inventory (51 ADRs,
-v0.1.55) and brought forward to v0.1.119 (127 ADRs, 2026-10-30). Corrections welcome — the ADRs are the authoritative record,
+v0.1.55) and brought forward to v1.0.0 (128 ADRs, 2026-10-31). Corrections welcome — the ADRs are the authoritative record,
 and this document cites them everywhere it can.*
