@@ -230,6 +230,34 @@ describe("runSupervisorWake — one bounded turn, its cost, its session", () => 
     expect(start?.reason).toMatch(/claude-opus-5-5/);
   });
 
+  it("asks the SDK for the effort the user chose, and says so on the start line", async () => {
+    const calls: Array<{ prompt: unknown; options: Record<string, unknown> }> = [];
+    await runSupervisorWake(
+      { projectId: "proj", workDir, items: [], verbCtx: verbCtx() },
+      {
+        query: stubQuery(events("sdk-1", 0, 10), calls),
+        resolveModel: async () => "claude-opus-5-5",
+        resolveEffort: () => ({ choice: "xhigh", resolved: "xhigh", fellBack: false }),
+      },
+    );
+    expect(calls[0]?.options.effort).toBe("xhigh");
+    const start = readLedger("proj").find((e) => e.kind === "wake" && e.verb === "start");
+    expect(start?.effort).toBe("xhigh");
+    expect(start?.reason).toMatch(/effort xhigh/);
+  });
+
+  it("passes no effort on Default, and names the fallback when the model cannot run the stored one", async () => {
+    const calls: Array<{ prompt: unknown; options: Record<string, unknown> }> = [];
+    await runSupervisorWake(
+      { projectId: "proj", workDir, items: [], verbCtx: verbCtx() },
+      { query: stubQuery(events("sdk-1", 0, 10), calls), resolveModel: async () => "claude-sonnet-5-5", resolveEffort: () => ({ choice: "max", resolved: null, fellBack: true }) },
+    );
+    expect("effort" in (calls[0]?.options ?? {})).toBe(false);
+    const start = readLedger("proj").find((e) => e.kind === "wake" && e.verb === "start");
+    expect(start?.effort).toBeUndefined();
+    expect(start?.reason).toMatch(/effort default \(max not available/);
+  });
+
   it("resumes the session across wakes, and rotates once the context passes half the window", async () => {
     updateSupervisorRuntime("proj", { sdkSessionId: "sdk-old", sdkSessionStartedAt: new Date().toISOString(), lastInputTokens: 10 });
     const calls: Array<{ prompt: unknown; options: Record<string, unknown> }> = [];

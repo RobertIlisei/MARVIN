@@ -30,6 +30,8 @@ import { SUBAGENT_DISPATCH_TOOLS } from "@marvin/tools/policy";
 
 import { buildSubprocessEnv } from "./auth";
 import { contextWindowFor, ensureProviderModelId } from "./models";
+import type { ReasoningEffort } from "./effort";
+import { resolveRoleEffort } from "./role-efforts";
 import { resolveRoleModel } from "./role-models";
 import { appendLedgerEntry, readLedger, supervisorRoot } from "./supervisor-ledger";
 import { createSupervisorMcpServer, SUPERVISE_SERVER_NAME, type VerbContext } from "./supervisor-mcp";
@@ -222,6 +224,8 @@ export interface SupervisorQueryArgs {
   prompt: string;
   resume: string | null;
   model: string | undefined;
+  /** The user's effort for the supervisor, when it fits `model`; undefined = the SDK default. */
+  effort?: ReasoningEffort | undefined;
   verbCtx: VerbContext;
   abortController?: AbortController;
   onProvenanceRefusal?: (toolName: string, reason: string) => void;
@@ -237,6 +241,7 @@ export function buildSupervisorQueryOptions(args: SupervisorQueryArgs): { prompt
       env: { ...buildSubprocessEnv(), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
       settingSources: [],
       ...(args.model ? { model: args.model } : {}),
+      ...(args.effort ? { effort: args.effort } : {}),
       ...(args.resume ? { resume: args.resume } : {}),
       ...(args.abortController ? { abortController: args.abortController } : {}),
       disallowedTools: [...SUPERVISOR_DISALLOWED_TOOLS],
@@ -260,6 +265,8 @@ export function buildSupervisorQueryOptions(args: SupervisorQueryArgs): { prompt
 export interface WakeDeps {
   query: typeof sdkQuery;
   resolveModel: () => Promise<string | undefined>;
+  /** The effort for the model the wake will run on. Absent: the SDK default. */
+  resolveEffort?: (model: string | undefined) => { resolved: ReasoningEffort | null; fellBack: boolean; choice: ReasoningEffort | null };
   /** The model's window, for the rotation threshold. Absent: the default 200K. */
   contextWindow?: (model: string | undefined) => Promise<number>;
 }
@@ -267,6 +274,7 @@ export interface WakeDeps {
 const defaultWakeDeps: WakeDeps = {
   contextWindow: (model) => contextWindowFor(model ?? null),
   query: sdkQuery,
+  resolveEffort: (model) => resolveRoleEffort("supervisor", model),
   resolveModel: async () =>
     ensureProviderModelId(await resolveRoleModel("supervisor").then((r) => (r === "inherit" ? null : r))) ?? undefined,
 };
@@ -276,6 +284,13 @@ export interface WakeResult {
   costUsd?: number;
   sdkSessionId?: string;
   error?: string;
+}
+
+/** The start line's effort suffix: the rung it runs at, or why it runs on Default. */
+function effortNote(effort: { resolved: ReasoningEffort | null; fellBack: boolean; choice: ReasoningEffort | null } | undefined): string {
+  if (!effort) return "";
+  if (effort.resolved) return ` · effort ${effort.resolved}`;
+  return effort.fellBack ? ` · effort default (${effort.choice} not available on this model)` : "";
 }
 
 const dayOf = (iso: string | null) => (iso ? iso.slice(0, 10) : null);
@@ -317,6 +332,7 @@ export async function runSupervisorWake(
   const st = getSupervisorState(projectId);
   const today = new Date().toISOString().slice(0, 10);
   const model = await deps.resolveModel().catch(() => undefined);
+  const effort = deps.resolveEffort?.(model);
   const rotateAt = deps.contextWindow ? rotateAtTokens(await deps.contextWindow(model).catch(() => 200_000)) : ROTATE_AT_INPUT_TOKENS;
   const stale = !!st.sdkSessionId && (st.lastInputTokens > rotateAt || dayOf(st.sdkSessionStartedAt) !== today);
   const fresh = !st.sdkSessionId || stale;
@@ -340,8 +356,9 @@ export async function runSupervisorWake(
     tab: null,
     wakeId,
     mode: st.mode,
-    reason: `${args.items.length} item(s)${imageSummary}${model ? ` · ${model}` : ""}`,
+    reason: `${args.items.length} item(s)${imageSummary}${model ? ` · ${model}` : ""}${effortNote(effort)}`,
     ...(model ? { model } : {}),
+    ...(effort?.resolved ? { effort: effort.resolved } : {}),
   });
 
   // A conversation wake's spend is counted apart from watching (ADR-0128 §7) — one cap still stops both.
@@ -382,6 +399,7 @@ export async function runSupervisorWake(
       prompt,
       resume: fresh ? null : st.sdkSessionId,
       model,
+      ...(effort?.resolved ? { effort: effort.resolved } : {}),
       verbCtx: args.verbCtx,
       abortController,
       onProvenanceRefusal,

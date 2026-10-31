@@ -465,6 +465,39 @@ describe("classifyToolCall — memory ownership (ADR-0042 addendum)", () => {
   });
 });
 
+// ADR-0127 — the supervisor's model and effort are the USER's choice (raising
+// either widens the posture). Both live in app-wide files in the data dir; a
+// tab that wrote them directly, at any posture, would be choosing its
+// supervisor's thinking. The deny returns before the posture is consulted.
+describe("classifyToolCall — supervisor model/effort stores are user-owned", () => {
+  const stores = ["/Users/u/.marvin/role-models.json", "/Users/u/.marvin/role-efforts.json"];
+
+  it("denies Write / Edit / NotebookEdit into either store", () => {
+    for (const target of stores) {
+      for (const tool of ["Write", "Edit", "NotebookEdit"] as const) {
+        const input =
+          tool === "NotebookEdit"
+            ? { notebook_path: target, new_source: "x" }
+            : { file_path: target, old_string: "a", new_string: "b", content: "x" };
+        expect(classifyToolCall(tool, input).decision).toBe("deny");
+      }
+    }
+  });
+
+  it("denies mutating Bash aimed at either store", () => {
+    for (const target of stores) {
+      for (const cmd of [`echo '{}' > ${target}`, `tee ${target}`, `sed -i '' 's/a/b/' ${target}`, `rm ${target}`, `cp /tmp/x ${target}`]) {
+        expect(classifyToolCall("Bash", { command: cmd }).decision).toBe("deny");
+      }
+    }
+  });
+
+  it("still allows reading them", () => {
+    expect(classifyToolCall("Read", { file_path: stores[0] }).decision).toBe("allow");
+    expect(classifyToolCall("Bash", { command: `cat ${stores[0]}` }).decision).not.toBe("deny");
+  });
+});
+
 // ADR-0030 — the sub-agent read-only invariant. When a tool call
 // originates inside a sub-agent (the SDK passes its `agentID`), no
 // workspace mutation is permitted: confirm-class and deny-class both

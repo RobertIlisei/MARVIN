@@ -132,13 +132,23 @@ final class SupervisorService {
     /// PATCH /api/models/roles `{role: "supervisor", model}` — one role, one
     /// key; nil puts it back on the default. The user's click, never a verb.
     func setSupervisorModel(_ id: String?) async throws {
+        try await patchSupervisorRole(["model": id.map { $0 as Any } ?? NSNull()])
+    }
+
+    /// PATCH /api/models/roles `{role: "supervisor", effort}` — a rung of the
+    /// ladder, or nil for Default. Raising it widens the posture, so like the
+    /// model it is the user's click, never a verb.
+    func setSupervisorEffort(_ rung: String?) async throws {
+        try await patchSupervisorRole(["effort": rung.map { $0 as Any } ?? NSNull()])
+    }
+
+    private func patchSupervisorRole(_ field: [String: Any]) async throws {
         var req = URLRequest(url: baseURL.appendingPathComponent("api/models/roles"))
         req.httpMethod = "PATCH"
         req.timeoutInterval = 15
         req.setValue("1", forHTTPHeaderField: "x-marvin-client")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = ["role": "supervisor", "model": id.map { $0 as Any } ?? NSNull()]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        req.httpBody = try? JSONSerialization.data(withJSONObject: field.merging(["role": "supervisor"]) { a, _ in a })
         let (data, status) = try await send(req)
         guard (200..<300).contains(status) else {
             struct Err: Decodable { let error: String? }
@@ -247,6 +257,9 @@ final class SupervisorModel {
     /// The Settings block's model list (GET /api/models); empty until it loads.
     var modelChoices: [SupervisorModelPicker.Entry] = []
     var modelListFailed = false
+    var effortPickerOpen = false
+    /// The effort row the arrow keys are on; "" is Default.
+    var effortCursor = ""
     /// The list is open, and which row the arrow keys are on ("" = Default).
     var modelPickerOpen = false
     var modelCursor: String = ""
@@ -597,6 +610,27 @@ final class SupervisorModel {
         modelCursor = SupervisorModelPicker.cursorKey(choice: SupervisorModelPicker.selection(status?.model))
         modelPickerOpen = true
         Task { await loadModelChoices() }
+    }
+
+    func openEffortPicker() {
+        effortCursor = SupervisorEffortPicker.cursorKey(choice: SupervisorEffortPicker.selection(status?.model?.effort))
+        effortPickerOpen = true
+    }
+
+    /// The user's pick (nil = Default). Takes effect on the next wake.
+    func setEffort(_ rung: String?) async {
+        effortPickerOpen = false
+        do {
+            try await SupervisorService.shared.setSupervisorEffort(rung)
+            controlNotice = nil
+            await refreshStatus()
+        } catch SupervisorServiceError.refused(_, let message, _) {
+            controlNotice = PaneNotice(kind: .error, headline: "Changing the effort was refused", detail: message)
+        } catch {
+            controlNotice = PaneNotice(kind: .error,
+                                       headline: "Changing the effort didn't reach the sidecar — the supervisor keeps its current one",
+                                       detail: error.localizedDescription)
+        }
     }
 
     func loadModelChoices() async {

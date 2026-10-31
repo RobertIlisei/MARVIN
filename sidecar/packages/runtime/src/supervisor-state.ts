@@ -581,6 +581,26 @@ export function noteSupervisorModelChange(model: string | null): void {
   }
 }
 
+/**
+ * The user changed the supervisor's effort (role-efforts.ts, app-wide like the
+ * model). Same contract as `noteSupervisorModelChange`: every enabled
+ * supervisor ledgers it and moves its revision; the next wake runs on it.
+ */
+export function noteSupervisorEffortChange(effort: string | null): void {
+  for (const enabled of listEnabledSupervisors()) {
+    const state = commit(getSupervisorState(enabled.projectId));
+    appendLedgerEntry(state.projectId, {
+      kind: "control",
+      verb: "effort",
+      tab: null,
+      wakeId: null,
+      mode: state.mode,
+      reason: `user: effort ${effort ?? "default"}, from the next wake`,
+      ...(effort ? { effort } : {}),
+    });
+  }
+}
+
 /** The loop's hook for pause / kill / delegate changes. Returns an unsubscribe fn. */
 export function onSupervisorControl(listener: (e: SupervisorControlEvent) => void): () => void {
   store().listeners.add(listener);

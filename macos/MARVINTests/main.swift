@@ -5769,6 +5769,88 @@ runner.suite("supervisor-model-picker") {
     }
 }
 
+// MARK: - Supervisor effort picker (beside the model chip)
+
+runner.suite("supervisor-effort-picker") {
+    func status(_ effort: String) -> SupervisorStatus? {
+        let json = #"{"state":{},"status":{"projectId":"p","revision":3,"mode":"shadow","autonomy":{"questions":"shadow","nudges":"shadow","posture":"shadow","confirms":"shadow"},"run":"idle","pause":null,"currentWake":null,"queuedEvents":0,"lastWake":null,"health":"ok","watchedTabs":1,"openEscalations":0,"budget":{"capUsd":10,"spentUsd":0,"resetsAt":"2026-10-31T00:00:00Z","level":"ok"},"model":{"role":"supervisor","resolved":"claude-sonnet-5-5","label":"Sonnet 5.5","choice":null\#(effort)}}}"#
+        return SupervisorStatus.decodeEnvelope(Data(json.utf8))
+    }
+    let sonnetMax = status(#","effort":{"choice":"max","resolved":null,"options":["low","medium","high"],"fellBack":true}"#)?.model?.effort
+    let opusHigh = status(#","effort":{"choice":"high","resolved":"high","options":["low","medium","high","xhigh","max"],"fellBack":false}"#)?.model?.effort
+    let onDefault = status(#","effort":{"choice":null,"resolved":null,"options":["low","medium","high"],"fellBack":false}"#)?.model?.effort
+
+    runner.test("the status carries the effort block; an older sidecar sends none") {
+        runner.expect(opusHigh?.choice, equals: "high", "choice")
+        runner.expect(opusHigh?.options, equals: ["low", "medium", "high", "xhigh", "max"], "the model's rungs")
+        runner.expect(sonnetMax?.fellBack, equals: true, "fell back")
+        runner.expect(status("")?.model?.effort == nil, "no block, no effort control state")
+    }
+    runner.test("rows are Default, then only the rungs this model can run") {
+        runner.expect(SupervisorEffortPicker.keys(onDefault), equals: ["", "low", "medium", "high"], "a Sonnet-class model")
+        runner.expect(SupervisorEffortPicker.keys(opusHigh), equals: ["", "low", "medium", "high", "xhigh", "max"], "an Opus-class model")
+        runner.expect(SupervisorEffortPicker.keys(nil), equals: [""], "unknown: Default only")
+    }
+    runner.test("the chip names the choice, and a choice the model cannot run reads as Default") {
+        runner.expect(SupervisorEffortPicker.chipTitle(opusHigh), equals: "High", "chosen")
+        runner.expect(SupervisorEffortPicker.chipTitle(onDefault), equals: "Default", "default")
+        runner.expect(SupervisorEffortPicker.chipTitle(sonnetMax), equals: "Default", "fell back")
+        runner.expect(SupervisorEffortPicker.chipTitle(nil), equals: "Default", "unknown")
+        runner.expect(SupervisorEffortPicker.title(forKey: "xhigh"), equals: "XHigh", "xhigh")
+    }
+    runner.test("a fallback is said, with the way out; no other state has a notice") {
+        runner.expect(SupervisorEffortPicker.fallbackNotice(sonnetMax),
+                      equals: "Max isn't available on this model, so the supervisor runs on Default. Pick another model or effort.", "says so")
+        runner.expect(SupervisorEffortPicker.fallbackNotice(opusHigh) == nil, "fits")
+        runner.expect(SupervisorEffortPicker.fallbackNotice(onDefault) == nil, "default")
+        runner.expect(SupervisorEffortPicker.fallbackNotice(nil) == nil, "unknown")
+    }
+    runner.test("selection is the stored choice, so the row stays marked while the model cannot run it") {
+        runner.expect(SupervisorEffortPicker.selection(sonnetMax), equals: "max", "kept")
+        runner.expect(SupervisorEffortPicker.selection(onDefault), equals: nil, "default")
+        runner.expect(SupervisorEffortPicker.cursorKey(choice: nil), equals: "", "Default is the empty key")
+        runner.expect(SupervisorEffortPicker.effort(forKey: ""), equals: nil, "empty key picks Default")
+        runner.expect(SupervisorEffortPicker.effort(forKey: "high"), equals: "high", "a rung picks itself")
+    }
+    runner.test("arrow keys stop at the ends; the cursor starts on the current choice so a stray Return changes nothing") {
+        let keys = SupervisorEffortPicker.keys(opusHigh)
+        runner.expect(SupervisorEffortPicker.cursorKey(choice: opusHigh?.choice), equals: "high", "starts on the choice")
+        runner.expect(SupervisorEffortPicker.step(from: "high", by: 1, in: keys), equals: "xhigh", "down")
+        runner.expect(SupervisorEffortPicker.step(from: "", by: -1, in: keys), equals: "", "top stops")
+        runner.expect(SupervisorEffortPicker.step(from: "max", by: 1, in: keys), equals: "max", "bottom stops")
+    }
+    runner.test("what VoiceOver reads, and the help the pick carries") {
+        runner.expect(SupervisorEffortPicker.accessibilityLabel, equals: "Supervisor effort", "label")
+        runner.expect(SupervisorEffortPicker.help,
+                      equals: "How hard it thinks. Applies from the next wake. Every project's supervisor uses it; higher effort costs more.", "help")
+    }
+}
+
+// MARK: - Models dialog: write only the rows the user changed
+
+runner.suite("helper-role-changes") {
+    runner.test("only the rows the user changed are written, so a stale row cannot undo another surface's pick") {
+        // The dialog opened with the supervisor on opus; the Supervisor workspace then picked sonnet.
+        // The dialog's own copy of that row is untouched, so it must not be written back.
+        let saved = ["supervisor": "claude-opus-5-5", "scout": "claude-haiku-5-5"]
+        let chosen = ["supervisor": "claude-opus-5-5", "scout": "claude-sonnet-5-5"]
+        runner.expect(HelperRoleChanges.changes(saved: saved, chosen: chosen),
+                      equals: [.init(role: "scout", model: "claude-sonnet-5-5")], "only scout")
+    }
+    runner.test("clearing a row is a change to the default, and a new pick is a change") {
+        let saved = ["scout": "claude-haiku-5-5"]
+        let chosen = ["practiceDraft": "claude-opus-5-5"]
+        runner.expect(HelperRoleChanges.changes(saved: saved, chosen: chosen),
+                      equals: [.init(role: "practiceDraft", model: "claude-opus-5-5"), .init(role: "scout", model: nil)],
+                      "sorted by role: the pick, and the cleared row back to default")
+    }
+    runner.test("nothing changed, nothing written") {
+        let same = ["scout": "claude-haiku-5-5"]
+        runner.expect(HelperRoleChanges.changes(saved: same, chosen: same).isEmpty, "no changes")
+        runner.expect(HelperRoleChanges.changes(saved: [:], chosen: [:]).isEmpty, "empty")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

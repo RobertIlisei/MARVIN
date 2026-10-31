@@ -62,6 +62,15 @@ function supportsTopEffort(model: string): boolean {
 }
 
 /**
+ * The rungs `model` can actually run — unlike `resolveEffort`, which lowers an
+ * unsupported rung to `high`, this is for a picker that must refuse instead of
+ * quietly substituting. An unknown model (`null`) gets the rungs every model has.
+ */
+export function effortOptionsFor(model: string | null | undefined): ReasoningEffort[] {
+  return EFFORT_LEVELS.filter((l) => (l !== "xhigh" && l !== "max") || (!!model && supportsTopEffort(model)));
+}
+
+/**
  * Resolve a user-facing effort selection (new ladder value OR a legacy
  * fast/thinking/max alias) to a concrete SDK `effort`, applying the
  * Opus-only fallback for the top two rungs. Unknown / undefined input

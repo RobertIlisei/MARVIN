@@ -198,8 +198,23 @@ public struct SupervisorStatus: Decodable, Equatable, Sendable {
         public let label: String?
         /// What the user stored for the role; nil = the default. `resolved` alone cannot tell the two apart.
         public let choice: String?
-        public init(resolved: String? = nil, label: String? = nil, choice: String? = nil) {
-            self.resolved = resolved; self.label = label; self.choice = choice
+        /// The supervisor's effort beside its model (ADR-0127); nil from an older sidecar.
+        public let effort: Effort?
+        public init(resolved: String? = nil, label: String? = nil, choice: String? = nil, effort: Effort? = nil) {
+            self.resolved = resolved; self.label = label; self.choice = choice; self.effort = effort
+        }
+        public struct Effort: Decodable, Equatable, Sendable {
+            /// What the user stored; nil = Default.
+            public let choice: String?
+            /// What a wake passes; nil = none (Default, or the choice did not fit the model).
+            public let resolved: String?
+            /// The rungs the resolved model can run, in ladder order.
+            public let options: [String]
+            /// The stored choice does not fit the model: the wake runs on Default.
+            public let fellBack: Bool
+            public init(choice: String? = nil, resolved: String? = nil, options: [String], fellBack: Bool = false) {
+                self.choice = choice; self.resolved = resolved; self.options = options; self.fellBack = fellBack
+            }
         }
     }
     public struct CategoryStats: Decodable, Equatable, Sendable {

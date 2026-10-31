@@ -22,7 +22,7 @@ import SwiftUI
                        wake: SupervisorStatus.Wake? = nil, queued: Int = 0,
                        lastWake: SupervisorStatus.LastWake? = nil, open: Int = 0,
                        spent: Double = 3.2, cap: Double = 10, level: String = "ok",
-                       model: SupervisorStatus.Model = .init(resolved: "claude-sonnet-5-5", label: "Sonnet 5.5")) -> SupervisorStatus {
+                       model: SupervisorStatus.Model = .init(resolved: "claude-sonnet-5-5", label: "Sonnet 5.5", effort: .init(options: ["low", "medium", "high"]))) -> SupervisorStatus {
         let cats = ["questions", "nudges", "posture", "confirms"]
         var auto = Dictionary(uniqueKeysWithValues: cats.map { ($0, "shadow") })
         for (k, v) in autonomy { auto[k] = v }
@@ -354,6 +354,22 @@ import SwiftUI
                     m.modelChoices = modelChoices
                     m.modelPickerOpen = true
                     m.modelCursor = "claude-opus-5-5"
+                }
+            }),
+            ("sup-ws-effort-picker", "Workspace — Settings, Effort list open on an Opus-class model: Default, then all five rungs; High selected and under the cursor", true, {
+                workspaceModel(status(open: 2, model: .init(resolved: "claude-opus-5-5", label: "Opus 5.5", choice: "claude-opus-5-5",
+                                                            effort: .init(choice: "high", resolved: "high", options: ["low", "medium", "high", "xhigh", "max"]))),
+                               segment: .settings) { m in
+                    m.effortPickerOpen = true
+                    m.effortCursor = "high"
+                }
+            }),
+            ("sup-ws-effort-fallback", "Workspace — Settings, Max stored but the model is Sonnet-class: the chip reads Default and the notice says why and how to fix it", true, {
+                workspaceModel(status(open: 2, model: .init(resolved: "claude-sonnet-5-5", label: "Sonnet 5.5",
+                                                            effort: .init(choice: "max", resolved: nil, options: ["low", "medium", "high"], fellBack: true))),
+                               segment: .settings) { m in
+                    m.effortPickerOpen = true
+                    m.effortCursor = "max"
                 }
             }),
             ("sup-ws-paused", "Workspace §13.10 — paused by you: Resume primary; the orb still; Log", true, {

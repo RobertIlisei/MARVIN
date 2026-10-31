@@ -73,6 +73,8 @@ export interface LedgerEntryInput {
    * Never the supervisor's own output; the provider may substitute.
    */
   model?: string;
+  /** The effort a wake was asked to run at, or the one the user just chose; absent = Default. */
+  effort?: string;
   result?: string;
   /** The question or confirm an `answer` / `confirm` line is about (milestone 4 — pairing). */
   turnId?: string;
