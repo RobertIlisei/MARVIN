@@ -3,6 +3,7 @@
 - **Status:** Accepted — 2026-10-30 (decision, Phase A). Implementation follows [`docs/plans/supervisor.md`](../plans/supervisor.md); nothing in this ADR is shipped yet.
 - **Revised:** 2026-10-30, on review — Robert's decision that **the supervisor may open tabs**: always in a fresh worktree, only when the user asks for it directly or approves the supervisor's proposal, always escalation-gated, never on its own initiative, one request one tab (§1, §4 item 7, §6).
 - **Date:** 2026-10-30
+- **Amended by:** [ADR-0128](./0128-the-user-talks-to-the-supervisor.md) (2026-10-31), which adds the conversational channel. The user talks to the supervisor in a pinned Supervisor tab (§2's "its own route"). Every act the conversation leads to that the supervisor may not perform on its own becomes a card in the chat, and that card *is* the inbox item. The user's click on its raw act is the consent (§5). No text is ever consent. ADR-0128 adds no authority.
 - **Supersedes, in part:**
   - Golden Rule 1 (`AGENTS.md`): the 2026-07-24 rejection of a standing supervisor, "No model ever commands another model", and "Two sessions must still never be *dispatched* by a model".
   - [ADR-0059](./0059-session-auditor-runtime-dispatched-read-only.md): "No model ever commands another model", the rejected alternative "Standing supervisor over executor+advisor", and — for the supervisor only — §5's "Not a dispatcher". The auditor itself stays a non-dispatcher.

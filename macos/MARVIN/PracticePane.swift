@@ -105,7 +105,10 @@ import SwiftUI
         // width. All seven stay mounted in one ZStack, so the widest
         // intrinsic minimum among them becomes the sidebar's, and the
         // overflow pushes the 44pt rail off the left edge (ADR-0114).
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        // Nor for height: measured at ~0pt wide its wrapped text claimed
+        // 746pt, more than a window has, and the whole column was pushed up
+        // under the title bar (2026-10-31; see FindInFilesView).
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
         .clipped()
     }
 
