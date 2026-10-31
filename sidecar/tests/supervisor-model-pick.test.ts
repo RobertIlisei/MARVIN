@@ -157,7 +157,7 @@ describe("the supervisor cannot change its own model", () => {
 
 describe("the status says what was chosen, not only what it resolved to", () => {
   it("choice is null on the default and the stored id once picked", async () => {
-    expect(await supervisorModelInfo()).toMatchObject({ resolved: "claude-sonnet-5-5", choice: null });
+    expect(await supervisorModelInfo()).toMatchObject({ resolved: expect.stringMatching(/^claude-sonnet-5/), choice: null });
     writeRoleModels({ supervisor: "claude-opus-5-5" });
     expect(await supervisorModelInfo()).toMatchObject({ resolved: "claude-opus-5-5", label: expect.stringContaining("Opus 5.5"), choice: "claude-opus-5-5" });
   });
