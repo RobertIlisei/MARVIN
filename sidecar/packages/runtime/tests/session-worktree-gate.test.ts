@@ -314,6 +314,63 @@ describe("localOnlyIntegrationPolicy — a tab branch is never published by MARV
     expect(localOnlyIntegrationPolicy("Bash", { command: "git push gitlab main" }, undefined)).toBeNull();
   });
 
+  // 2026-10-31 security audit: PUBLISH_CMD was `\bgit\s+push\b` on the raw
+  // text — MARVIN reaches a worktree with `git -C <path>` all the time.
+  it.each([
+    "git -C . push",
+    "git -C /r/.marvin/worktrees/tab-x push origin HEAD",
+    'git -C "dir with space" push',
+    "git -c user.name=x push",
+    "git --git-dir=/r/.git --work-tree=/r push",
+    "git --no-pager push",
+    "/usr/bin/git -C . push",
+    "env GIT_TRACE=1 git -C . push",
+    "cd sub && git -C .. push -u origin HEAD",
+    "git status; git -C . push",
+    "bash -c 'git -C . push'",
+    "echo $(git -C . push)",
+    "gh -R o/r pr create --fill",
+    "gh pr -R o/r create",
+    "glab -R o/r mr create --fill",
+    "glab --repo o/r mr merge 3",
+  ])("denies `%s` in a worktree tab", (cmd) => {
+    expect(localOnlyIntegrationPolicy("Bash", { command: cmd }, tab)?.decision, cmd).toBe("deny");
+  });
+
+  it.each([
+    "git -c alias.p=push p",
+    "git -c help.autocorrect=1 pus",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p",
+    "$(which git) push origin HEAD",
+    "/usr/libexec/git-core/git-push origin HEAD",
+    "git subtree push --prefix=x origin y",
+    "glab mr accept 4",
+  ])("denies the unreadable or aliased `%s` in a worktree tab", (cmd) => {
+    expect(localOnlyIntegrationPolicy("Bash", { command: cmd }, tab)?.decision, cmd).toBe("deny");
+  });
+
+  it("in a shared tab, an unreadable form is not denied here — the metered-CI confirm asks", () => {
+    expect(localOnlyIntegrationPolicy("Bash", { command: "git -c alias.p=push p" }, shared)).toBeNull();
+  });
+
+  it("in a shared tab, a global option does not hide the marvin/ branch being published", () => {
+    expect(localOnlyIntegrationPolicy("Bash", { command: "git -C . push gitlab marvin/tab/fix-anaf" }, shared)?.decision).toBe("deny");
+    expect(localOnlyIntegrationPolicy("Bash", { command: "gh -R o/r pr create --head marvin/tab/x" }, shared)?.decision).toBe("deny");
+    expect(localOnlyIntegrationPolicy("Bash", { command: "git -C . push gitlab main" }, shared)).toBeNull();
+  });
+
+  it.each([
+    "git -C . status",
+    "git -c core.quotepath=off status",
+    "git --no-pager log --oneline",
+    "git -C /x diff",
+    "gh -R o/r pr view 3",
+    "glab -R o/r mr list",
+    'git commit -m "update docs"',
+  ])("leaves `%s` alone in a worktree tab", (cmd) => {
+    expect(localOnlyIntegrationPolicy("Bash", { command: cmd }, tab), cmd).toBeNull();
+  });
+
   it("through the gate: a worktree tab's `glab mr create` is denied without opening a confirm", async () => {
     const decide = gate("worktree");
     const out = decided(await decide("Bash", { command: "glab mr create --source-branch marvin/tab/x --target-branch main --title t" }, meta("tu-mr")));

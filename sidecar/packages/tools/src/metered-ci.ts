@@ -33,6 +33,8 @@
 // gated in `auto` mode too rather than sitting in the ordinary confirm class,
 // which `auto` bypasses wholesale.
 
+import { vcsInvocations } from "./vcs-command";
+
 /** What kind of metered work a command would start. */
 export type MeteredCiRisk =
   /** Opens a merge/pull request — starts an MR pipeline. */
@@ -40,7 +42,11 @@ export type MeteredCiRisk =
   /** Merges a request — on the default branch this is the full suite. */
   | "merges-request"
   /** Starts a pipeline / workflow directly. */
-  | "runs-pipeline";
+  | "runs-pipeline"
+  /** A git / gh / glab invocation that cannot be read confidently — an
+   *  unknown option before the verb, an inline alias, an expansion where the
+   *  verb should be. Confirmed rather than guessed safe. */
+  | "unclear";
 
 export interface MeteredCiVerdict {
   risk: MeteredCiRisk;
@@ -83,7 +89,8 @@ const RULES: Rule[] = [
   { re: /\bgit\s+push\b.*\bci\.pipeline\b/, risk: "runs-pipeline", verb: "git push -o ci.pipeline" },
 
   // ── Merging a request ─────────────────────────────────────────────────
-  { re: /\bglab\s+mr\s+merge\b/, risk: "merges-request", verb: "glab mr merge" },
+  // `accept` is glab's own alias of `merge`.
+  { re: /\bglab\s+mr\s+(merge|accept)\b/, risk: "merges-request", verb: "glab mr merge" },
   { re: /\bgh\s+pr\s+merge\b/, risk: "merges-request", verb: "gh pr merge" },
 
   // ── Starting a pipeline directly ──────────────────────────────────────
@@ -93,16 +100,40 @@ const RULES: Rule[] = [
   { re: /\bgh\s+run\s+rerun\b/, risk: "runs-pipeline", verb: "gh run rerun" },
 ];
 
+/** `re` matches at the very start of `s` — an invocation's own verb, never a
+ *  tool name that appears later among its arguments. */
+const leads = (re: RegExp, s: string): boolean => s.search(re) === 0;
+
 /**
  * Would this command spend CI minutes?
  *
  * Returns `null` for everything else, including every plain `git push` — see
  * the note at the top of this file for why pushing is not on the list.
+ *
+ * Each git / gh / glab invocation is classified on its own, with its global
+ * options out of the way (`vcs-command.ts`): `glab -R o/r ci run` is
+ * `glab ci run`, and a read-only invocation earlier in a chain no longer clears
+ * a spending one after it.
  */
 export function classifyMeteredCiRisk(command: string): MeteredCiVerdict | null {
   const cmd = command.trim();
   if (!cmd) return null;
-  // Cheap reject: every rule needs one of these three words.
+  for (const inv of vcsInvocations(cmd)) {
+    if (inv.unclear) {
+      const shown = inv.line.length > 60 ? `${inv.line.slice(0, 60)}…` : inv.line;
+      return { risk: "unclear", verb: `${shown} (${inv.unclear})` };
+    }
+    if (READ_ONLY.some((re) => leads(re, inv.line))) continue;
+    for (const rule of RULES) {
+      if (leads(rule.re, inv.line)) return { risk: rule.risk, verb: rule.verb };
+    }
+    // The push option set through config rather than `-o`.
+    if (inv.tool === "git" && inv.args[0] === "push" && /\bmerge_request\.create\b/.test(inv.globals.join(" "))) {
+      return { risk: "opens-request", verb: "git -c push.pushOption=merge_request.create push" };
+    }
+  }
+  // The raw-text pass the parser replaced still runs, so nothing it caught is
+  // lost. Cheap reject: every rule needs one of these three words.
   if (!/\b(glab|gh|git)\b/.test(cmd)) return null;
   if (READ_ONLY.some((re) => re.test(cmd))) return null;
   for (const rule of RULES) {
@@ -120,6 +151,8 @@ export function describeMeteredCiRisk(risk: MeteredCiRisk): string {
       return "merges a request — on the default branch that is the full suite";
     case "runs-pipeline":
       return "starts a pipeline directly";
+    case "unclear":
+      return "could not be read with confidence, so it may open or merge a request or start a pipeline";
   }
 }
 
@@ -135,6 +168,9 @@ export function meteredCiAlternative(risk: MeteredCiRisk): string {
       "ready) costs no pipeline at all — the commits ride along in whatever run that " +
       "branch was already going to have. One request for all of the work beats one each."
     );
+  }
+  if (risk === "unclear") {
+    return "Allow only if you can see it spends nothing; MARVIN can rerun it spelled out plainly (`git push`, `glab ci run`).";
   }
   return "Allow if this is the integration you intended; deny if it can wait to be batched.";
 }

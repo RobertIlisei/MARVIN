@@ -24,6 +24,7 @@
 import path from "node:path";
 
 import { classifyMeteredCiRisk } from "@marvin/tools/metered-ci";
+import { vcsInvocations } from "@marvin/tools/vcs-command";
 import { isTrustedMcpName, PLAYWRIGHT_SERVER_KEY } from "@marvin/tools/policy";
 import { classifySharedTreeRisk } from "@marvin/tools/shared-tree";
 
@@ -134,11 +135,17 @@ export function classifyHumanOnlyAct(args: {
   const raw = typeof input.command === "string" ? input.command.trim() : "";
   if (!raw) return null;
   const command = withoutGitGlobalOptions(raw);
+  // Plus each git / gh / glab invocation in canonical form — a quoted `-C`
+  // path, `/usr/bin/git`, `bash -c '…'`, `gh -R o/r …` (vcs-command.ts).
+  const probes = [command, ...vcsInvocations(raw).map((i) => i.line)];
+  const hit = (re: RegExp) => probes.some((p) => re.test(p));
 
-  for (const [re, label] of INTEGRATION) if (re.test(command)) return { item: "integration", label };
-  const ci = classifyMeteredCiRisk(command);
+  for (const [re, label] of INTEGRATION) if (hit(re)) return { item: "integration", label };
+  // An `unclear` verdict lands here on purpose: a command that may push or
+  // spend and cannot be read is the user's call, labelled with why.
+  const ci = classifyMeteredCiRisk(raw);
   if (ci) return { item: "integration", label: ci.verb };
-  for (const [re, label] of DISCARD) if (re.test(command)) return { item: "discard", label };
+  for (const [re, label] of DISCARD) if (hit(re)) return { item: "discard", label };
   if (args.treeMode !== "worktree") {
     const head = classifySharedTreeRisk(command);
     if (head) return { item: "containment", label: `${head.verb} in a shared checkout` };

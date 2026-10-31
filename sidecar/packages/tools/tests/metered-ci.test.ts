@@ -90,3 +90,62 @@ describe("classifyMeteredCiRisk", () => {
     expect(meteredCiAlternative("opens-request")).toMatch(/Merge all ready/);
   });
 });
+
+// 2026-10-31 security audit: every rule above was a regex over the raw text,
+// so a global option between the tool and its verb walked past all of them.
+describe("classifyMeteredCiRisk — global options and wrappers do not hide the verb", () => {
+  it.each([
+    ["glab -R owner/repo ci run", "runs-pipeline"],
+    ["glab --repo owner/repo pipeline retry 9", "runs-pipeline"],
+    ["gh -R owner/repo workflow run smoke.yml", "runs-pipeline"],
+    ["gh --repo=owner/repo run rerun 12", "runs-pipeline"],
+    ["gh -R owner/repo pr create --fill", "opens-request"],
+    ["gh pr -R owner/repo create", "opens-request"],
+    ["glab -R o/r mr create --fill", "opens-request"],
+    ["glab mr --repo o/r merge 7", "merges-request"],
+    ["gh -Ro/r pr merge 3", "merges-request"],
+    ["/opt/homebrew/bin/glab -R o/r ci run", "runs-pipeline"],
+    ["cd repo && glab -R o/r ci run", "runs-pipeline"],
+    ["bash -c 'gh -R o/r workflow run x'", "runs-pipeline"],
+    ["git -C . push -o merge_request.create origin HEAD", "opens-request"],
+    ["git -c push.pushOption=merge_request.create push origin HEAD", "opens-request"],
+    ["git -C . push -o ci.pipeline origin HEAD", "runs-pipeline"],
+    // A read-only invocation earlier in the chain used to clear the WHOLE command.
+    ["gh pr view 1 && gh pr create --fill", "opens-request"],
+    ["glab mr list; glab mr merge 4", "merges-request"],
+  ])("%s → %s", (cmd, risk) => {
+    expect(classifyMeteredCiRisk(cmd)?.risk, cmd).toBe(risk);
+  });
+
+  it.each([
+    "git -c alias.p=push p",
+    "git --frobnicate push",
+    "git $(echo push) origin",
+    "gh --weird pr create",
+    "glab mr $VERB",
+  ])("%s cannot be read confidently, so it is confirmed rather than waved through", (cmd) => {
+    const v = classifyMeteredCiRisk(cmd);
+    expect(v?.risk, cmd).toBe("unclear");
+    expect(v?.verb, cmd).toBeTruthy();
+  });
+
+  it.each([
+    "git -C . status",
+    "git -C . push",
+    "git -C /r push origin marvin/tab/x",
+    "git --no-pager log --oneline",
+    "gh -R o/r pr view 3",
+    "glab -R o/r mr list",
+    "glab --repo o/r ci status",
+    "gh --version",
+    "gh -R o/r pr create --help",
+    "git -c core.quotepath=off status",
+  ])("%s spends nothing", (cmd) => {
+    expect(classifyMeteredCiRisk(cmd), cmd).toBeNull();
+  });
+
+  it("describes the unclear class", () => {
+    expect(describeMeteredCiRisk("unclear").length).toBeGreaterThan(10);
+    expect(meteredCiAlternative("unclear").length).toBeGreaterThan(10);
+  });
+});

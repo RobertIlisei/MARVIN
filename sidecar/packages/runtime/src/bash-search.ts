@@ -1,5 +1,7 @@
 import { extname, isAbsolute, join, relative } from "node:path";
 
+import { splitStages, stageWords } from "@marvin/tools/shell-words";
+
 /**
  * What counts as a structural read — shared by the graphify-first gate
  * (`design-hooks.ts`) and the practice extractor that measures the same act
@@ -177,12 +179,6 @@ const EXCLUDED_DIRS = new Set([
 /** Leading words that do not change which binary a stage runs. */
 const PREFIX_WORDS = new Set(["do", "then", "else", "{", "(", "!", "time", "command", "sudo", "nohup", "exec", "builtin"]);
 
-interface Stage {
-  text: string;
-  /** 0 for the first stage of a pipeline; >0 downstream of a `|`. */
-  pipeIndex: number;
-}
-
 /** Remove heredoc BODIES; the introducing line stays (with its `<<`). */
 function stripHeredocs(command: string): string {
   const lines = command.split("\n");
@@ -200,99 +196,6 @@ function stripHeredocs(command: string): string {
     while ((m = re.exec(line)) !== null) pending.push(m[2] as string);
   }
   return out.join("\n");
-}
-
-/** Split into pipeline stages at `&&`, `||`, `;`, `&`, newline and `|`,
- *  honouring quotes, escapes and `$(…)` nesting. */
-function splitStages(command: string): Stage[] {
-  const stages: Stage[] = [];
-  let buf = "";
-  let quote: "'" | '"' | null = null;
-  let depth = 0;
-  let pipeIndex = 0;
-  const flush = (nextPipe: number) => {
-    if (buf.trim()) stages.push({ text: buf.trim(), pipeIndex });
-    buf = "";
-    pipeIndex = nextPipe;
-  };
-  for (let i = 0; i < command.length; i++) {
-    const c = command[i] as string;
-    const n = command[i + 1];
-    if (quote) {
-      if (c === "\\" && quote === '"') {
-        buf += c + (n ?? "");
-        i++;
-        continue;
-      }
-      if (c === quote) quote = null;
-      buf += c;
-      continue;
-    }
-    if (c === "\\") {
-      buf += c + (n ?? "");
-      i++;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      quote = c;
-      buf += c;
-      continue;
-    }
-    if (c === "$" && n === "(") {
-      depth++;
-      buf += "$(";
-      i++;
-      continue;
-    }
-    if (depth > 0) {
-      if (c === "(") depth++;
-      if (c === ")") depth--;
-      buf += c;
-      continue;
-    }
-    if ((c === "&" && n === "&") || (c === "|" && n === "|")) {
-      flush(0);
-      i++;
-      continue;
-    }
-    if (c === "|") {
-      const next = pipeIndex + 1;
-      flush(next);
-      continue;
-    }
-    if (c === ";" || c === "\n") {
-      flush(0);
-      continue;
-    }
-    if (c === "&" && n !== ">" && command[i - 1] !== ">" && command[i - 1] !== "<") {
-      flush(0);
-      continue;
-    }
-    buf += c;
-  }
-  flush(0);
-  return stages;
-}
-
-/** Quote-aware word split; quotes are removed. */
-function stageWords(text: string): string[] {
-  const out: string[] = [];
-  const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|([^\s"']+)/g;
-  let cur = "";
-  let last = -1;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    // Adjacent pieces (`--glob='*.ts'`) belong to one word.
-    const piece = m[1] ?? m[2] ?? m[3] ?? "";
-    if (last === m.index && cur) cur += piece;
-    else {
-      if (cur || last !== -1) out.push(cur);
-      cur = piece;
-    }
-    last = re.lastIndex;
-  }
-  if (last !== -1) out.push(cur);
-  return out.filter((w, i) => w !== "" || i > 0);
 }
 
 /** Drop redirections and their targets; report whether a heredoc/herestring feeds the stage. */

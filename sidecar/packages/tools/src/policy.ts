@@ -11,6 +11,8 @@
  */
 
 import { supervisorBoundaryDenial } from "./supervisor-boundary";
+import { splitStages } from "./shell-words";
+import { type VcsInvocation, vcsInvocations } from "./vcs-command";
 
 export { noteSidecarPort, supervisorBoundaryDenial } from "./supervisor-boundary";
 
@@ -175,6 +177,64 @@ const BASH_AUTO_ALLOW: RegExp[] = [
   /^curl\s+-(s|I)/,
 ];
 
+/** The git subcommands BASH_AUTO_ALLOW lets through, as a set. */
+const GIT_READS = new Set(["status", "log", "diff", "show", "rev-parse", "branch", "blame"]);
+
+/** `git branch` lists — unless one of these makes it create, move or delete. */
+const GIT_BRANCH_WRITES = new Set([
+  "-D", "-d", "-f", "-m", "-M", "-c", "-C", "-u", "--set-upstream-to", "--unset-upstream",
+  "--delete", "--force", "--move", "--copy", "--edit-description",
+]);
+const GIT_BRANCH_LISTS = new Set(["-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"]);
+
+/**
+ * May this invocation ride along in an auto-allowed command? A bare `git` does
+ * nothing; otherwise only a read-only git subcommand, and never with a config
+ * override — `-c core.pager=…` / `-c core.fsmonitor=…` run a program.
+ */
+function readsOnly(inv: VcsInvocation): boolean {
+  if (inv.unclear) return false;
+  if (inv.args.length === 0) return true;
+  const [sub, ...rest] = inv.args as [string, ...string[]];
+  if (inv.tool !== "git" || !GIT_READS.has(sub)) return false;
+  if (inv.globals.some((g) => /^(-c|--config-env|--exec-path)/.test(g))) return false;
+  // `git log --output=<file>` / `git diff --output <file>` write a file.
+  if (rest.some((a) => a.startsWith("--output"))) return false;
+  if (sub !== "branch") return true;
+  if (rest.some((a) => GIT_BRANCH_WRITES.has(a.split("=")[0] as string))) return false;
+  // `git branch x` creates a branch; a name is a read only after a listing flag.
+  return !rest.some((a) => !a.startsWith("-")) || rest.some((a) => GIT_BRANCH_LISTS.has(a.split("=")[0] as string));
+}
+
+/** Read-only filters a pipe may feed into an auto-allowed command. */
+const PIPE_FILTERS = /^(head|tail|wc|grep|egrep|fgrep|cut|nl|column|tr|cat)(\s|$)/;
+
+/**
+ * The auto-allow list is a set of regexes anchored at the START of the
+ * command, so whatever followed a match rode along: `git status && rm -rf
+ * build`, `echo $(rm -rf build)`, `echo x > ~/.zshrc`, `git log | xargs rm`.
+ * For a subagent (ADR-0030) `auto` is the only class that runs at all, so each
+ * of those was a write by a read-only agent (security audit, 2026-10-31).
+ *
+ * Auto now needs: no command substitution, no redirection to a file, every
+ * `&&` / `||` / `;` / newline stage on the list, and every pipe stage on the
+ * list or a read-only filter — `git log | head` and `2>/dev/null` stay auto.
+ */
+function autoAllowed(cmd: string): boolean {
+  if (/\$\(|`|<\(|>\(/.test(cmd)) return false;
+  for (const m of cmd.matchAll(/\d*&?>{1,2}\|?\s*(\S*)/g)) {
+    const target = m[1] ?? "";
+    if (!target.startsWith("&") && target !== "/dev/null") return false;
+  }
+  const stages = splitStages(cmd);
+  // An empty command is not a read; `every` over nothing would say it is.
+  return stages.length > 0 && stages.every((s) => {
+    if (/^curl\b.*\s(-[a-zA-Z]*[oO]\b|--output\b|--remote-name\b)/.test(s.text)) return false;
+    if (BASH_AUTO_ALLOW.some((r) => r.test(s.text))) return true;
+    return s.pipeIndex > 0 && PIPE_FILTERS.test(s.text);
+  });
+}
+
 // Hard deny list — never run these without an explicit per-call override
 // from the user, even if they're in a confirmed batch.
 //
@@ -227,6 +287,9 @@ const PUBLISH_HARD_DENY: RegExp[] = [
   // Tag pushes — this is what fires release.yml.
   /\bgit\s+push\s+.*--tags\b/,
   /\bgit\s+push\s+\S+\s+(refs\/tags\/|v?\d+\.\d+)/,
+  // …and the forms that never spell `--tags`: `HEAD:refs/tags/v1`,
+  // `origin tag v1`, `--follow-tags` (security audit, 2026-10-31).
+  /\bgit\s+push\b[^\n;|&]*(?:[\s:]refs\/tags\/|\s--follow-tags\b|\stag\s+\S)/,
   // Manually dispatching the release workflow.
   /\bgh\s+workflow\s+run\s+.*release\b/,
 ];
@@ -266,6 +329,9 @@ const BASH_HARD_DENY: RegExp[] = [
   // git destructive history rewrites
   /\bgit\s+push\s+.*--force\b/,
   /\bgit\s+push\s+.*-f\b/,
+  // A `+refspec` is a force push; `--mirror` force-updates and deletes refs.
+  /\bgit\s+push\b[^\n;|&]*\s\+\S/,
+  /\bgit\s+push\b[^\n;|&]*\s--mirror\b/,
   /\bgit\s+reset\s+--hard\b/,
   /\bgit\s+checkout\s+--\s/,
   /\bgit\s+clean\s+-[fdx]/,
@@ -441,9 +507,20 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
           "a real follow-up turn on exit. For a short command, run it foreground.",
       };
     }
-    const destructiveAt = BASH_HARD_DENY.map((r) => cmd.search(r)).find((i) => i >= 0);
-    const destructive =
-      destructiveAt !== undefined ? (cmd.slice(destructiveAt).split("\n")[0] ?? "").trim() : null;
+    // The deny patterns below were written against `git push`; a global
+    // option (`git -C . push --force`, `gh -R o/r release create`) put words
+    // between the tool and its verb. Each git / gh / glab invocation is also
+    // matched in its canonical form, options out of the way (vcs-command.ts).
+    const invocations = vcsInvocations(cmd);
+    const probes = [cmd, ...invocations.map((i) => i.line)];
+    let destructive: string | null = null;
+    for (const probe of probes) {
+      const at = BASH_HARD_DENY.map((r) => probe.search(r)).find((i) => i >= 0);
+      if (at !== undefined) {
+        destructive = (probe.slice(at).split("\n")[0] ?? "").trim();
+        break;
+      }
+    }
     if (destructive !== null) {
       // Name the fragment. A compound command shows truncated in the chat
       // row, so "docker ps -a … " was refused on 2026-09-03 with no visible
@@ -467,7 +544,7 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
     }
     // ADR-0077 — outward-facing publish is not recoverable, and `auto`
     // strategy bypasses `confirm`, so `confirm` is not a gate here.
-    if (PUBLISH_HARD_DENY.some((r) => r.test(cmd))) {
+    if (probes.some((p) => PUBLISH_HARD_DENY.some((r) => r.test(p)))) {
       return {
         class: "deny",
         reason:
@@ -479,7 +556,10 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
           "them run it.",
       };
     }
-    if (BASH_AUTO_ALLOW.some((r) => r.test(cmd))) {
+    // The auto-allow list is anchored at the START: `git status && git push`
+    // matched it whole. Every chained stage must be on it, and every git / gh /
+    // glab anywhere in the command — pipes and `$(…)` included — must be a read.
+    if (autoAllowed(cmd) && invocations.every(readsOnly)) {
       return { class: "auto", reason: "Read-only shell command." };
     }
     return { class: "confirm", reason: "Bash command not in the auto-allow list." };
