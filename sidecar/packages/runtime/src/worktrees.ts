@@ -35,6 +35,7 @@ import { type VcsInvocation, vcsInvocations } from "@marvin/tools/vcs-command";
 import { finishIntegrationJob, getIntegrationJob, noteIntegrationProgress, startIntegrationJob } from "./integration-job";
 import { autoTickSpine } from "./plan-seed";
 import { slugifyWorkDir } from "./projects";
+import { listSessionMetas } from "./session-meta";
 
 /**
  * Lifecycle of one worktree. Everything except `running` is DERIVED from git
@@ -491,6 +492,49 @@ export function reopenSessionWorktree(workDir: string, sessionId: string): Workt
 /** ADR-0107 — the session tree bound to `sessionId`, if any. */
 export function findSessionWorktree(workDir: string, sessionId: string): WorktreeRecord | null {
   return listWorktrees(workDir).find((w) => w.kind === "session" && w.sessionId === sessionId) ?? null;
+}
+
+/**
+ * Re-bind a session to the tree its meta says it runs in, when the registry
+ * lost the binding: an UNBOUND record on the same branch or checkout (what
+ * `adoptOrphans` makes of a lost record) gets the session back; with no record
+ * at all, one is written from the meta if the branch still exists. A record
+ * bound to another session is never taken, and only a tab branch under this
+ * project's worktrees directory is accepted. Null when nothing can be bound.
+ */
+export function recoverSessionWorktree(
+  workDir: string,
+  sessionId: string,
+  tree: { slug: string; path: string; branch: string; base: string; baseRef?: string | undefined },
+): WorktreeRecord | null {
+  if (!tree.branch.startsWith(SESSION_BRANCH_PREFIX)) return null;
+  const root = canonical(worktreesDir(workDir));
+  if (!isInsideWorktree(canonical(tree.path), root) || canonical(tree.path) === root) return null;
+  const all = listWorktrees(workDir);
+  const idx = all.findIndex((w) => w.branch === tree.branch || canonical(w.path) === canonical(tree.path));
+  if (idx >= 0) {
+    const rec = all[idx] as WorktreeRecord;
+    if (rec.sessionId && rec.sessionId !== sessionId) return null;
+    if (rec.kind !== "session") return null; // absent kind is an implementer's
+    all[idx] = { ...rec, kind: "session", sessionId };
+    saveWorktrees(workDir, all);
+    return all[idx] as WorktreeRecord;
+  }
+  if (!gitOk(workDir, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`])) return null;
+  const record: WorktreeRecord = {
+    slug: tree.slug,
+    path: tree.path,
+    branch: tree.branch,
+    base: tree.base,
+    ...(tree.baseRef ? { baseRef: tree.baseRef } : {}),
+    createdAt: new Date().toISOString(),
+    task: "(recovered from the session's meta)",
+    kind: "session",
+    sessionId,
+    state: "session",
+  };
+  saveWorktrees(workDir, [...all, record]);
+  return record;
 }
 
 /**
@@ -986,23 +1030,55 @@ function* reconcileSteps(workDir: string, now: number): GitSteps<ReconciledWorkt
   const reconciled: ReconciledWorktree[] = [];
   for (const w of all) reconciled.push(yield* reconcileOne(workDir, w, checkouts, now));
 
-  const next: WorktreeRecord[] = reconciled.map((w) => ({
-    slug: w.slug,
-    path: w.path,
-    branch: w.branch,
-    base: w.base,
-    ...(w.baseRef ? { baseRef: w.baseRef } : {}),
-    createdAt: w.createdAt,
-    task: w.task,
-    ...(w.kind ? { kind: w.kind } : {}),
-    ...(w.sessionId ? { sessionId: w.sessionId } : {}),
-    ...(w.taskId ? { taskId: w.taskId } : {}),
-    ...(w.finishedAt ? { finishedAt: w.finishedAt } : {}),
-    state: w.state,
-    ...(w.mergedInto ? { mergedInto: w.mergedInto } : {}),
-  }));
-  if (JSON.stringify(next) !== JSON.stringify(stored)) saveWorktrees(workDir, next);
+  // Re-read and merge: the async path yielded to the event loop for every git
+  // call above, and writing a registry rebuilt from `stored` overwrote whatever
+  // landed meanwhile. A tab created in that window lost its record, the next
+  // reconcile adopted its branch with no `sessionId`, and its close merged
+  // nothing (2026-10-31). Every other writer is synchronous, so this re-read
+  // and write cannot interleave with one.
+  const next = mergeDerived(listWorktrees(workDir), stored, reconciled);
+  if (JSON.stringify(next) !== JSON.stringify(listWorktrees(workDir))) saveWorktrees(workDir, next);
   return reconciled;
+}
+
+/**
+ * Apply a reconcile's findings to the registry as it is NOW. The derivation
+ * touches only records unchanged since it read them (`stored`): a record
+ * written since is kept exactly as written, one removed since stays removed,
+ * and an adoption is skipped once a record claims its slug, branch or path.
+ * Fields the reconcile does not derive (`sessionId`, `named`, …) are kept.
+ */
+function mergeDerived(current: readonly WorktreeRecord[], stored: readonly WorktreeRecord[], reconciled: readonly ReconciledWorktree[]): WorktreeRecord[] {
+  const seen = new Map(stored.map((w) => [w.slug, JSON.stringify(w)]));
+  const derived = new Map(reconciled.map((w) => [w.slug, w]));
+  const next: WorktreeRecord[] = [];
+  for (const r of current) {
+    if (seen.get(r.slug) !== JSON.stringify(r)) {
+      next.push(r);
+      continue;
+    }
+    const d = derived.get(r.slug);
+    if (!d) continue; // its branch is gone
+    const { mergedInto: _m, ...rest } = r;
+    next.push({ ...rest, branch: d.branch, state: d.state, ...(d.mergedInto ? { mergedInto: d.mergedInto } : {}) });
+  }
+  for (const d of reconciled) {
+    if (seen.has(d.slug)) continue;
+    if (next.some((r) => r.slug === d.slug || r.branch === d.branch || canonical(r.path) === canonical(d.path))) continue;
+    next.push({
+      slug: d.slug,
+      path: d.path,
+      branch: d.branch,
+      base: d.base,
+      createdAt: d.createdAt,
+      task: d.task,
+      ...(d.kind ? { kind: d.kind } : {}),
+      ...(d.finishedAt ? { finishedAt: d.finishedAt } : {}),
+      state: d.state,
+      ...(d.mergedInto ? { mergedInto: d.mergedInto } : {}),
+    });
+  }
+  return next;
 }
 
 /** Bind a dispatched implementer's `task_id` to the worktree named in its prompt. */
@@ -1083,7 +1159,19 @@ function sweepReconciled(
   opts: { isSessionBusy?: (sessionId: string) => boolean },
 ): SweepOutcome[] {
   const out: SweepOutcome[] = [];
-  for (const w of reconciled) {
+  let openTrees: Set<string> | undefined;
+  for (const raw of reconciled) {
+    // A `session` tree no tab is bound to (a lost binding, adopted by ref name)
+    // can be closed by no tab and dropped by no one: `drop` keeps the branch
+    // and the next read adopts it again. Reclaim it once it is PROVEN merged —
+    // never merely empty — and no open session's meta claims its checkout.
+    const unboundMerged =
+      raw.state === "session" &&
+      raw.kind === "session" &&
+      !raw.sessionId &&
+      !!raw.mergedInto &&
+      !(openTrees ??= openSessionTreePaths(workDir)).has(canonical(raw.path));
+    const w: ReconciledWorktree = unboundMerged ? { ...raw, state: "merged" } : raw;
     if (w.state === "running" || w.state === "session" || w.state === "ready") continue;
     // ADR-0111 — a closed tab can still have a turn in its tree (a Sync turn
     // dispatched through the resume path); never pull the floor from under it.
@@ -1127,6 +1215,15 @@ function sweepReconciled(
   }
   out.push(...sweepLeftoverDirs(workDir, reconciled));
   return out;
+}
+
+/** Canonical checkouts of this project's sessions that are not closed. */
+function openSessionTreePaths(workDir: string): Set<string> {
+  return new Set(
+    listSessionMetas(slugifyWorkDir(workDir))
+      .filter((m) => !m.closedAt && m.tree.mode === "worktree")
+      .map((m) => canonical((m.tree as { path: string }).path)),
+  );
 }
 
 /**

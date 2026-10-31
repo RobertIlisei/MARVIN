@@ -30,6 +30,7 @@ import {
   findSessionWorktree,
   markSessionWorktreeClosed,
   mergeWorktree,
+  recoverSessionWorktree,
   reopenSessionWorktree,
   sweepWorktreesAsync,
   symlinkExcludePattern,
@@ -60,10 +61,23 @@ export async function closeSession(args: { projectId: string; workDir: string; s
     return { status: 409, body: { error: "a turn is running in this tab — stop it first", code: "turn-live" } };
   }
   const meta = readSessionMeta(projectId, sessionId);
-  const rec = findSessionWorktree(workDir, sessionId);
+  // A tab whose meta says it runs in a worktree but whose registry binding was
+  // lost: re-bind from the meta rather than read "no record" as "no worktree"
+  // — that answered a merge with "closed" and merged nothing (2026-10-31).
+  const rec = findSessionWorktree(workDir, sessionId) ?? (meta?.tree.mode === "worktree" ? recoverSessionWorktree(workDir, sessionId, meta.tree) : null);
   const closedAt = new Date().toISOString();
 
   if (!rec) {
+    if (meta?.tree.mode === "worktree" && action !== "keep") {
+      return {
+        status: 409,
+        body: {
+          error: `this tab's worktree (${meta.tree.branch}) has no registry record and could not be recovered — nothing was ${action === "merge" ? "merged" : "discarded"}`,
+          code: "worktree-lost",
+          branch: meta.tree.branch,
+        },
+      };
+    }
     if (meta) updateSessionMeta(projectId, sessionId, { closedAt });
     endFollowsOf(projectId, sessionId);
     return { status: 200, body: { ok: true, worktree: null, message: "closed" } };
