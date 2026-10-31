@@ -23,6 +23,9 @@ import SwiftUI
     var baseColor: Color = .primary
     /// Project root, so `path:line` references can be resolved and opened.
     var workDir: String?
+    /// ADR-0128 §3 — no actionable element: no link of any kind, a hidden URL
+    /// shown as text (the Supervisor tab's replies). Off: the chat is unchanged.
+    var inert = false
 
     private var blocks: [MarkdownBlock] { ChatMarkdown.parse(text) }
 
@@ -273,10 +276,10 @@ import SwiftUI
         // link-less attributed string forever — so a file MARVIN created this
         // turn would never become clickable, which is the bug the refresh
         // exists to fix.
-        let key = "\(workDir ?? "")\u{0}\(font.fontName)|\(font.pointSize)\u{0}\(color.hash)"
+        let key = "\(inert)\u{0}\(workDir ?? "")\u{0}\(font.fontName)|\(font.pointSize)\u{0}\(color.hash)"
             + "\u{0}\(ProjectFileIndex.shared.generation)\u{0}\(s)"
         if let hit = Self.inlineCache[key] { return hit }
-        let built = MarkdownInline.build(s, font: font, color: color, workDir: workDir)
+        let built = MarkdownInline.build(s, font: font, color: color, workDir: workDir, links: !inert)
         if Self.inlineCache.count >= Self.inlineCacheCap {
             Self.inlineCache.removeAll(keepingCapacity: true)
         }

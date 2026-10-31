@@ -44,9 +44,13 @@ public struct SupervisorChatMessage: Decodable, Equatable, Identifiable, Sendabl
     public let items: [String]?
     /// [7.3] — the links under it.
     public let refs: [Ref]?
+    /// ADR-0129 — a user message's images.
+    public let attachments: [SupervisorChatAttachment]?
 
-    public init(id: String, at: String, from: String, text: String, kind: String? = nil, wakeId: String? = nil, origin: Origin? = nil, items: [String]? = nil, refs: [Ref]? = nil) {
+    public init(id: String, at: String, from: String, text: String, kind: String? = nil, wakeId: String? = nil, origin: Origin? = nil, items: [String]? = nil, refs: [Ref]? = nil,
+                attachments: [SupervisorChatAttachment]? = nil) {
         self.id = id; self.at = at; self.from = from; self.text = text; self.kind = kind; self.wakeId = wakeId; self.origin = origin; self.items = items; self.refs = refs
+        self.attachments = attachments
     }
 
     public var isReply: Bool { from == "supervisor" }
@@ -249,19 +253,4 @@ public enum SupervisorChat {
         }
     }
 
-    /// Brief §12.2 — a reply is Markdown with no actionable element (ADR-0128 §3):
-    /// every link run is removed and the URL stays visible as inert text.
-    public static func neutralisedReply(_ markdown: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        var a = (try? AttributedString(markdown: markdown, options: options)) ?? AttributedString(markdown)
-        var linked: [(Range<AttributedString.Index>, URL)] = []
-        for run in a.runs { if let url = run.link { linked.append((run.range, url)) } }
-        // Back to front, so earlier ranges stay valid as text is inserted after them.
-        for (range, url) in linked.reversed() {
-            a[range].link = nil
-            let shown = String(a[range].characters)
-            if shown != url.absoluteString { a.characters.insert(contentsOf: " (\(url.absoluteString))", at: range.upperBound) }
-        }
-        return a
-    }
 }

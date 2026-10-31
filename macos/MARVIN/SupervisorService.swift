@@ -161,8 +161,15 @@ final class SupervisorService {
         catch { throw SupervisorServiceError.transport("unreadable conversation") }
     }
 
-    func sendMessage(projectId: String, text: String) async throws {
-        _ = try await call("api/supervisor/message", method: "POST", body: ["projectId": projectId, "text": text])
+    /// ADR-0129 — `images` reach the model as image content; `imageText` is their on-device recognised
+    /// text, which the route scans for secrets and drops.
+    func sendMessage(projectId: String, text: String, images: [SupervisorImageUpload.Prepared] = []) async throws {
+        var body: [String: Any] = ["projectId": projectId, "text": text]
+        if !images.isEmpty {
+            body["images"] = images.map { ["mediaType": $0.mediaType, "data": $0.base64] }
+            body["imageText"] = images.map(\.recognisedText)
+        }
+        _ = try await call("api/supervisor/message", method: "POST", body: body)
     }
 
     // [7.3] — what the supervisor follows for the user, and the user's Stop following.
@@ -248,6 +255,8 @@ final class SupervisorModel {
     var chatSending = false
     /// Brief §12.6 — the message being sent, drawn as its bubble until the route answers.
     var chatPending: String?
+    /// ADR-0129 — the images of the message in flight, drawn in its bubble before the route answers.
+    var chatPendingImages: [String] = []
     /// The server's reason for a refused send; the text stays in the composer.
     var chatError: String?
     /// The pinned tab is selected in place of the chat body.
@@ -334,13 +343,29 @@ final class SupervisorModel {
     }
 
     /// True when the server took it; false keeps the text in the composer with `chatError`.
-    func sendChat(_ raw: String) async -> Bool {
-        guard let pid = projectId, let text = SupervisorChat.sendable(raw), !chatSending else { return false }
+    /// ADR-0129 — `imagePaths` are the composer's image chips; they are scaled, encoded and sent as image content.
+    func sendChat(_ raw: String, imagePaths: [String] = []) async -> Bool {
+        guard let pid = projectId, let text = SupervisorComposer.sendable(raw, images: imagePaths.count), !chatSending else { return false }
         chatSending = true
         chatPending = text
-        defer { chatSending = false; chatPending = nil }
+        chatPendingImages = imagePaths
+        defer { chatSending = false; chatPending = nil; chatPendingImages = [] }
         do {
-            try await SupervisorService.shared.sendMessage(projectId: pid, text: text)
+            var images: [SupervisorImageUpload.Prepared] = []
+            if !imagePaths.isEmpty {
+                switch await SupervisorImageUpload.prepare(paths: imagePaths) {
+                case .success(let p): images = p
+                case .failure(.unreadable(let name)):
+                    chatError = "\(name) could not be read as an image — it was not sent."
+                    VoiceOver.announce(chatError ?? "")
+                    return false
+                case .failure(.tooLarge(let name)):
+                    chatError = "\(name) is too large to send, even compressed."
+                    VoiceOver.announce(chatError ?? "")
+                    return false
+                }
+            }
+            try await SupervisorService.shared.sendMessage(projectId: pid, text: text, images: images)
             chatError = nil
             await refreshChat()
             return true

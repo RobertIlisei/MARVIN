@@ -362,6 +362,16 @@ enum SurfaceSnapshot {
             Surface("sup-chat-send-edit-sheet", "Supervisor tab [7.2] — a send card's Edit… sheet (text only; no default action)", .fixture, widths: [460]) {
                 AnyView(SupervisorSendEditSheet(model: SurfaceSupervisorFixtures.model(nil), item: SurfaceSupervisorFixtures.sendItem, onClose: {}))
             },
+            // ADR-0129 — an image chip in the composer, and a Markdown reply under a message that carried an image.
+            Surface("sup-chat-composer-image", "Supervisor tab ADR-0129 — the composer with a pasted image chip and a file chip", .fixture, widths: [260, 420], height: 640) {
+                AnyView(SupervisorChatView(model: SurfaceSupervisorFixtures.imageChatModel(reply: nil),
+                                           draft: "Why does the retry tab's test fail like this?",
+                                           attachments: [ChatAttachment(kind: .image(absPath: SurfaceSupervisorFixtures.sampleImagePath)),
+                                                         ChatAttachment(kind: .file(absPath: "/tmp/project/src/http/retry.ts"))]))
+            },
+            Surface("sup-chat-reply-markdown", "Supervisor tab ADR-0129 — a sent image in the bubble; the reply as inert Markdown (list, code, a link shown as text)", .fixture, widths: [260, 420], height: 640) {
+                AnyView(SupervisorChatView(model: SurfaceSupervisorFixtures.imageChatModel(reply: SurfaceSupervisorFixtures.markdownReply)))
+            },
         ] + SurfaceSupervisorFixtures.chatStates.map { st in
             // ADR-0128 [7.2] — the cards in the Supervisor tab, at the chat column widths the brief names.
             Surface(st.id, st.title, .fixture, widths: [260, 420], height: 640) {
@@ -369,7 +379,43 @@ enum SurfaceSnapshot {
             }
         }
 
-        return chat + topBar + statusBar + cost + panes + editor + backlog + settings + live + supervisor
+        // 2026-10-31 — the Supervisor's rail entry, and the plan banner while a
+        // background job will resume the tab.
+        let railAndBanner: [Surface] = [
+            Surface("rail-supervisor-off", "Activity rail — supervisor off: no Supervisor icon", .fixture,
+                    widths: paneWidths, height: 420) {
+                AnyView(LeftPane(supervisor: SurfaceSupervisorFixtures.model(nil)))
+            },
+            Surface("rail-supervisor-on", "Activity rail — supervisor in shadow, nothing open: binoculars, no badge", .fixture,
+                    widths: paneWidths, height: 420) {
+                AnyView(LeftPane(supervisor: SurfaceSupervisorFixtures.model(SurfaceSupervisorFixtures.status())))
+            },
+            Surface("rail-supervisor-badge", "Activity rail — two open cards, conversation shown: badge 2, selected without an accent bar", .fixture,
+                    widths: paneWidths, height: 420) {
+                AnyView(LeftPane(supervisor: SurfaceSupervisorFixtures.model(
+                    SurfaceSupervisorFixtures.status(open: 2),
+                    items: [SurfaceSupervisorFixtures.pushItem, SurfaceSupervisorFixtures.questionItem]) { $0.chatSelected = true }))
+            },
+            Surface("plan-banner-waiting", "Plan banner — a background job will resume the tab: named, elapsed, no Continue", .fixture,
+                    widths: paneWidths) {
+                AnyView(PlanPauseBannerView(
+                    state: PlanPauseBanner.make(
+                        jobs: [BackgroundJobWait(id: "j1", command: "pnpm build", reason: "production build",
+                                                 startedAt: "2026-10-31T11:57:30.000Z")],
+                        now: ISO8601DateFormatter().date(from: "2026-10-31T12:00:00Z")!),
+                    done: 0, total: 4, next: "Run the integration suite against the build",
+                    reviewDetail: nil, continueDisabled: false, onContinue: {}))
+            },
+            Surface("plan-banner-paused", "Plan banner — paused, nothing will resume it: Continue", .fixture,
+                    widths: paneWidths) {
+                AnyView(PlanPauseBannerView(
+                    state: .paused, done: 1, total: 4, next: "Run the integration suite against the build",
+                    reviewDetail: "2 files changed so far — inspect via Review below, or just continue.",
+                    continueDisabled: false, onContinue: {}))
+            },
+        ]
+
+        return chat + topBar + statusBar + cost + panes + editor + backlog + settings + live + supervisor + railAndBanner
     }
 
     // MARK: - Per-surface preparation

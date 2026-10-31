@@ -33,9 +33,10 @@ import { contextWindowFor, ensureProviderModelId } from "./models";
 import { resolveRoleModel } from "./role-models";
 import { appendLedgerEntry, readLedger, supervisorRoot } from "./supervisor-ledger";
 import { createSupervisorMcpServer, SUPERVISE_SERVER_NAME, type VerbContext } from "./supervisor-mcp";
-import { listMessages } from "./supervisor-messages";
+import { getUserMessage, listMessages, MAX_IMAGES_PER_WAKE, readAttachment } from "./supervisor-messages";
 import { renderWakePacket, SUPERVISOR_SYSTEM_PROMPT, type WakeItem } from "./supervisor-prompt";
 import { getSupervisorState, pauseSupervisorForFault, updateSupervisorRuntime } from "./supervisor-state";
+import { type TurnContentBlock, TurnInputChannel } from "./turn-input";
 
 /** Consecutive provenance refusals in one wake before the supervisor pauses itself and escalates. */
 export const PROVENANCE_REFUSALS_BEFORE_PAUSE = 3;
@@ -278,6 +279,34 @@ export interface WakeResult {
 
 const dayOf = (iso: string | null) => (iso ? iso.slice(0, 10) : null);
 
+/**
+ * ADR-0129 — the images of this wake's own messages, oldest first, up to the
+ * per-wake cap. Only the wake's messages: a rotated session's history is text.
+ */
+export function collectWakeImages(projectId: string, items: readonly WakeItem[]): { blocks: TurnContentBlock[]; notes: Record<string, { attached: number; omitted: number }>; bytes: number } {
+  const blocks: TurnContentBlock[] = [];
+  const notes: Record<string, { attached: number; omitted: number }> = {};
+  let bytes = 0;
+  for (const it of items) {
+    if (it.trigger !== "message" || !it.message) continue;
+    const atts = getUserMessage(projectId, it.message.id)?.attachments ?? [];
+    if (!atts.length) continue;
+    const note = { attached: 0, omitted: 0 };
+    for (const a of atts) {
+      const data = blocks.length < MAX_IMAGES_PER_WAKE ? readAttachment(projectId, a) : null;
+      if (!data) {
+        note.omitted += 1;
+        continue;
+      }
+      blocks.push({ type: "image", source: { type: "base64", media_type: a.mediaType, data: data.toString("base64") } });
+      bytes += data.length;
+      note.attached += 1;
+    }
+    notes[it.message.id] = note;
+  }
+  return { blocks, notes, bytes };
+}
+
 /** One wake: a bounded turn over the packet. Never throws; a failure is ledgered and reported. */
 export async function runSupervisorWake(
   args: { projectId: string; workDir: string; items: WakeItem[]; verbCtx: VerbContext; abortController?: AbortController },
@@ -302,7 +331,9 @@ export async function runSupervisorWake(
       reason: st.lastInputTokens > rotateAt ? `context ${st.lastInputTokens} tokens > ${rotateAt}` : "a new day",
     });
   }
-  appendLedgerEntry(projectId, { kind: "wake", verb: "start", tab: null, wakeId, mode: st.mode, reason: `${args.items.length} item(s)` });
+  const images = collectWakeImages(projectId, args.items);
+  const imageSummary = images.blocks.length ? `, ${images.blocks.length} image${images.blocks.length === 1 ? "" : "s"} (${Math.round(images.bytes / 1024)} KB)` : "";
+  appendLedgerEntry(projectId, { kind: "wake", verb: "start", tab: null, wakeId, mode: st.mode, reason: `${args.items.length} item(s)${imageSummary}` });
 
   // A conversation wake's spend is counted apart from watching (ADR-0128 §7) — one cap still stops both.
   const conversation = args.items.some((i) => i.trigger === "message");
@@ -314,7 +345,11 @@ export async function runSupervisorWake(
     ...(fresh ? { ledgerTail: readLedger(projectId, { limit: 50 }) } : {}),
     // Correctness never rests on the session's memory: a new session re-reads the conversation.
     ...(fresh && conversation ? { conversation: listMessages(projectId, { limit: ROTATED_CONVERSATION_MESSAGES }) } : {}),
+    ...(Object.keys(images.notes).length ? { imageNotes: images.notes } : {}),
   });
+  // Images need the streaming form: one user message, the packet then the images. The channel closes on the result.
+  const channel = images.blocks.length ? new TurnInputChannel() : null;
+  const sdkPrompt = channel ? channel.stream([{ type: "text", text: prompt }, ...images.blocks]) : prompt;
 
   let sessionId: string | undefined;
   let costUsd = 0;
@@ -349,17 +384,19 @@ export async function runSupervisorWake(
     // The context the session ends at is the LAST model call's input. The result's usage sums every
     // call of the wake (measured 2026-10-31: 97K reported for a ~33K context), which would rotate every wake.
     let lastCallContext = 0;
-    for await (const ev of deps.query({ prompt, options })) {
+    for await (const ev of deps.query({ prompt: sdkPrompt, options })) {
       const e = ev as { type?: string; subtype?: string; session_id?: unknown; total_cost_usd?: unknown; usage?: Record<string, unknown>; message?: { usage?: Record<string, unknown> } };
       if (typeof e.session_id === "string") sessionId = e.session_id;
       if (e.type === "assistant" && e.message?.usage) lastCallContext = contextOf(e.message.usage) || lastCallContext;
       if (e.type === "result") {
+        channel?.close();
         if (typeof e.total_cost_usd === "number") costUsd = e.total_cost_usd;
         inputTokens = lastCallContext || contextOf(e.usage ?? {});
         if (e.subtype && e.subtype !== "success") throw new Error(`supervisor turn ended: ${e.subtype}`);
       }
     }
   } catch (err) {
+    channel?.close();
     const error = (err as Error).message || String(err);
     updateSupervisorRuntime(projectId, { addSpendUsd: costUsd, spendKind: conversation ? "conversation" : "watching" });
     appendLedgerEntry(projectId, { kind: "wake", verb: "end", tab: null, wakeId, mode: st.mode, reason: `failed: ${error}`, costUsd });

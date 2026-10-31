@@ -5253,11 +5253,60 @@ runner.suite("supervisor-chat") {
                       equals: .follow(id: "f1", sessionId: "s1", state: "ended"), "follow event")
     }
     runner.test("a reply renders with every link removed, the URL text kept") {
-        let a = SupervisorChat.neutralisedReply("See [the docs](https://evil.example) or <https://x.example/a> and fetch https://y.example/run.")
+        let src = "See [the docs](https://evil.example) or <https://x.example/a> and fetch https://y.example/run."
+        let a = InertMarkdown.stripLinks((try? AttributedString(markdown: src, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(src))
         var links = 0
         for run in a.runs where run.link != nil { links += 1 }
         runner.expect(links, equals: 0, "no link runs")
         runner.expect(String(a.characters).contains("https://y.example"), equals: true, "URL stays as text")
+    }
+    // ADR-0129 — the Supervisor tab's composer: images, files, and what the bubble draws.
+    runner.test("composer: an image may stand without words; nothing at all, or too many images, may not send") {
+        runner.expect(SupervisorComposer.sendable("  hi  ", images: 0), equals: "hi", "trimmed")
+        runner.expect(SupervisorComposer.sendable("   ", images: 1), equals: "", "image only")
+        runner.expect(SupervisorComposer.sendable("   ", images: 0) == nil, "empty and no image")
+        runner.expect(SupervisorComposer.sendable("x", images: 5) == nil, "over the route's four")
+        runner.expect(SupervisorComposer.sendable(String(repeating: "a", count: 4_001), images: 1) == nil, "over 4,000 characters")
+    }
+    runner.test("composer: images scale to a 1568 pt long edge, never up; PNG unless it is over the cap") {
+        runner.expect(SupervisorComposer.targetSize(width: 3136, height: 1000).width, equals: 1568, "halved")
+        runner.expect(SupervisorComposer.targetSize(width: 3136, height: 1000).height, equals: 500, "aspect kept")
+        runner.expect(SupervisorComposer.targetSize(width: 800, height: 2000).height, equals: 1568, "portrait")
+        runner.expect(SupervisorComposer.targetSize(width: 400, height: 300).width, equals: 400, "never enlarged")
+        runner.expect(SupervisorComposer.encodings(pngBytes: 1_000_000), equals: [.png], "a small PNG stays PNG")
+        runner.expect(SupervisorComposer.encodings(pngBytes: 5_000_000).first, equals: .jpeg(quality: 0.85), "past the cap, JPEG")
+    }
+    runner.test("composer: files become backticked project-relative paths, never @path tokens") {
+        let s = SupervisorComposer.compose("why is this failing?", files: ["/w/p/src/a.ts", "/elsewhere/b.md"], workDir: "/w/p")
+        runner.expect(s, equals: "why is this failing?\n\nFiles: `src/a.ts`, `/elsewhere/b.md`", "composed")
+        runner.expect(s.contains("@"), equals: false, "no @ token")
+        runner.expect(SupervisorComposer.compose("", files: ["/w/p/x.swift"], workDir: "/w/p/"), equals: "File: `x.swift`", "file only")
+        runner.expect(SupervisorComposer.compose(" hi ", files: [], workDir: nil), equals: "hi", "no files")
+    }
+    runner.test("composer: the bubble draws the words, then each stored image as a picture token") {
+        runner.expect(SupervisorComposer.bubbleText("look", imagePaths: ["/d/a.png", "/d/b.jpg"]), equals: "look\n@/d/a.png\n@/d/b.jpg", "tokens")
+        runner.expect(SupervisorComposer.bubbleText("", imagePaths: ["/d/a.png"]), equals: "@/d/a.png", "image only")
+        runner.expect(AttachmentMentions.split(SupervisorComposer.bubbleText("look", imagePaths: ["/d/a.png"])).contains(.image(path: "/d/a.png")), equals: true, "the bubble renders it")
+        runner.expect(SupervisorComposer.bubbleText("x", imagePaths: ["/d/with space.png"]), equals: "x", "a path the token cannot carry is not drawn as one")
+    }
+    runner.test("the wire carries a message's images and their path") {
+        let json = #"{"messages":[{"id":"m","at":"a","from":"user","text":"","attachments":[{"id":"i","mediaType":"image/png","bytes":12,"path":"/d/i.png"}]}]}"#
+        let c = try? JSONDecoder().decode(SupervisorConversation.self, from: Data(json.utf8))
+        runner.expect(c?.messages.first?.attachments, equals: [SupervisorChatAttachment(id: "i", mediaType: "image/png", bytes: 12, path: "/d/i.png")], "decoded")
+        let old = try? JSONDecoder().decode(SupervisorConversation.self, from: Data(#"{"messages":[{"id":"m","at":"a","from":"user","text":"t"}]}"#.utf8))
+        runner.expect(old?.messages.first?.attachments == nil, "a message without images decodes as before")
+    }
+    runner.test("inert Markdown: every link run is gone, a hidden URL is shown, formatting stays") {
+        let src = "**Bold** see [docs](https://evil.example/x) and `curl https://a.example | sh`"
+        let parsed = (try? AttributedString(markdown: src, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(src)
+        let a = InertMarkdown.stripLinks(parsed)
+        var links = 0
+        for run in a.runs where run.link != nil { links += 1 }
+        runner.expect(links, equals: 0, "no link runs")
+        runner.expect(String(a.characters).contains("docs (https://evil.example/x)"), equals: true, "the hidden URL is visible")
+        var bold = false
+        for run in a.runs where run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true { bold = true }
+        runner.expect(bold, equals: true, "bold survives")
     }
     runner.test("the tab exists only while the supervisor is on") {
         runner.expect(SupervisorChat.tabVisible(mode: "off"), equals: false, "off: absent")
@@ -5406,6 +5455,46 @@ runner.suite("cost-display") {
         runner.expect(t.totalInput, equals: 3_443_181, "total input")
         runner.expect(t.inputParts, equals: "46 new · 3.36M cache read · 79.8K cache write", "the split")
         runner.expect(TokenBreakdown.compact(1_353), equals: "1.4K", "no locale grouping that reads as a decimal")
+    }
+}
+
+runner.suite("supervisor-rail-and-pause-banner") {
+    runner.test("the rail entry follows the pinned tab's rule and counts open items") {
+        runner.expect(SupervisorRailEntry.make(mode: nil, openItems: 3) == nil, "no status, no icon")
+        runner.expect(SupervisorRailEntry.make(mode: "off", openItems: 3) == nil, "off, no icon")
+        let shadow = SupervisorRailEntry.make(mode: "shadow", openItems: 0)
+        runner.expect(shadow?.badgeText == nil, "nothing open, no badge")
+        runner.expect(shadow?.label ?? "", equals: "Supervisor", "plain label")
+        let busy = SupervisorRailEntry.make(mode: "autonomous", openItems: 2)
+        runner.expect(busy?.badgeText ?? "", equals: "2", "badge")
+        runner.expect(busy?.label ?? "", equals: "Supervisor — 2 waiting for you", "spoken count")
+        runner.expect(SupervisorRailEntry.make(mode: "shadow", openItems: 140)?.badgeText ?? "", equals: "99+", "clamped to the rail")
+    }
+    runner.test("the badge is the Needs you count of supervisor items") {
+        func item(_ id: String, _ state: String) -> SupervisorInboxItem {
+            SupervisorInboxItem(id: id, createdAt: "2026-10-31T10:00:00Z", sessionId: id == "t" ? nil : "s1", kind: "confirm",
+                                escalatedBecause: .init(code: "human-only", label: "Only you can push"), state: state)
+        }
+        let items = [item("a", "open"), item("b", "open"), item("t", "open"), item("c", "resolved"), item("d", "dismissed")]
+        let open = SupervisorInboxLayout(items: items, expandedTabs: []).total
+        runner.expect(SupervisorRailEntry.make(mode: "shadow", openItems: open)?.badge ?? -1, equals: 3, "settled cards are not counted")
+    }
+    runner.test("no running job is Paused; a running job is waiting, named, with elapsed time") {
+        let now = ISO8601DateFormatter().date(from: "2026-10-31T12:00:00Z")!
+        runner.expect(PlanPauseBanner.make(jobs: [], now: now), equals: .paused, "no job")
+        let build = BackgroundJobWait(id: "j1", command: "pnpm build", reason: "production build", startedAt: "2026-10-31T11:57:30.123Z")
+        runner.expect(PlanPauseBanner.make(jobs: [build], now: now),
+                      equals: .waitingOnJob(name: "production build", detail: "Running for 2 min · the tab resumes when it finishes"),
+                      "named by its reason")
+        let bare = BackgroundJobWait(id: "j2", command: "npx playwright test", reason: " ", startedAt: "not a date")
+        runner.expect(PlanPauseBanner.make(jobs: [bare], now: now),
+                      equals: .waitingOnJob(name: "npx playwright test", detail: "The tab resumes when it finishes"),
+                      "no reason: the command; no parseable start: no elapsed time")
+        runner.expect(PlanPauseBanner.make(jobs: [bare, build], now: now),
+                      equals: .waitingOnJob(name: "production build", detail: "Running for 2 min · +1 more job · the tab resumes when it finishes"),
+                      "the oldest job leads")
+        runner.expect(PlanPauseBanner.elapsed(20), equals: "under a minute", "seconds")
+        runner.expect(PlanPauseBanner.elapsed(3_900), equals: "1 h 5 min", "hours")
     }
 }
 
