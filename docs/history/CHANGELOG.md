@@ -137,6 +137,30 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   comps, critique, polish); 15 states rendered at 960 / 1440 / 1920 pt in light
   and dark; 1,534 Swift assertions.
 
+  *The supervisor's settings, and its first live test.* The first real use of
+  the workspace found two consent-path faults, fixed with failing tests first
+  (`84ef9c2`). *Open tab* waited for the new tab's whole first turn — the
+  chain `perform → openTab → sendAsSupervisor → fireNow → startScheduledTurn →
+  runDetachedTurn` awaited `runAgent` — so the item stayed in flight, a second
+  click was refused and the consent was not ledgered until the turn ended;
+  starting a scheduled turn now returns once the turn is registered, for every
+  `fireNow` caller. And a reply showed a card only if the model listed its id;
+  the server now attaches every open item the wake raised. Settings gained an
+  inline **Model** picker (`d15804f`; saving always worked, but the status was
+  never re-fetched and the row sat last in an eleven-row dialog), a
+  **Personality** — Ultron, MARVIN or Neutral as a style layer only, the rest
+  of the prompt byte-identical across personas, messages into tabs and card
+  recommendations kept plain (`655f37a`) — and an **Effort** that lists only
+  the rungs the model can run and says when it falls back (`b369ef5`,
+  `4d68a07`). The Models dialog now writes only the rows the user changed, so
+  it can no longer undo an inline pick (`540a339`), and a tab — even in
+  `full` — can no longer write the supervisor's model or effort files
+  (`b369ef5`; measured: `Write` classified as confirm, which `full` waives).
+  The new-tab *Edit…* sheet opens at 70 % of the window, resizes and remembers
+  its size, offers every field ADR-0128 §5 allows (title, delegation,
+  strategy, mode, model, effort) with narrowing-only choices, and its button
+  says what it does: "Open with these changes" (`7809377`).
+
   *The supervisor in the activity rail, and a banner that waits* (`2bc5cfa`).
   A binoculars rail item, shown while the supervisor is enabled, brings it to
   the front, with a badge counting its open cards. A tab whose turn ended while

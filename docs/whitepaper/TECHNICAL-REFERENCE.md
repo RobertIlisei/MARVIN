@@ -92,7 +92,9 @@ repository wins.*
 > followed tab's own triggers started, the merge card raised at `ready`;
 > server-resolved `refs`; images in the message wake (ADR-0129); one
 > Supervisor workspace (conversation centre, re-targeted Brain plus a Tabs ·
-> Log · Settings inspector right) opened from the activity rail. **Close** recovers a lost worktree record from the
+> Log · Settings inspector right) opened from the activity rail; its
+> model, effort and personality are user settings a tab cannot write, and a
+> scheduled turn's start no longer waits for the turn to finish. **Close** recovers a lost worktree record from the
 > tab's meta or answers 409 `worktree-lost`, and the async reconcile re-reads
 > before it writes. **Gate**: `vcs-command.ts` strips git / gh / glab global
 > options before the push / CI / force-push checks; unreadable forms are
