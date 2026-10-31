@@ -146,6 +146,9 @@ import SwiftUI
         .sheet(item: Binding(get: { supervisor.newTabEditItem }, set: { supervisor.newTabEditItem = $0 })) { item in
             SupervisorNewTabEditSheet(model: supervisor, item: item, onClose: { supervisor.newTabEditItem = nil })
         }
+        .sheet(item: Binding(get: { supervisor.sendEditItem }, set: { supervisor.sendEditItem = $0 })) { item in
+            SupervisorSendEditSheet(model: supervisor, item: item, onClose: { supervisor.sendEditItem = nil })
+        }
         .sheet(item: Binding(get: { supervisor.raiseCapItem }, set: { supervisor.raiseCapItem = $0 })) { item in
             SupervisorRaiseCapSheet(model: supervisor, item: item, onClose: { supervisor.raiseCapItem = nil })
         }

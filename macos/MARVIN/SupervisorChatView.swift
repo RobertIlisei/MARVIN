@@ -30,6 +30,27 @@ import SwiftUI
                 .padding(.bottom, 8)
         }
         .task(id: model.projectId) { await model.refreshChat() }
+        .sheet(item: Binding(get: { model.chatSheet }, set: { model.chatSheet = $0 })) { sheet in
+            chatSheet(sheet)
+        }
+    }
+
+    /// A card's sheets, opened from here (the Sessions pane holds its own for the same items).
+    @ViewBuilder private func chatSheet(_ sheet: SupervisorCardSheet) -> some View {
+        let close = { model.chatSheet = nil }
+        switch sheet {
+        case .answer(let item):
+            if let req = item.asQuestionConfirm {
+                AskQuestionSheet(request: req, onSubmit: { updated in
+                    let answers = updated["answers"] ?? [:]
+                    close()
+                    Task { await model.act(item, actionId: "answer-edit", edits: ["answers": answers]) }
+                }, onSkip: close)
+            }
+        case .newTabEdit(let item): SupervisorNewTabEditSheet(model: model, item: item, onClose: close)
+        case .sendEdit(let item): SupervisorSendEditSheet(model: model, item: item, onClose: close)
+        case .raiseCap(let item): SupervisorRaiseCapSheet(model: model, item: item, onClose: close)
+        }
     }
 
     // MARK: - The conversation (§12.2)
@@ -70,7 +91,9 @@ import SwiftUI
                 ChatMessageRow(message: ChatMessage(id: "sup-\(m.id)", role: .user,
                                                     blocks: [.text(id: m.id, text: m.text)],
                                                     isStreaming: false, createdAt: Date()))
-                if waiting.contains(m.id) && !working {
+                if let state = SupervisorChat.unanswered(m.id, retry: model.status?.messageRetry) {
+                    unansweredLine(state)
+                } else if waiting.contains(m.id) && !working {
                     Text("Waiting for the next wake")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -82,8 +105,60 @@ import SwiftUI
         }
     }
 
+    /// ADR-0128 §6 — a message the supervisor could not answer is never left silent.
+    @ViewBuilder private func unansweredLine(_ state: SupervisorChat.Unanswered) -> some View {
+        switch state {
+        case .retrying(let attempt):
+            Text("Couldn't answer yet — retrying (attempt \(attempt + 1))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .failed:
+            VStack(alignment: .trailing, spacing: 4) {
+                Label("The supervisor couldn't answer this", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                // Restart re-queues every unanswered message (the strip's own verb).
+                Button("Retry") { Task { await model.wakeNow() } }
+                    .rowChip(.neutral)
+                    .help("Wake the supervisor again for the messages it has not answered")
+            }
+        }
+    }
+
+    /// [7.2] — the cards a reply lists, under it, in the reply's text column. Each is the inbox item itself.
+    @ViewBuilder private func cards(_ m: SupervisorChatMessage) -> some View {
+        let ids = m.items ?? []
+        if !ids.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(ids, id: \.self) { id in
+                    switch SupervisorChat.card(id, items: model.chatItems) {
+                    case .open(let item):
+                        SupervisorEscalationCard(model: model, item: item, enabled: model.tokenError == nil, surface: .chat)
+                    case .settled(_, let line):
+                        Label(line, systemImage: "checkmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .accessibilityLabel("Card settled: \(line)")
+                    case .missing:
+                        EmptyView()
+                    }
+                }
+            }
+            .padding(.leading, 66)
+            .padding(.bottom, 6)
+        }
+    }
+
     /// Like an assistant turn: the 56 pt gutter, never right-aligned, never filled (discovery answer, §12).
     private func replyRow(_ m: SupervisorChatMessage) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            replyText(m)
+            cards(m)
+        }
+    }
+
+    private func replyText(_ m: SupervisorChatMessage) -> some View {
         HStack(alignment: .top, spacing: 10) {
             HStack(spacing: 3) {
                 Image(systemName: "binoculars").font(.system(size: 9))
@@ -114,7 +189,9 @@ import SwiftUI
 
     private var working: Bool {
         guard !(model.status?.run == "paused") else { return false }
-        return model.status?.currentWake != nil || !waiting.isEmpty
+        // A message the retry is backing off on, or gave up on, shows its own line, not a spinner.
+        let retrying = Set(model.status?.messageRetry?.messageIds ?? [])
+        return model.status?.currentWake != nil || !waiting.subtracting(retrying).isEmpty
     }
 
     private var workingRow: some View {

@@ -12,7 +12,8 @@
  *     The user's click on the raw act is the consent: the item's stored act is
  *     performed with the user's authority (`actor: "user"`). `edits` only for
  *     `new-tab` (first message, title, a NARROWER posture), a question's own
- *     answer, or a raised cap.
+ *     answer, a raised cap, or a `send` item's `text` (ADR-0128 §4: never its
+ *     tab or kind; checked again, delivered marked `editedByUser`).
  *
  * Token-gated like every supervisor route (the items name tabs and quote
  * acts); POST is also CSRF-guarded. A tab's model cannot reach this route:

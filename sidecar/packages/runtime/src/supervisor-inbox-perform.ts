@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 import { answerQuestion, resolveConfirm } from "./confirm-answer";
 import { activeModelLookup, applyPostureChange } from "./posture";
 import { closeSession } from "./session-close";
-import { type SessionPosture, type SessionTree, upsertSessionMeta } from "./session-meta";
+import { readSessionMeta, type SessionPosture, type SessionTree, upsertSessionMeta } from "./session-meta";
 import type { InboxPerform } from "./supervisor-inbox-actions";
 import type { LedgerGround } from "./supervisor-ledger";
 import { sendAsSupervisor } from "./supervisor-send";
@@ -89,7 +89,11 @@ export function defaultInboxPerform(projectId: string, workDir: string, token: s
       return r.ok ? { ok: true } : { ok: false, status: r.status, error: r.error };
     },
     send: async (a) => {
-      const r = await sendAsSupervisor({ projectId, marvinSessionId: a.sessionId, text: a.text, kind: a.kind, grounds: a.grounds, ledgerId: a.ledgerId });
+      // The send verb's scope-met refusal, again at the click: only a scope review's item reopens finished scope.
+      if (!a.reopensScope && readSessionMeta(projectId, a.sessionId)?.scopeMetAt) {
+        return { ok: false, status: 409, code: "scope-met", error: "the tab closed its scope since this card was raised — reopening it is a scope review's card, or a message you type in the tab" };
+      }
+      const r = await sendAsSupervisor({ projectId, marvinSessionId: a.sessionId, text: a.text, kind: a.kind, grounds: a.grounds, ledgerId: a.ledgerId, editedByUser: a.editedByUser });
       return r.ok ? { ok: true, message: r.queued ? "queued until the tab's turn ends" : "sent" } : { ok: false, status: 409, code: r.code, error: r.reason };
     },
     cancel: (sessionId) => (cancelLiveTurn(sessionId, "user") ? { ok: true } : { ok: false, status: 409, error: "the tab has no turn running" }),

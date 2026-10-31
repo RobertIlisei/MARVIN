@@ -358,7 +358,15 @@ enum SurfaceSnapshot {
                     widths: [520, 900]) {
                 AnyView(ExternalAnswerNoteFixture())
             },
-        ]
+            Surface("sup-chat-send-edit-sheet", "Supervisor tab [7.2] — a send card's Edit… sheet (text only; no default action)", .fixture, widths: [460]) {
+                AnyView(SupervisorSendEditSheet(model: SurfaceSupervisorFixtures.model(nil), item: SurfaceSupervisorFixtures.sendItem, onClose: {}))
+            },
+        ] + SurfaceSupervisorFixtures.chatStates.map { st in
+            // ADR-0128 [7.2] — the cards in the Supervisor tab, at the chat column widths the brief names.
+            Surface(st.id, st.title, .fixture, widths: [260, 420], height: 640) {
+                AnyView(SupervisorChatView(model: st.model()))
+            }
+        }
 
         return chat + topBar + statusBar + cost + panes + editor + backlog + settings + live + supervisor
     }

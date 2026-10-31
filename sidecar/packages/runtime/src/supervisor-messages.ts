@@ -40,6 +40,8 @@ export interface SupervisorMessage {
   wakeId?: string;
   /** A reply's origin: the user messages its wake carried. */
   origin?: MessageOrigin;
+  /** ADR-0128 §3 — the inbox items this reply's wake raised for its messages, filtered by the server. Rendered as cards under it. */
+  items?: string[];
 }
 
 export function messagesPath(projectId: string): string {
@@ -79,6 +81,7 @@ export function listMessages(projectId: string, opts: { limit?: number } = {}): 
         text: m.text,
         ...(typeof m.wakeId === "string" ? { wakeId: m.wakeId } : {}),
         ...(validOrigin(m.origin) ? { origin: { kind: "message", messageIds: [...m.origin.messageIds] } } : {}),
+        ...(Array.isArray(m.items) && m.items.length && m.items.every((x) => typeof x === "string") ? { items: [...m.items] } : {}),
       });
     } catch {
       /* a torn final line */
@@ -91,13 +94,14 @@ export function addUserMessage(projectId: string, text: string): SupervisorMessa
   return append(projectId, { id: randomUUID(), at: new Date().toISOString(), from: "user", text: text.slice(0, MAX_USER_MESSAGE_CHARS) });
 }
 
-export function addSupervisorReply(projectId: string, text: string, wake?: { wakeId: string; origin: MessageOrigin }): SupervisorMessage {
+export function addSupervisorReply(projectId: string, text: string, wake?: { wakeId: string; origin: MessageOrigin; items?: readonly string[] | undefined }): SupervisorMessage {
   return append(projectId, {
     id: randomUUID(),
     at: new Date().toISOString(),
     from: "supervisor",
     text: text.slice(0, MAX_USER_MESSAGE_CHARS),
     ...(wake ? { wakeId: wake.wakeId, origin: { kind: "message", messageIds: [...wake.origin.messageIds] } } : {}),
+    ...(wake?.items?.length ? { items: [...wake.items] } : {}),
   });
 }
 

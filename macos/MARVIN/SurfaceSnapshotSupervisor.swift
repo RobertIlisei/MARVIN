@@ -261,6 +261,77 @@ import SwiftUI
         ]
     }
 
+    // MARK: - The Supervisor tab's cards (ADR-0128 §3, plan [7.2])
+
+    static var sendItem: SupervisorInboxItem {
+        let text = "Run the full retry test suite before you commit step [3]."
+        return SupervisorInboxItem(
+            id: "inbox-send", createdAt: iso(1), wakeId: "w-50", sessionId: ids[0], tabTitle: "Add retry with backoff to the HTTP client",
+            kind: "scope",
+            escalatedBecause: .init(code: "delegation-observe", label: "The tab is delegated at \"observe\", below this act — the supervisor recommends, the user decides"),
+            rawAct: .init(toolName: "send", input: .object(["marvinSessionId": .string(ids[0]), "message": .string(text), "kind": .string("instruction")]),
+                          digest: "sha256:5d1e", summary: "Send to tab Add retry with backoff: \(text)", outward: false),
+            recommendation: .init(actionId: "perform", text: "You asked for it in the message above."),
+            grounds: [ground("message", "message:m-9", "Tell the retry tab to run the tests first", strong: true)],
+            actions: [.init(id: "perform", label: "Send to the tab", role: "consent", recommended: true),
+                      .init(id: "edit", label: "Edit…", role: "edit"),
+                      .init(id: "dismiss", label: "Dismiss", role: "dismiss")])
+    }
+
+    private static func settled(_ i: SupervisorInboxItem, state: String, by: String) -> SupervisorInboxItem {
+        SupervisorInboxItem(id: i.id, createdAt: i.createdAt, sessionId: i.sessionId, tabTitle: i.tabTitle, kind: i.kind,
+                            escalatedBecause: i.escalatedBecause, rawAct: i.rawAct, state: state, resolvedBy: by)
+    }
+
+    /// One exchange: the user's request, the supervisor's reply listing `item`.
+    static func chatModel(ask: String, reply: String, item: SupervisorInboxItem?, retry: SupervisorStatus.MessageRetry? = nil,
+                          configure: (SupervisorModel) -> Void = { _ in }) -> SupervisorModel {
+        var st = status()
+        if let retry {
+            st = SupervisorStatus(projectId: st.projectId, revision: st.revision, mode: st.mode, autonomy: st.autonomy, run: st.run,
+                                  budget: st.budget, model: st.model, messageRetry: retry)
+        }
+        return model(st, items: item.map { [$0] } ?? []) { m in
+            m.chat = [SupervisorChatMessage(id: "m-9", at: iso(2), from: "user", text: ask)]
+                + (item == nil && retry != nil ? [] : [SupervisorChatMessage(id: "r-9", at: iso(1.5), from: "supervisor", text: reply, wakeId: "w-50",
+                                                                             origin: .init(messageIds: ["m-9"]), items: item.map { [$0.id] })])
+            if let item { m.chatItems = [item.id: item] }
+            configure(m)
+        }
+    }
+
+    @MainActor
+    static var chatStates: [(id: String, title: String, model: () -> SupervisorModel)] {
+        [
+            ("sup-chat-card-one-click", "Supervisor tab §12.2 — a reversible card (local merge, preview visible): one click", {
+                chatModel(ask: "Merge the retry tab into main when you can.", reply: "Merging is yours to click. Here it is, with the merge preview:", item: mergeItem)
+            }),
+            ("sup-chat-card-outward-collapsed", "Supervisor tab §12.2 — an outward card, collapsed: Review act…, no consent chip", {
+                chatModel(ask: "Push the release branch.", reply: "Pushing leaves this Mac, so it's your click — review the act first:", item: pushItem)
+            }),
+            ("sup-chat-card-outward-expanded", "Supervisor tab §12.2 — the outward card expanded: full act, then Allow push", {
+                chatModel(ask: "Push the release branch.", reply: "Pushing leaves this Mac, so it's your click — review the act first:", item: pushItem) {
+                    $0.expandedCards = ["inbox-push"]
+                }
+            }),
+            ("sup-chat-card-observe-send", "Supervisor tab [7.2] — an observe send card: names the level, says the message is the supervisor's", {
+                chatModel(ask: "Tell the retry tab to run the tests before it commits.", reply: "That tab is at observe, so I can only recommend. Here is the message as a card:", item: sendItem)
+            }),
+            ("sup-chat-card-settled", "Supervisor tab §12.2 — a settled card: Done — the server's summary", {
+                chatModel(ask: "Merge the retry tab into main when you can.", reply: "Merging is yours to click. Here it is, with the merge preview:",
+                          item: settled(mergeItem, state: "resolved", by: "user"))
+            }),
+            ("sup-chat-card-settled-elsewhere", "Supervisor tab §12.2 — a card the tab answered first: one line, no chips", {
+                chatModel(ask: "Push the release branch.", reply: "Pushing leaves this Mac, so it's your click — review the act first:",
+                          item: settled(pushItem, state: "resolved", by: "tab"))
+            }),
+            ("sup-chat-couldnt-answer", "Supervisor tab ADR-0128 §6 — a message the supervisor could not answer: Retry", {
+                chatModel(ask: "How far along is the retry tab?", reply: "", item: nil,
+                          retry: .init(state: "failed", messageIds: ["m-9"], attempts: 4))
+            }),
+        ]
+    }
+
     // MARK: - Transcript (§6.8) and the external-answer note (plan M6 required fix)
 
     static var transcript: [ChatMessage] {

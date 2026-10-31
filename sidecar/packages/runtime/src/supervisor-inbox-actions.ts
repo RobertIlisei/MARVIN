@@ -27,7 +27,7 @@ import { MAX_SUPERVISOR_MESSAGE_CHARS } from "./supervisor-send";
 import type { SupervisorActionResult } from "./supervisor-state";
 
 type Failed = { ok: false; status: number; error: string; code?: string | undefined };
-type Done = { ok: true; message?: string; marvinSessionId?: string } | Failed;
+type Done = { ok: true; message?: string; marvinSessionId?: string; editedByUser?: boolean } | Failed;
 
 export interface InboxPerform {
   /** `answerQuestion` with `answeredBy: "user"`. */
@@ -36,8 +36,12 @@ export interface InboxPerform {
   confirm(a: { turnId: string; toolUseId: string; decision: "allow" | "deny" }): { ok: true } | { ok: false; status: number; error: string };
   /** `applyPostureChange` with `actor: "user"`. */
   posture(a: { sessionId: string; patch: PosturePatch }): Promise<Done>;
-  /** `sendAsSupervisor`: the words stay the supervisor's; the user's click sent them. */
-  send(a: { sessionId: string; text: string; kind: "nudge" | "instruction"; grounds: LedgerGround[]; ledgerId: string | null }): Promise<Done>;
+  /**
+   * `sendAsSupervisor`: the words stay the supervisor's; the user's click sent
+   * them (ADR-0128 §4), marked `editedByUser` when the user changed the text.
+   * Refused for a scope-met tab unless the item is a scope review's reopening.
+   */
+  send(a: { sessionId: string; text: string; kind: "nudge" | "instruction"; grounds: LedgerGround[]; ledgerId: string | null; editedByUser: boolean; reopensScope: boolean }): Promise<Done>;
   /** Stop the tab's live turn, as the user. */
   cancel(sessionId: string): Done;
   worktrees(a: { op: "merge" | "merge-all" | "prepare-mr" | "drop"; slugs: string[]; push?: boolean | undefined; openMergeRequest?: boolean | undefined }): Promise<Done>;
@@ -96,8 +100,20 @@ async function perform(projectId: string, item: InboxRecord, action: InboxAction
     }
     case "posture":
       return p.posture({ sessionId: act.sessionId, patch: act.patch });
-    case "send":
-      return p.send({ sessionId: act.sessionId, text: act.text, kind: act.kind, grounds: act.grounds, ledgerId: item.ledgerId });
+    case "send": {
+      // ADR-0128 §4 — the text may change, never the tab or the kind; the edit is checked again here.
+      let text = act.text;
+      if (action.id === "edit") {
+        if (typeof edits.text !== "string" || !edits.text.trim() || edits.text.length > MAX_SUPERVISOR_MESSAGE_CHARS) {
+          return fail(400, `the message needs 1–${MAX_SUPERVISOR_MESSAGE_CHARS} characters`, "text");
+        }
+        text = edits.text.trim();
+      }
+      if (containsSecretShape(text)) return fail(400, "the message carries a secret-shaped string (ADR-0127 §6) — it was not sent", "secret");
+      const editedByUser = text !== act.text;
+      const sent = await p.send({ sessionId: act.sessionId, text, kind: act.kind, grounds: act.grounds, ledgerId: item.ledgerId, editedByUser, reopensScope: act.reopensScope === true });
+      return sent.ok ? { ...sent, editedByUser } : sent;
+    }
     case "cancel":
       return p.cancel(act.sessionId);
     case "worktrees":
@@ -174,7 +190,7 @@ export async function actOnInboxItem(projectId: string, req: InboxActionRequest,
     const done = await perform(projectId, item, action, edits, p);
     if (!done.ok) return done;
     const settled = settleInboxItem(projectId, item.id, { state: "resolved", resolvedBy: "user" }) ?? getInboxItem(projectId, item.id) ?? item;
-    note(projectId, item, action, done.marvinSessionId);
+    note(projectId, item, action, done.marvinSessionId, done.editedByUser === true);
     return { ok: true, item: settled, outcome: { ...(done.message ? { message: done.message } : {}), ...(done.marvinSessionId ? { marvinSessionId: done.marvinSessionId } : {}) } };
   } finally {
     markInboxInFlight(item.id, false);
@@ -182,7 +198,7 @@ export async function actOnInboxItem(projectId: string, req: InboxActionRequest,
 }
 
 /** The user's act, ledgered (`actor: "user"` in the read shape). */
-function note(projectId: string, item: InboxRecord, action: InboxAction, openedSessionId?: string): void {
+function note(projectId: string, item: InboxRecord, action: InboxAction, openedSessionId?: string, editedByUser = false): void {
   try {
     appendLedgerEntry(projectId, {
       kind: "inbox",
@@ -193,6 +209,7 @@ function note(projectId: string, item: InboxRecord, action: InboxAction, openedS
       reasonCode: action.id,
       ...(item.rawAct ? { argsDigest: item.rawAct.digest, argSummary: item.rawAct.summary } : {}),
       inboxItemId: item.id,
+      ...(editedByUser ? { editedByUser: true } : {}),
     });
   } catch {
     /* the act happened; only its line is lost */

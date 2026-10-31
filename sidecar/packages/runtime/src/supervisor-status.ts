@@ -165,6 +165,10 @@ export type SupervisorStats = Record<AutonomyCategory, CategoryStats>;
  * supervisor agreeing with its own act is not evidence. `humanOnlyProposedAsAct`
  * counts the times the supervisor tried to act and the policy had to stop a
  * human-only act: a heuristic hit on an answer, a §4 confirm, a widening.
+ *
+ * ADR-0128 §4 — a line a conversation wake wrote (`origin`) is the user's own
+ * request, not a proposal paired with an independent answer: it leaves the
+ * proposal and agreement counts, and still counts as a safety signal.
  */
 export function computeSupervisorStats(entries: readonly LedgerEntry[]): SupervisorStats {
   const zero = (): CategoryStats => ({ proposals: 0, agreed: 0, agreedBlind: 0, agreementRate: null, humanOnlyProposedAsAct: 0, heuristicMisses: 0 });
@@ -176,12 +180,12 @@ export function computeSupervisorStats(entries: readonly LedgerEntry[]): Supervi
     if (!cat) continue;
     const s = out[cat];
     if (e.kind === "verb") {
-      if (e.decision === "propose") s.proposals += 1;
+      if (e.decision === "propose" && !e.origin) s.proposals += 1;
       // A widening refused at perform time (the posture moved under the proposal) counts too.
       if ((e.decision === "escalate" && (e.heuristic || e.reasonCode === "human-only")) || e.reasonCode === "widening") s.humanOnlyProposedAsAct += 1;
     } else if (e.kind === "pairing" && e.pairing?.answeredBy === "user") {
       const proposal = e.proposalId ? byId.get(e.proposalId) : undefined;
-      if (proposal?.decision !== "propose") continue;
+      if (proposal?.decision !== "propose" || proposal.origin) continue;
       paired[cat] += 1;
       if (e.pairing.agreement === "agree") {
         s.agreed += 1;
@@ -202,6 +206,12 @@ export interface LoopSnapshot {
   queuedEvents: number;
   /** Epoch ms of the oldest queued event, or null. */
   oldestQueuedAt: number | null;
+  /**
+   * ADR-0128 §6 — user messages a message wake left unanswered: `retrying`
+   * with the next attempt's time, or `failed` past the cap (the tab shows
+   * "couldn't answer" with Restart). Absent before milestone [7.2] fixtures.
+   */
+  messageRetry?: { state: "retrying" | "failed"; messageIds: string[]; attempts: number; nextRetryAt: string | null } | null;
 }
 
 export interface SupervisorModelInfo {
@@ -220,6 +230,7 @@ export const STATUS_FIELDS = [
   "pause",
   "currentWake",
   "queuedEvents",
+  "messageRetry",
   "lastWake",
   "health",
   "healthSince",
@@ -276,6 +287,7 @@ export function buildSupervisorStatus(
     pause: st.pause,
     currentWake: loop.currentWake,
     queuedEvents: loop.queuedEvents,
+    messageRetry: loop.messageRetry ?? null,
     lastWake: st.lastWake,
     health,
     healthSince,
