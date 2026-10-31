@@ -70,6 +70,8 @@ private struct LeftPaneWidthKey: PreferenceKey {
     /// "files on launch, switch when you want SCM". Promote to
     /// AppStorage if user feedback says otherwise.
     @Environment(MarvinBridge.self) private var bridge
+    /// Injectable for the snapshot fixtures; the app always uses `.shared`.
+    var supervisor: SupervisorModel = .shared
     @State private var tab: LeftPaneTab = .files
     /// Expanded Outline/Timeline/Tasks sections, reported up by the panel.
     @State private var toolsOpenSections = 0
@@ -365,6 +367,7 @@ private struct LeftPaneWidthKey: PreferenceKey {
             ForEach(LeftPaneTab.allCases) { t in
                 activityBarButton(t)
             }
+            supervisorRailButton
             Spacer(minLength: 0)
         }
         // First icon centred on the pane header row — the rail and the
@@ -379,8 +382,33 @@ private struct LeftPaneWidthKey: PreferenceKey {
         .background(MarvinTheme.background)
     }
 
+    /// The Supervisor conversation, below the panes and set apart by a
+    /// hairline: it does not open a pane, it brings the pinned chat tab to the
+    /// front — a second way there when many tabs push the strip's first stop
+    /// out of sight. Same rule as the tab (`mode != "off"`), so it never
+    /// offers a second *Set up…* (brief §12.1, ADR-0112).
+    @ViewBuilder private var supervisorRailButton: some View {
+        if let entry = SupervisorRailEntry.make(mode: supervisor.status?.mode,
+                                                openItems: supervisor.layout.total) {
+            Rectangle()
+                .fill(MarvinTheme.border)
+                .frame(width: 20, height: 1)
+                .padding(.vertical, 4)
+                .accessibilityHidden(true)
+            // Selected = the conversation is what the chat column shows. No
+            // accent bar: that bar marks the open PANE, and two bars on one
+            // rail would claim two panes are open.
+            ActivityBarButton(systemImage: "binoculars", label: entry.label,
+                              selected: supervisor.chatSelected, showsBar: false,
+                              badge: entry.badgeText) { _ in
+                supervisor.chatSelected = true
+                Task { await supervisor.refreshChat() }
+            }
+        }
+    }
+
     private func activityBarButton(_ t: LeftPaneTab) -> some View {
-        ActivityBarButton(tab: t, selected: tab == t) { view in
+        ActivityBarButton(systemImage: t.systemImage, label: t.label, selected: tab == t) { view in
             tab = t
             // Collapsed sidebar + a rail click means "show me this pane", not
             // "switch the tab hiding behind a zero-width pane" (user,
@@ -404,15 +432,21 @@ private struct LeftPaneWidthKey: PreferenceKey {
 /// (2026-08-29 "no hover tooltips" finding); attaching it to the icon
 /// itself, with an explicit hover fill, matches how VS Code's rail feels.
 @MainActor private struct ActivityBarButton: View {
-    let tab: LeftPaneTab
+    let systemImage: String
+    /// Tooltip and VoiceOver label.
+    let label: String
     let selected: Bool
+    /// The accent bar marks the open pane; an entry that opens no pane has none.
+    var showsBar = true
+    /// A count drawn on the glyph, as the Needs you header draws it.
+    var badge: String? = nil
     /// Receives the AppKit hit view so the click can reach the enclosing
     /// `NSSplitView` and re-open a collapsed sidebar.
     let action: (NSView) -> Void
     @State private var hovered = false
 
     var body: some View {
-        Image(systemName: tab.systemImage)
+        Image(systemName: systemImage)
             .font(.system(size: 15, weight: .medium))
             .foregroundStyle(
                 selected || hovered ? MarvinTheme.textPrimary : MarvinTheme.textMuted
@@ -426,15 +460,31 @@ private struct LeftPaneWidthKey: PreferenceKey {
                     : hovered ? MarvinTheme.rowHover : Color.clear
             )
             .overlay(alignment: .leading) {
-                if selected {
+                if selected && showsBar {
                     Rectangle().fill(Color.accentColor).frame(width: 2)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if let badge {
+                    // The Needs you capsule's colours, on the rail's own fill so
+                    // the glyph behind it does not show through the tint.
+                    Text(badge)
+                        .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 0.5)
+                        .background(Capsule().fill(Color.orange.opacity(0.18)))
+                        .background(Capsule().fill(MarvinTheme.background))
+                        .padding(.top, 3)
+                        .padding(.trailing, 4)
+                        .accessibilityHidden(true)
                 }
             }
             // AppKit-backed hit layer: owns the click, the hover state AND
             // the tooltip. SwiftUI's `.help()` never surfaced on these rail
             // icons in practice (2026-08-29, twice), so the tooltip goes
             // through NSView.toolTip, which AppKit shows unconditionally.
-            .overlay(TooltipHitLayer(tooltip: tab.label, selected: selected, hovered: $hovered, onClick: action))
+            .overlay(TooltipHitLayer(tooltip: label, selected: selected, hovered: $hovered, onClick: action))
             .animation(MarvinTheme.transition, value: hovered)
     }
 }
