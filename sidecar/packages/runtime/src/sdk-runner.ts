@@ -1171,6 +1171,21 @@ export function classifyToolCall(
     };
   }
 
+  // SUPERVISOR MODEL / EFFORT OWNERSHIP (ADR-0127). Raising either widens the
+  // supervisor's posture, so both are the user's click in the Supervisor
+  // settings. They live in app-wide data-dir files that a plain Write is
+  // "confirm" for — which auto and full postures allow — so deny it here,
+  // before the posture is consulted. Reads stay open.
+  if (mutatesProtectedPath(name, input, (p) => /role-(?:models|efforts)\.json/.test(p))) {
+    return {
+      decision: "deny",
+      reason:
+        `${name} targets role-models.json / role-efforts.json — the supervisor's model and ` +
+        `effort are the user's choice, made in the Supervisor settings (ADR-0127). ` +
+        `Never write them directly.`,
+    };
+  }
+
   // GRAPH-EXTRACTION WRITE EXCEPTION (ADR-0058). Building the knowledge graph
   // is read-only *discovery* — the sanctioned fan-out pattern (scouts ADR-0014,
   // dynamic workflows ADR-0030), NOT the forbidden parallel-implementation of

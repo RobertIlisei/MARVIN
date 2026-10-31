@@ -16,6 +16,7 @@
 
 import { type ConfirmRule } from "./confirm-registry";
 import { listModelsCached } from "./models";
+import { type EffortResolution, resolveRoleEffort } from "./role-efforts";
 import { readRoleModels, resolveRoleModel } from "./role-models";
 import { HUMAN_ONLY_CONFIRM_RULES } from "./supervisor-acts";
 import { appendLedgerEntry, type LedgerEntry, type LedgerGround, readLedger } from "./supervisor-ledger";
@@ -220,6 +221,8 @@ export interface SupervisorModelInfo {
   label: string | null;
   /** What the user stored for the role; null = the default. `resolved` alone cannot tell the two apart. */
   choice: string | null;
+  /** The supervisor's effort beside its model (ADR-0127): the stored choice, the rungs this model can run, and whether the choice fell back to Default. */
+  effort: EffortResolution;
 }
 
 /** Every field the brief's §10.1 table names; a route test reads each one. */
@@ -327,12 +330,16 @@ export type SupervisorStatus = ReturnType<typeof buildSupervisorStatus>;
 /** The supervisor role's model as the expanded block shows it. Never throws: an unreachable catalogue reads as unresolved. */
 export async function supervisorModelInfo(): Promise<SupervisorModelInfo> {
   const choice = readRoleModels().supervisor ?? null;
+  let resolved: string | null = null;
+  let label: string | null = null;
   try {
-    const resolved = await resolveRoleModel("supervisor");
-    if (!resolved || resolved === "inherit") return { role: "supervisor", resolved: null, label: null, choice };
-    const known = (await listModelsCached()).models.find((m) => m.id === resolved);
-    return { role: "supervisor", resolved, label: known?.displayName ?? resolved, choice };
+    const r = await resolveRoleModel("supervisor");
+    if (r && r !== "inherit") {
+      resolved = r;
+      label = (await listModelsCached()).models.find((m) => m.id === r)?.displayName ?? r;
+    }
   } catch {
-    return { role: "supervisor", resolved: null, label: null, choice };
+    /* an unreachable catalogue reads as unresolved */
   }
+  return { role: "supervisor", resolved, label, choice, effort: resolveRoleEffort("supervisor", resolved) };
 }
