@@ -418,27 +418,33 @@ private func popoverSectionLabel(_ title: String) -> some View {
         savedRoles = choices
     }
 
-    /// PUT /api/models/roles with the whole map. True when saved.
+    /// PATCH /api/models/roles once per row the user changed — never the whole
+    /// map, which would write back every row this dialog merely loaded (the
+    /// supervisor's inline pick, made after it opened, included). True when all saved.
     private func saveRoles() async -> Bool {
         let url = ServerConfig.baseURL.appendingPathComponent("api/models/roles")
-        var req = URLRequest(url: url)
-        req.httpMethod = "PUT"
-        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONEncoder().encode(["roles": roleChoices])
-        do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-                struct Err: Decodable { let error: String }
-                roleSaveError = (try? JSONDecoder().decode(Err.self, from: data))?.error ?? "server refused"
+        for change in HelperRoleChanges.changes(saved: savedRoles, chosen: roleChoices) {
+            var req = URLRequest(url: url)
+            req.httpMethod = "PATCH"
+            req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let body: [String: Any] = ["role": change.role, "model": change.model.map { $0 as Any } ?? NSNull()]
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            do {
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+                    struct Err: Decodable { let error: String }
+                    roleSaveError = (try? JSONDecoder().decode(Err.self, from: data))?.error ?? "server refused"
+                    return false
+                }
+                // Per row, so a later failure leaves the rows already written marked saved.
+                savedRoles[change.role] = change.model
+            } catch {
+                roleSaveError = "\(error)"
                 return false
             }
-            savedRoles = roleChoices
-            return true
-        } catch {
-            roleSaveError = "\(error)"
-            return false
         }
+        return true
     }
 
     struct HelperRolesWire: Decodable {
