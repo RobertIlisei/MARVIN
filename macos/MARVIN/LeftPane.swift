@@ -382,11 +382,10 @@ private struct LeftPaneWidthKey: PreferenceKey {
         .background(MarvinTheme.background)
     }
 
-    /// The Supervisor conversation, below the panes and set apart by a
-    /// hairline: it does not open a pane, it brings the pinned chat tab to the
-    /// front — a second way there when many tabs push the strip's first stop
-    /// out of sight. Same rule as the tab (`mode != "off"`), so it never
-    /// offers a second *Set up…* (brief §12.1, ADR-0112).
+    /// The Supervisor workspace (brief §13.8), below the panes and set apart
+    /// by a hairline. A workspace toggle, not a pane selector: it opens the
+    /// conversation in the centre and the Brain and inspector on the right,
+    /// and is present in every mode — off opens the set-up form.
     @ViewBuilder private var supervisorRailButton: some View {
         if let entry = SupervisorRailEntry.make(mode: supervisor.status?.mode,
                                                 openItems: supervisor.layout.total) {
@@ -395,14 +394,12 @@ private struct LeftPaneWidthKey: PreferenceKey {
                 .frame(width: 20, height: 1)
                 .padding(.vertical, 4)
                 .accessibilityHidden(true)
-            // Selected = the conversation is what the chat column shows. No
-            // accent bar: that bar marks the open PANE, and two bars on one
-            // rail would claim two panes are open.
+            // Selected = the workspace is open. No accent bar: that bar marks
+            // what fills the sidebar, and two bars would claim two panes.
             ActivityBarButton(systemImage: "binoculars", label: entry.label,
-                              selected: supervisor.chatSelected, showsBar: false,
+                              selected: supervisor.workspaceOpen, showsBar: false,
                               badge: entry.badgeText) { _ in
-                supervisor.chatSelected = true
-                Task { await supervisor.refreshChat() }
+                supervisor.toggleWorkspace()
             }
         }
     }

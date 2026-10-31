@@ -5459,9 +5459,13 @@ runner.suite("cost-display") {
 }
 
 runner.suite("supervisor-rail-and-pause-banner") {
-    runner.test("the rail entry follows the pinned tab's rule and counts open items") {
+    runner.test("the rail entry opens the workspace in every mode and counts open items") {
         runner.expect(SupervisorRailEntry.make(mode: nil, openItems: 3) == nil, "no status, no icon")
-        runner.expect(SupervisorRailEntry.make(mode: "off", openItems: 3) == nil, "off, no icon")
+        // Brief §13.8 — off opens the set-up form, so the button stays; no badge while off.
+        let off = SupervisorRailEntry.make(mode: "off", openItems: 3)
+        runner.expect(off != nil, "off still has the button")
+        runner.expect(off?.badgeText == nil, "off, no badge")
+        runner.expect(off?.label ?? "", equals: "Supervisor — off. Set up", "off says what a click does")
         let shadow = SupervisorRailEntry.make(mode: "shadow", openItems: 0)
         runner.expect(shadow?.badgeText == nil, "nothing open, no badge")
         runner.expect(shadow?.label ?? "", equals: "Supervisor", "plain label")
@@ -5495,6 +5499,87 @@ runner.suite("supervisor-rail-and-pause-banner") {
                       "the oldest job leads")
         runner.expect(PlanPauseBanner.elapsed(20), equals: "under a minute", "seconds")
         runner.expect(PlanPauseBanner.elapsed(3_900), equals: "1 h 5 min", "hours")
+    }
+}
+
+runner.suite("supervisor-workspace") {
+    func strip(_ st: SupervisorStatus?, feed: Bool = true, token: String? = nil) -> SupervisorStrip {
+        SupervisorStrip.make(status: st, feedConnected: feed, tokenError: token, now: supNow, timeZone: supUTC)
+    }
+    runner.test("the inspector defaults to Tabs and never restores to Settings") {
+        runner.expect(SupervisorInspectorSegment.restored(nil), equals: .tabs, "nothing stored")
+        runner.expect(SupervisorInspectorSegment.restored("log"), equals: .log, "log restores")
+        runner.expect(SupervisorInspectorSegment.restored("settings"), equals: .tabs, "settings is never the default")
+        runner.expect(SupervisorInspectorSegment.restored("needs-you"), equals: .tabs, "no Needs you segment exists")
+        runner.expect(SupervisorInspectorSegment.allCases.map(\.title), equals: ["Tabs", "Log", "Settings"], "three segments, no inbox list")
+    }
+    runner.test("the right column is covered only while open and enabled") {
+        runner.expect(SupervisorWorkspace.coversRightColumn(open: true, mode: "shadow"), equals: true, "enabled")
+        runner.expect(SupervisorWorkspace.coversRightColumn(open: true, mode: "off"), equals: false, "off keeps the tab's Brain and chat")
+        runner.expect(SupervisorWorkspace.coversRightColumn(open: false, mode: "autonomous"), equals: false, "closed")
+        runner.expect(SupervisorWorkspace.coversRightColumn(open: true, mode: nil), equals: false, "unknown")
+    }
+    runner.test("the header's mode does not repeat the for-you count") {
+        runner.expect(SupervisorWorkspace.headerMode(strip(supStatus(open: 2))), equals: "Shadow", "count dropped")
+        let auto = supStatus(mode: "autonomous", autonomy: ["questions": "autonomous", "nudges": "autonomous"], open: 3)
+        runner.expect(SupervisorWorkspace.headerMode(strip(auto)), equals: "Autonomous · 2 of 4", "categories kept")
+        let waking = supStatus(run: "waking", currentWake: .init(wakeId: "w", startedAt: "2026-10-30T13:59:00Z", itemCount: 3))
+        runner.expect(SupervisorWorkspace.headerMode(strip(waking)), equals: "Waking · 3 items", "items kept")
+    }
+    runner.test("disabling closes the workspace; starting does not") {
+        runner.expect(SupervisorWorkspace.staysOpen(after: "shadow", "off"), equals: false, "disable closes it")
+        runner.expect(SupervisorWorkspace.staysOpen(after: "off", "shadow"), equals: true, "start in shadow stays")
+        runner.expect(SupervisorWorkspace.staysOpen(after: "shadow", "autonomous"), equals: true, "autonomy stays")
+    }
+    runner.test("the pane line: one short word, dropped when a chip says it") {
+        runner.expect(SupervisorPaneLine.make(strip(nil)) == nil, "off: the off line instead")
+        let shadow = SupervisorPaneLine.make(strip(supStatus()))
+        runner.expect(shadow?.word ?? "", equals: "Shadow", "shadow word")
+        runner.expect(shadow?.showsPause ?? false, equals: true, "pause")
+        runner.expect(shadow?.chip == nil, "no chip")
+        let waking = SupervisorPaneLine.make(strip(supStatus(run: "waking", currentWake: .init(wakeId: "w", startedAt: "2026-10-30T13:59:00Z", itemCount: 3))))
+        runner.expect(waking?.word == nil, "waking: the spinner and Kill say it")
+        runner.expect(waking?.chip, equals: .kill, "Kill during a wake (advisor condition 5)")
+        runner.expect(waking?.showsPause ?? false, equals: true, "pause stays beside Kill")
+        let paused = SupervisorPaneLine.make(strip(supStatus(run: "paused", pause: .init(reason: "user", at: "2026-10-30T13:50:00Z"))))
+        runner.expect(paused?.word == nil, "paused: the glyph and Resume say it")
+        runner.expect(paused?.chip, equals: .resume(enabled: true), "Resume")
+        runner.expect(paused?.showsPause ?? true, equals: false, "no Pause while paused")
+        let cap = SupervisorPaneLine.make(strip(supStatus(run: "paused", pause: .init(reason: "budget", at: nil), spent: 10, cap: 10, level: "reached")))
+        runner.expect(cap?.word ?? "", equals: "At daily cap", "at the cap")
+        runner.expect(cap?.chip == nil, "Raise cap lives on the guardrail row, not the line")
+        let near = SupervisorPaneLine.make(strip(supStatus(spent: 8.4, cap: 10, level: "near")))
+        runner.expect(near?.word == nil, "near the cap: the meter replaces the word")
+        runner.expect(near?.meter?.level ?? "", equals: "near", "orange meter")
+        runner.expect(SupervisorPaneLine.make(strip(supStatus(), feed: false))?.word ?? "", equals: "Reconnecting", "disconnected")
+        runner.expect(SupervisorPaneLine.make(strip(supStatus(), token: "/x/token"))?.showsPause ?? true, equals: false, "no control, no pause")
+        for w in SupervisorPaneLine.words { runner.expect(w.count <= 12, "\(w) fits at 260 pt") }
+        runner.expect((shadow?.sentence ?? "").hasPrefix("Shadow"), "the full sentence is the help and the VoiceOver value")
+    }
+    runner.test("the Brain re-targeted: existing profiles only, captions in words") {
+        let idle = SupervisorBrainFace.make(strip: strip(supStatus()), status: supStatus(), openTabs: 6, following: ["fix-flags"], now: supNow, timeZone: supUTC)
+        runner.expect(idle.profile, equals: .idle, "idle")
+        runner.expect(idle.state, equals: "idle", "state")
+        runner.expect(idle.summary, equals: "watching 4 of 6 · woke 2m ago · following fix-flags", "summary; the long follow title truncates last")
+        let wakingStatus = supStatus(run: "waking", currentWake: .init(wakeId: "w", startedAt: "2026-10-30T13:59:00Z", itemCount: 3))
+        let waking = SupervisorBrainFace.make(strip: strip(wakingStatus), status: wakingStatus, openTabs: 6, following: [], now: supNow, timeZone: supUTC)
+        runner.expect(waking.profile, equals: .thinking, "a wake thinks")
+        runner.expect(waking.state, equals: "waking · 3 items", "items")
+        let pausedStatus = supStatus(run: "paused", pause: .init(reason: "user", at: "2026-10-30T13:50:00Z"), queued: 3)
+        let paused = SupervisorBrainFace.make(strip: strip(pausedStatus), status: pausedStatus, openTabs: 6, following: [], now: supNow, timeZone: supUTC)
+        runner.expect(paused.profile, equals: .idle, "paused is idle, no new profile")
+        runner.expect(paused.still, equals: true, "drawn through the Reduce Motion path")
+        runner.expect(paused.summary, equals: "paused by you 13:50 · 3 events queued", "summary from the strip")
+        let capStatus = supStatus(run: "paused", pause: .init(reason: "budget", at: nil), spent: 10, cap: 10, level: "reached")
+        let cap = SupervisorBrainFace.make(strip: strip(capStatus), status: capStatus, openTabs: 6, following: [], now: supNow, timeZone: supUTC)
+        runner.expect(cap.state, equals: "paused · daily cap", "cap")
+        runner.expect(cap.glyph ?? "", equals: "exclamationmark.triangle.fill", "a glyph, not only colour")
+        let failed = SupervisorBrainFace.make(strip: strip(supStatus(health: "failed")), status: supStatus(health: "failed"), openTabs: 6, following: [], now: supNow, timeZone: supUTC)
+        runner.expect(failed.profile, equals: .error, "failed")
+        let disc = SupervisorBrainFace.make(strip: strip(supStatus(), feed: false), status: supStatus(), openTabs: 6, following: [], now: supNow, timeZone: supUTC)
+        runner.expect(disc.state, equals: "unknown", "numbers hidden while disconnected")
+        runner.expect(disc.summary.contains("$"), equals: false, "no stale money")
+        runner.expect(idle.accessibilityValue.hasPrefix("idle."), "spoken in words")
     }
 }
 

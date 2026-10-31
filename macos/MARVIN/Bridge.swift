@@ -797,7 +797,20 @@ final class MarvinBridge {
     /// clicks a `file.swift:120` reference in MARVIN's output.
     func openFileFromChat(path: String, line: Int?) {
         pendingEditorLine = line
+        // Brief §13.8 — while the Supervisor workspace covers the chat, a
+        // chat-style open came from inside it (a ground, a log link): the file
+        // opens under the workspace instead of dismissing it.
+        // Only while the chat is covered: off, the tab's chat is visible beside
+        // the set-up form, and its links are outside opens (pr-review).
+        let sup = SupervisorModel.shared
+        if SupervisorWorkspace.coversRightColumn(open: sup.workspaceOpen, mode: sup.status?.mode) { sup.innerOpenPath = path }
         setSelectedFile(path)
+    }
+
+    /// Select a left-pane tab without re-opening a collapsed sidebar
+    /// (`revealLeftTab` re-opens it; the Supervisor workspace must not).
+    func selectLeftTabIfVisible(_ tab: String) {
+        requestedLeftTab = tab
     }
 
     /// Ask the viewer to scroll the ALREADY-open file to `line`.

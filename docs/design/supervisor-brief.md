@@ -660,7 +660,7 @@ One column, oldest at the top, the newest pinned to the bottom like the chat.
 
 ## 13. The Supervisor workspace — one place for the supervisor (supersedes §5's strip and log placement, §6.1's expanded block, §6.7's sheet and §12.1)
 
-- **Status:** shaped 2026-10-31 (Impeccable `shape`). **Design only; no Swift.** It was requested by the user through their supervisor session: move the supervisor's configuration out of the Sessions pane, open it from one rail button, use the centre area ("No file open"), and include the Brain. **Layout only. No authority changes:** every verb, policy, delegation level, switch, budget and ledger rule is ADR-0127's and ADR-0128's as they stand.
+- **Status:** shaped 2026-10-31 (Impeccable `shape`), approved, and **built 2026-10-31** (departures 23–29 below; renders `sup-ws-*` at 960 / 1440 / 1920, light and dark; critique 30/40, `.impeccable/critique/2026-10-31T22-20-00Z__macos-marvin-supervisorworkspaceview-swift.md`). It was requested by the user through their supervisor session: move the supervisor's configuration out of the Sessions pane, open it from one rail button, use the centre area ("No file open"), and include the Brain. **Layout only. No authority changes:** every verb, policy, delegation level, switch, budget and ledger rule is ADR-0127's and ADR-0128's as they stand.
 - **Visual authority:** unchanged. "The Quiet Instrument", the one mark (`binoculars` plus "supervisor" in SF Mono, §3), and §6.8's outlined, unfilled supervisor shape. No new colour, radius, material, shadow or component family. The workspace is assembled from parts that already exist:
   - `SupervisorChatView` (§12);
   - `SupervisorItemCard` and the escalation card (§6.2);
@@ -981,3 +981,14 @@ Every file is under `.impeccable/supervisor-workspace/renders/`. Regenerate them
 1. **Opening the workspace selects the Sessions pane** (§13.8). The alternative leaves the sidebar alone, which means the inbox may be off screen while the user is at the supervisor's desk.
 2. **⌃⌥⌘S for *Show Workspace***, pending the builder's collision check.
 3. **An open from inside the workspace stays under it,** with a "Show" notice (§13.8). The alternative is an inline file peek inside the card, which would be a new component.
+
+### 13.17 Departures in the build (2026-10-31)
+
+23. **A follow's *Stop following* stays in the conversation's follow strip.** The Tabs row names the follow in words only. One control, one place: the strip already carried it, and two Stop buttons for one record would invite the question which one is real.
+24. **The workspace hides by opacity, not `keptMounted`.** Once mounted, the centre stays at full size and is hidden with opacity, hit-testing off, `disabled` and `accessibilityHidden`. `keptMounted` zero-frames a slot, and a zero-width transcript was the advisor's ADR-0062 concern. The inspector covers the chat the way the pinned tab's overlay did, with the chat hidden from VoiceOver.
+25. **The composer focuses on open through an opt-in `focusToken` on `ChatTextEditor`.** It is nil for the chat composer, which is unchanged.
+26. **The header drops the strip's " · N waiting"** (`SupervisorWorkspace.headerMode`), because "N for you" beside it said the same thing.
+27. **Delegation in the Tabs list is a native pull-down** (`Menu`, `.button` style) with the level's name. On pane rows it stays the glyph-only menu (§6.5).
+28. **Polish after the critique.** The failed-wake notice keeps only *Open log*, since Retry is the header's. The Brain's summary puts "woke" before "following". The pane line's open state is a selected fill plus the `.isSelected` trait, not a reversed chevron.
+29. **The offscreen harness does not draw Metal.** The orb area is empty in every render, and the caption was judged instead. The orb's profile and still state are pinned by `SupervisorBrainFace` tests, not by pixels.
+30. **The conversation's paused notice drops its own *Resume*.** The conversation now always sits under the workspace header, whose primary control while paused is Resume, so the notice keeps only its words. The Sessions pane line keeps its Resume, as a separate host for when the workspace is closed.

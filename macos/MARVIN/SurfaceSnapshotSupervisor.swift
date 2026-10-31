@@ -252,11 +252,97 @@ import SwiftUI
                 model(status(open: 2), items: [questionItem, mergeItem])
             }),
             ("sup-new-tab", "Supervisor §6.3 new-tab proposal", { model(status(open: 1), items: [newTabItem]) }),
-            ("sup-settings", "Supervisor §6.1 expanded block — autonomy, charter, cap, model", {
-                model(status()) { $0.stripExpanded = true }
+            // §6.1's settings block and §6.6's log moved to the workspace's
+            // inspector (brief §13.6): see `workspaceStates`.
+        ]
+    }
+
+    // MARK: - The Supervisor workspace (brief §13)
+
+    /// A workspace model: open, with a conversation that raised an outward
+    /// card and settled a new-tab proposal, and one open follow.
+    static func workspaceModel(_ st: SupervisorStatus?, items given: [SupervisorInboxItem]? = nil,
+                               conversation: Bool = true, segment: SupervisorInspectorSegment = .tabs,
+                               feed: Bool = true, token: String? = nil,
+                               configure: (SupervisorModel) -> Void = { _ in }) -> SupervisorModel {
+        model(st, items: given ?? [pushItem, newTabItem], feed: feed, token: token) { m in
+            m.workspaceOpen = true
+            m.inspectorSegment = segment
+            m.follows = [followFeed[0]]
+            if conversation {
+                let opened = settled(newTabItem, state: "resolved", by: "user")
+                m.chat = [
+                    SupervisorChatMessage(id: "m-1", at: iso(9), from: "user", text: "What's blocking the release? Push it if the plan is done."),
+                    SupervisorChatMessage(id: "r-1", at: iso(8.5), from: "supervisor",
+                                          text: "Step [4] of *Publish the release branch* is done and its checks passed. Pushing leaves this Mac, so it is your click — review the act first. I'd hold it: the charter keeps releases local until review.",
+                                          wakeId: "w-48", origin: .init(messageIds: ["m-1"]), items: [pushItem.id]),
+                    SupervisorChatMessage(id: "m-2", at: iso(4), from: "user", text: "Open a tab to write the migration notes."),
+                    SupervisorChatMessage(id: "r-2", at: iso(3.5), from: "supervisor",
+                                          text: "Proposed — it opens in a fresh worktree from development, gated, Plan mode.",
+                                          wakeId: "w-49", origin: .init(messageIds: ["m-2"]), items: [opened.id]),
+                ]
+                m.chatItems = [pushItem.id: pushItem, opened.id: opened]
+            }
+            configure(m)
+        }
+    }
+
+    @MainActor
+    static var workspaceStates: [(id: String, title: String, brain: Bool, model: () -> SupervisorModel)] {
+        let waking = SupervisorStatus.Wake(wakeId: "w-50", startedAt: iso(0.2), itemCount: 3)
+        return [
+            ("sup-ws-off", "Workspace §13.9 — off: the set-up form in the centre, the tab's Brain and chat kept on the right", true, {
+                workspaceModel(status(mode: "off"), items: [], conversation: false)
             }),
-            ("sup-log", "Supervisor §6.6 log, opened", {
-                model(status()) { $0.logExpanded = true }
+            ("sup-ws-empty", "Workspace §13.4 — enabled, nothing said yet: the empty conversation; Tabs", true, {
+                workspaceModel(status(), items: [], conversation: false)
+            }),
+            ("sup-ws-shadow", "Workspace §13.10 — shadow, 2 for you: an outward card and a settled card; Tabs with a follow", true, {
+                workspaceModel(status(open: 2))
+            }),
+            ("sup-ws-waking", "Workspace §13.10 — waking: Kill in the header and the pane line; the orb thinks", true, {
+                workspaceModel(status(run: "waking", wake: waking, open: 2)) { $0.chatPending = nil }
+            }),
+            ("sup-ws-autonomous", "Workspace §13.10 — autonomous · 2 of 4; Settings with two categories on", true, {
+                workspaceModel(status(mode: "autonomous", autonomy: ["questions": "autonomous", "nudges": "autonomous"], open: 2),
+                               segment: .settings)
+            }),
+            ("sup-ws-paused", "Workspace §13.10 — paused by you: Resume primary; the orb still; Log", true, {
+                workspaceModel(status(run: "paused", pause: .init(reason: "user", at: iso(4)), queued: 3, open: 2), segment: .log)
+            }),
+            ("sup-ws-killed", "Workspace §13.10 — killed: paused, wake aborted", true, {
+                workspaceModel(status(run: "paused", pause: .init(reason: "kill", at: iso(1), detail: "aborted a wake with 2 items"), open: 2))
+            }),
+            ("sup-ws-over-budget", "Workspace §13.10 — at the daily cap: red meter, Resume disabled, the budget card in the conversation; Settings", true, {
+                workspaceModel(capStatus, items: [capItem, pushItem], segment: .settings) { m in
+                    m.chat.append(SupervisorChatMessage(id: "r-3", at: iso(1), from: "supervisor",
+                                                        text: "I've reached today's cap and paused. Your next message waits until you raise it or it resets.",
+                                                        wakeId: "w-51", origin: .init(messageIds: ["m-2"])))
+                    // The chat view draws the budget guardrail once, at the foot (§11, departure 17).
+                }
+            }),
+            ("sup-ws-near-budget", "Workspace §13.10 — near the cap: orange meter, the pane line's meter replaces its word", true, {
+                workspaceModel(status(open: 2, spent: 8.4, level: "near"))
+            }),
+            ("sup-ws-failed", "Workspace §13.10 — wake failed: the error notice under the header, Retry · Open log; the orb errs", true, {
+                workspaceModel(status(health: "failed", lastWake: .init(wakeId: "w-43", at: iso(1), outcome: "failed",
+                                                                        error: .init(message: "Wake failed: the model returned an overloaded error", detail: "529 Overloaded · retry in 30 s")),
+                                      open: 2))
+            }),
+            ("sup-ws-stale", "Workspace §13.10 — not waking: Restart", true, {
+                workspaceModel(status(health: "stale", queued: 5, lastWake: .init(wakeId: "w-30", at: iso(14), outcome: "ok"), open: 2))
+            }),
+            ("sup-ws-disconnected", "Workspace §13.10 — feed disconnected: numbers hidden, cards disabled, Pause stays", true, {
+                workspaceModel(status(open: 2), feed: false)
+            }),
+            ("sup-ws-token", "Workspace §13.10 — token unavailable: notice under the header, controls disabled", true, {
+                workspaceModel(nil, token: "/Users/demo/.marvin/supervisor/token")
+            }),
+            ("sup-ws-burst", "Workspace §13.10 — 12 for you: the pane's Needs you is the inbox; the header chip goes there", true, {
+                workspaceModel(status(open: 12), items: burst)
+            }),
+            ("sup-ws-brain-hidden", "Workspace §13.5 — Brain pane hidden: the state is one line at the top of the inspector", false, {
+                workspaceModel(status(open: 2))
             }),
         ]
     }
@@ -470,4 +556,56 @@ import SwiftUI
         }
         .background(MarvinTheme.background)
     }
+}
+
+/// Brief §13 — the window as it composes the workspace, for the snapshot
+/// harness: the rail stand-in, the Sessions pane, the centre, and the right
+/// column (the orb plus the inspector, or the tab's chat while off). Widths are
+/// the window's; the side columns keep the app's defaults (260 and 480, 320 at
+/// the narrowest window).
+@MainActor struct SupervisorWorkspaceComposite: View {
+    let model: SupervisorModel
+    var brainShown = true
+    /// The composite's own width decides the right column's (fixture only — the
+    /// app's split view owns this; nothing in the app measures a width).
+    @State private var width: CGFloat = 1440
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // The rail (44 pt); the real one is the `rail-supervisor-*` surfaces.
+            MarvinTheme.background.frame(width: 44)
+            MarvinDivider()
+            SessionsPane(supervisor: model)
+                .frame(width: 260)
+                .background(MarvinTheme.background)
+            MarvinDivider()
+            SupervisorWorkspaceCentre(model: model)
+                .frame(minWidth: 320)
+            MarvinDivider()
+            VStack(spacing: 0) {
+                if brainShown {
+                    BrainPaneView(supervisor: model).frame(height: 230)
+                    MarvinDivider()
+                }
+                if SupervisorWorkspace.coversRightColumn(open: model.workspaceOpen, mode: model.status?.mode) {
+                    SupervisorInspector(model: model, showsStateLine: !brainShown)
+                } else {
+                    // Off: the selected tab's chat stays (§13.9); a placeholder here.
+                    Text("The selected tab's chat")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(MarvinTheme.background)
+                }
+            }
+            .frame(width: rightWidth)
+            .background(MarvinTheme.background)
+        }
+        .background(MarvinTheme.background)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+
+    /// 320 at a 960 pt window (the column's minimum), 480 otherwise. The
+    /// threshold sits above 1104 (rail + pane + 480 + the centre's 320), the
+    /// width a 960 composite measures before it settles.
+    private var rightWidth: CGFloat { width < 1150 ? 320 : 480 }
 }

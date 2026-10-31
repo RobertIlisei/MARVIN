@@ -561,10 +561,18 @@ public enum SupervisorEnvelope {
 public struct SupervisorRailEntry: Equatable, Sendable {
     public let badge: Int
 
-    /// nil while the supervisor is off: no icon, as there is no tab.
+    /// Brief §13.8 — the rail button opens the workspace in every mode, off
+    /// included (off opens the set-up form). nil only before the status is
+    /// known, as there is nothing yet to open.
     public static func make(mode: String?, openItems: Int) -> SupervisorRailEntry? {
-        guard SupervisorChat.tabVisible(mode: mode) else { return nil }
-        return SupervisorRailEntry(badge: max(0, openItems))
+        guard let mode else { return nil }
+        return SupervisorRailEntry(badge: mode == "off" ? 0 : max(0, openItems), off: mode == "off")
+    }
+    public var off: Bool = false
+
+    public init(badge: Int, off: Bool = false) {
+        self.badge = badge
+        self.off = off
     }
 
     /// The rail is 44 pt wide; a badge past two digits would cover the glyph.
@@ -575,6 +583,7 @@ public struct SupervisorRailEntry: Equatable, Sendable {
 
     /// Tooltip and VoiceOver label in one.
     public var label: String {
+        if off { return "Supervisor — off. Set up" }
         guard badge > 0 else { return "Supervisor" }
         return "Supervisor — \(badge) waiting for you"
     }

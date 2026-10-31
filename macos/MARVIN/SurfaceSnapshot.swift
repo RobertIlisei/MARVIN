@@ -343,12 +343,7 @@ enum SurfaceSnapshot {
                 AnyView(SessionsPane(supervisor: st.model()))
             }
         } + [
-            Surface("sup-setup-sheet", "Supervisor §6.7 set-up sheet (Cancel is the default; Start in shadow)", .fixture, widths: [460]) {
-                AnyView(SupervisorSetUpSheet(model: SurfaceSupervisorFixtures.model(nil),
-                                             tabs: [(SurfaceRoutesMore.openIds[0], "Add retry with backoff to the HTTP client"),
-                                                    (SurfaceRoutesMore.openIds[3], "Fix the flaky cache test")],
-                                             modelLabel: "Sonnet 5.5", onClose: {}))
-            },
+            // Brief §13 — the Supervisor workspace, as the window composes it.
             Surface("chat-supervisor-marking", "Chat: supervisor message bubble, answered-by chip, touched-turn divider", .fixture,
                     widths: [520, 900]) {
                 AnyView(VStack(alignment: .leading, spacing: 10) {
@@ -372,7 +367,12 @@ enum SurfaceSnapshot {
             Surface("sup-chat-reply-markdown", "Supervisor tab ADR-0129 — a sent image in the bubble; the reply as inert Markdown (list, code, a link shown as text)", .fixture, widths: [260, 420], height: 640) {
                 AnyView(SupervisorChatView(model: SurfaceSupervisorFixtures.imageChatModel(reply: SurfaceSupervisorFixtures.markdownReply)))
             },
-        ] + SurfaceSupervisorFixtures.chatStates.map { st in
+        ] + SurfaceSupervisorFixtures.workspaceStates.map { st in
+            // Brief §13.11 — the window widths MARVIN supports: 960 (narrow), 1440 (typical), 1920 (wide).
+            Surface(st.id, st.title, .populated, widths: [960, 1440, 1920], height: 820, prepare: seedSessions) {
+                AnyView(SupervisorWorkspaceComposite(model: st.model(), brainShown: st.brain))
+            }
+        } + SurfaceSupervisorFixtures.chatStates.map { st in
             // ADR-0128 [7.2] — the cards in the Supervisor tab, at the chat column widths the brief names.
             Surface(st.id, st.title, .fixture, widths: [260, 420], height: 640) {
                 AnyView(SupervisorChatView(model: st.model()))
@@ -382,19 +382,19 @@ enum SurfaceSnapshot {
         // 2026-10-31 — the Supervisor's rail entry, and the plan banner while a
         // background job will resume the tab.
         let railAndBanner: [Surface] = [
-            Surface("rail-supervisor-off", "Activity rail — supervisor off: no Supervisor icon", .fixture,
+            Surface("rail-supervisor-off", "Activity rail — supervisor off: the button stays (opens the set-up form), no badge", .fixture,
                     widths: paneWidths, height: 420) {
-                AnyView(LeftPane(supervisor: SurfaceSupervisorFixtures.model(nil)))
+                AnyView(LeftPane(supervisor: SurfaceSupervisorFixtures.model(SurfaceSupervisorFixtures.status(mode: "off"))))
             },
             Surface("rail-supervisor-on", "Activity rail — supervisor in shadow, nothing open: binoculars, no badge", .fixture,
                     widths: paneWidths, height: 420) {
                 AnyView(LeftPane(supervisor: SurfaceSupervisorFixtures.model(SurfaceSupervisorFixtures.status())))
             },
-            Surface("rail-supervisor-badge", "Activity rail — two open cards, conversation shown: badge 2, selected without an accent bar", .fixture,
+            Surface("rail-supervisor-badge", "Activity rail — two open cards, workspace open: badge 2, selected without an accent bar", .fixture,
                     widths: paneWidths, height: 420) {
                 AnyView(LeftPane(supervisor: SurfaceSupervisorFixtures.model(
                     SurfaceSupervisorFixtures.status(open: 2),
-                    items: [SurfaceSupervisorFixtures.pushItem, SurfaceSupervisorFixtures.questionItem]) { $0.chatSelected = true }))
+                    items: [SurfaceSupervisorFixtures.pushItem, SurfaceSupervisorFixtures.questionItem]) { $0.workspaceOpen = true }))
             },
             Surface("plan-banner-waiting", "Plan banner — a background job will resume the tab: named, elapsed, no Continue", .fixture,
                     widths: paneWidths) {

@@ -42,6 +42,7 @@
 // fixture without an MTKView at all.
 
 import MetalKit
+import MARVINLogic
 import SwiftUI
 
 // MARK: - Renderer
@@ -704,6 +705,8 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
 /// state caption.
 @MainActor struct BrainPaneView: View {
     @Environment(MarvinBridge.self) private var bridge
+    /// Brief §13.5 — the supervisor the orb may describe (the shared one; fixtures pass their own).
+    var supervisor: SupervisorModel = .shared
     /// Phase 4h — System Settings → Accessibility → Display →
     /// Reduce Motion. SwiftUI tracks the current value and re-
     /// invalidates body when the user toggles the system setting,
@@ -732,8 +735,27 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
     /// hasn't reported yet (cold boot before first turn). Phase 5f
     /// gates this behind the `bootSettled` flag so the very first
     /// state the renderer sees is `.boot`.
+    /// Brief §13.5 — while the Supervisor workspace covers the right column,
+    /// the orb describes the supervisor: one conversation on screen, one orb.
+    /// A view-level override read from `SupervisorModel`; never a write through
+    /// `setMarvinState` (its gate also feeds the status bar's per-session
+    /// counters, and the live tab's writes would be dropped). Closing the
+    /// workspace hands the orb back with nothing to restore.
+    private var supervisorFace: SupervisorBrainFace? {
+        let sup = supervisor
+        guard SupervisorWorkspace.coversRightColumn(open: sup.workspaceOpen, mode: sup.status?.mode) else { return nil }
+        return SupervisorBrainFace.current(sup)
+    }
+
     private var state: BrainState {
         if !bootSettled { return .boot }
+        if let face = supervisorFace {
+            switch face.profile {
+            case .idle: return .idle
+            case .thinking: return .thinking
+            case .error: return .error
+            }
+        }
         switch bridge.marvinState {
         case "thinking": return .thinking
         case "tool":     return .tool
@@ -762,7 +784,9 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
             BrainMetalView(
                 state: state,
                 colorScheme: bridge.preferredColorScheme ?? environmentColorScheme,
-                reduceMotion: reduceMotion
+                // A paused supervisor is drawn through the Reduce Motion path —
+                // no new "still" profile (§13.5).
+                reduceMotion: reduceMotion || (supervisorFace?.still ?? false)
             )
             // Square aspect — keeps the visible sphere circular
             // when the pane is taller than wide (or vice-versa).
@@ -778,16 +802,21 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
             // (idle/thinking/tool/writing/error). During the launch
             // animation it reads "boot" until the spark settles,
             // then tracks the derived state.
-            VStack(spacing: 1) {
-                Text("STATE")
-                    .font(.system(size: 9, weight: .regular, design: .monospaced))
-                    .tracking(2.5)
-                    .foregroundStyle(.tertiary)
-                Text(captionLabel)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.secondary)
+            if let face = supervisorFace, bootSettled {
+                SupervisorBrainCaption(face: face)
+                    .padding(.bottom, 8)
+            } else {
+                VStack(spacing: 1) {
+                    Text("STATE")
+                        .font(.system(size: 9, weight: .regular, design: .monospaced))
+                        .tracking(2.5)
+                        .foregroundStyle(.tertiary)
+                    Text(captionLabel)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.bottom, 8)
             }
-            .padding(.bottom, 8)
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)

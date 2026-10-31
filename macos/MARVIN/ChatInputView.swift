@@ -80,6 +80,10 @@ import UniformTypeIdentifiers
     /// Draw no fill of its own, so the container's shows through (the Supervisor
     /// tab's composer). Off by default: the chat composer is unchanged.
     var transparent = false
+    /// Opt-in: each change of the value makes this editor first responder
+    /// (the Supervisor workspace focuses its composer on open, brief §13.8).
+    /// nil — the chat composer — never takes focus this way.
+    var focusToken: Int? = nil
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = ChatNSTextView.scrollableTextView()
@@ -129,6 +133,10 @@ import UniformTypeIdentifiers
         textView.onCommandDismiss = { onCommandDismiss() }
         textView.isEditable = !isDisabled
         textView.isSelectable = true
+        if let token = focusToken, token != context.coordinator.focusToken {
+            context.coordinator.focusToken = token
+            DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
+        }
         Self.highlightCommandToken(in: textView, known: knownCommands)
     }
 
@@ -167,6 +175,8 @@ import UniformTypeIdentifiers
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ChatTextEditor
+        /// The last `focusToken` acted on. The first value focuses too: the workspace mounts on its first open.
+        var focusToken: Int?
         init(_ parent: ChatTextEditor) {
             self.parent = parent
         }

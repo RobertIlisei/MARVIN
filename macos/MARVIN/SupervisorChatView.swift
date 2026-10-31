@@ -1,8 +1,8 @@
 import MARVINLogic
 import SwiftUI
 
-/// ADR-0128 / brief §12 — the pinned Supervisor tab: the user's conversation
-/// with the project's supervisor. It talks only to `/api/supervisor/message`
+/// ADR-0128 / brief §12 — the user's conversation with the project's
+/// supervisor, hosted in the centre of the Supervisor workspace (brief §13). It talks only to `/api/supervisor/message`
 /// (through `SupervisorModel`), never to `/api/chat`, and it holds no consent
 /// control: from [7.2] the only buttons here are the inbox's own cards.
 @MainActor struct SupervisorChatView: View {
@@ -33,12 +33,8 @@ import SwiftUI
                 VStack(alignment: .leading, spacing: 4) {
                     PaneNoticeStrip(notice: PaneNotice(kind: .warning, headline: paused.headline))
                         .padding(.horizontal, -10)
-                    if paused.resume {
-                        Button("Resume") { Task { await model.resume() } }
-                            .rowChip(.neutral)
-                            .disabled(model.tokenError != nil)
-                            .help("The supervisor wakes again and answers the messages waiting for it")
-                    }
+                    // Resume is the workspace header's primary control in this state
+                    // (brief §13.17, departure 30); the notice keeps the words.
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 6)
@@ -401,7 +397,8 @@ import SwiftUI
                             atPickerOpen = true
                             return true
                         },
-                        transparent: true
+                        transparent: true,
+                        focusToken: model.composerFocusToken
                     )
                     .frame(minHeight: 44, idealHeight: editorHeight, maxHeight: editorHeight)
                     .accessibilityLabel("Message the supervisor")
