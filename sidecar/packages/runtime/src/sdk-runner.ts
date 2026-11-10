@@ -1009,6 +1009,67 @@ export function remapGraphExtractionDispatch(
   return { ...input, subagent_type: "graph-extractor" };
 }
 
+/**
+ * Built-ins outside KNOWN_TOOL_NAMES, classified on purpose (Agent SDK 0.3.301
+ * upgrade, docs/reviews/2026-10-16-agent-sdk-0.3.301-upgrade-plan.md §2). Before,
+ * every one of them was auto-allowed by name. `builtin-tools-gate.test.ts` fails
+ * when an SDK ships a built-in that none of these sets (or KNOWN_TOOL_NAMES)
+ * names, so the next new tool cannot arrive auto-allowed.
+ */
+/** Built-ins that run a shell command: their `command` meets the Bash classifier. */
+export const SHELL_BUILTIN_TOOLS: ReadonlySet<string> = new Set(["Monitor", "PowerShell"]);
+/**
+ * Built-ins that reach beyond the turn: multi-agent fan-out (ADR-0030 limits it
+ * to opt-in xhigh), durable or cloud-side schedules, notifications, publishing.
+ * Confirmed in the main loop; the subagent and read-only collapse denies them.
+ */
+export const OUTWARD_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
+  "Workflow",
+  "RemoteTrigger",
+  "CronCreate",
+  "CronDelete",
+  "PushNotification",
+  "Artifact",
+  "ClaudeDesign",
+  "SendUserFile",
+  "SendFeedback",
+  "ShareOnboardingGuide",
+]);
+/** Built-ins that read, plan, track or talk to the user or to the turn's own agents. */
+export const HARMLESS_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
+  "AskUserQuestion",
+  "CronList",
+  "EndConversation",
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "ListAgents",
+  "ListMcpResourcesTool",
+  "LSP",
+  "OfferChromeSetup",
+  "Projects",
+  "propose_skills",
+  "ProposeGoal",
+  "ReadMcpResourceDirTool",
+  "ReadMcpResourceTool",
+  "ReadNotifications",
+  "ReportFindings",
+  "SendMessage",
+  "SendUserMessage",
+  "ShowOnboardingRolePicker",
+  "Skill",
+  "SubagentHandback",
+  "TaskCreate",
+  "TaskGet",
+  "TaskList",
+  "TaskStop",
+  "TaskUpdate",
+  "TodoWrite",
+  "ToolSearch",
+  "WaitForMcpServers",
+]);
+/** Removed from every main session's tool surface (see the `disallowedTools` comment in runAgent). */
+export const MAIN_DISALLOWED_TOOLS: readonly string[] = ["ScheduleWakeup", "EnterWorktree", "ExitWorktree"];
+
 export function classifyToolCall(
   name: string,
   input: Record<string, unknown>,
@@ -1060,6 +1121,14 @@ export function classifyToolCall(
     }
   }
 
+  // A built-in that runs a shell command is a Bash call under another name: the
+  // destructive deny, the pattern-kill deny and the subagent invariant must see
+  // its command. Only the decision is kept, never a Bash-shaped updatedInput.
+  if (SHELL_BUILTIN_TOOLS.has(name)) {
+    const viaBash = classifyToolCall("Bash", { command: typeof input.command === "string" ? input.command : "" }, opts);
+    return { decision: viaBash.decision, reason: `${name} runs a shell command: ${viaBash.reason}` };
+  }
+
   if (!KNOWN_TOOL_NAMES.has(name as ToolName) && !looksLikeSubagentDispatch(name, input)) {
     // Tools outside our named set are auto-allowed by default — they're
     // sandboxed or delegate back to tools we already gate. EXCEPTION (ADR-0045):
@@ -1084,10 +1153,11 @@ export function classifyToolCall(
         /* never break a turn on telemetry */
       }
     }
-    if (mcpClass === null) {
+    if (mcpClass === null && !OUTWARD_BUILTIN_TOOLS.has(name)) {
       return { decision: "allow", reason: `${name} is not in the gated set.` };
     }
-    baseDecision = mcpClass === "auto" ? "allow" : mcpClass === "deny" ? "deny" : "confirm";
+    baseDecision =
+      mcpClass === null ? "confirm" : mcpClass === "auto" ? "allow" : mcpClass === "deny" ? "deny" : "confirm";
     const untrustedTwin = isTrustedMcpName(name) && opts?.mcpServer !== undefined && opts.mcpServer.source !== "sdk";
     if (untrustedTwin) {
       try {
@@ -1105,7 +1175,9 @@ export function classifyToolCall(
         /* never break a turn on telemetry */
       }
     }
-    policyReason = untrustedTwin
+    policyReason = mcpClass === null
+      ? `${name} reaches beyond this turn (fan-out, a schedule, a notification or a publish) — confirm in the main loop, never from a sub-agent or a read-only turn.`
+      : untrustedTwin
       ? `${name} carries a MARVIN server name but the SDK reports source ` +
         `"${opts?.mcpServer?.source}", not an in-process server — confirm (ADR-0117).`
       : mcpClass === "deny"
