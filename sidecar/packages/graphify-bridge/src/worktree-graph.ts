@@ -23,7 +23,7 @@
  * changed since the last build.
  */
 
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
@@ -122,6 +122,26 @@ async function excludeGraphOut(worktree: string): Promise<void> {
 }
 
 /**
+ * Copy `src` to a `dst` that does not exist yet as an APFS clone (copy-on-write):
+ * the tab's graph shares blocks with the project's until graphify rewrites a file.
+ * A plain copy cost every tab ~1.5 GB of extraction cache (measured 10.11.2026:
+ * 9 tabs, ~13.5 GB of identical cache). Node's `cpSync` with COPYFILE_FICLONE did
+ * not clone on this Mac (200 MB test file: 199 MB used vs 0 MB for `cp -c`), so
+ * macOS uses `/bin/cp -c`; anything else, or a failed clone, falls back to cpSync.
+ */
+function cloneOrCopy(src: string, dst: string): void {
+  if (process.platform === "darwin" && !existsSync(dst)) {
+    try {
+      execFileSync("/bin/cp", ["-cR", src, dst], { stdio: "ignore", timeout: 120_000 });
+      return;
+    } catch {
+      /* not APFS, or cp refused: fall through to the plain copy, which fills whatever the clone left */
+    }
+  }
+  cpSync(src, dst, { recursive: true, force: false, errorOnExist: false });
+}
+
+/**
  * Seed a worktree's graph from the project's: graph, manifest and extraction
  * cache, so the first incremental update re-extracts only what differs.
  * Returns false when there is nothing to seed from.
@@ -135,7 +155,7 @@ export function seedWorktreeGraph(workDir: string, worktree: string): boolean {
   for (const name of ["graph.json", "manifest.json", "cache"]) {
     const src = join(from, name);
     if (!existsSync(src)) continue;
-    cpSync(src, join(to, name), { recursive: true, force: false, errorOnExist: false });
+    cloneOrCopy(src, join(to, name));
   }
   return true;
 }

@@ -13,6 +13,7 @@ import {
   maybeRefreshWorktreeGraph,
   resetWorktreeGraphState,
   resolveGraphRoot,
+  seedWorktreeGraph,
   WORKTREE_GRAPH_FALLBACK_NOTE,
   worktreeOf,
 } from "../src/worktree-graph";
@@ -53,6 +54,45 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(repo, { recursive: true, force: true });
+});
+
+describe("seedWorktreeGraph", () => {
+  function projectGraph(): void {
+    const out = join(repo, "graphify-out");
+    mkdirSync(join(out, "cache", "ast"), { recursive: true });
+    writeFileSync(join(out, "graph.json"), graphJson([{ id: "p", label: "projectSymbol", source_file: "core.ts" }]));
+    writeFileSync(join(out, "manifest.json"), '{"files":1}');
+    writeFileSync(join(out, "cache", "ast", "core.json"), '{"cached":true}');
+  }
+
+  it("seeds graph, manifest and the whole extraction cache with identical content", () => {
+    projectGraph();
+    expect(seedWorktreeGraph(repo, tab)).toBe(true);
+    const out = join(tab, "graphify-out");
+    expect(readFileSync(join(out, "graph.json"), "utf8")).toContain("projectSymbol");
+    expect(readFileSync(join(out, "manifest.json"), "utf8")).toBe('{"files":1}');
+    expect(readFileSync(join(out, "cache", "ast", "core.json"), "utf8")).toBe('{"cached":true}');
+  });
+
+  it("fills a partly seeded cache without nesting a second copy inside it", () => {
+    projectGraph();
+    mkdirSync(join(tab, "graphify-out", "cache"), { recursive: true });
+    writeFileSync(join(tab, "graphify-out", "cache", "mine.json"), "keep");
+    expect(seedWorktreeGraph(repo, tab)).toBe(true);
+    const cache = join(tab, "graphify-out", "cache");
+    expect(readFileSync(join(cache, "mine.json"), "utf8")).toBe("keep");
+    expect(readFileSync(join(cache, "ast", "core.json"), "utf8")).toBe('{"cached":true}');
+    expect(existsSync(join(cache, "cache"))).toBe(false);
+  });
+
+  it("does not touch a worktree that already has its own graph", () => {
+    projectGraph();
+    mkdirSync(join(tab, "graphify-out"), { recursive: true });
+    writeFileSync(join(tab, "graphify-out", "graph.json"), "tab-own");
+    expect(seedWorktreeGraph(repo, tab)).toBe(true);
+    expect(readFileSync(join(tab, "graphify-out", "graph.json"), "utf8")).toBe("tab-own");
+    expect(existsSync(join(tab, "graphify-out", "cache"))).toBe(false);
+  });
 });
 
 describe("resolveGraphRoot", () => {
