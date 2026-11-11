@@ -90,6 +90,7 @@ import SwiftUI
                     idleSection
                     recentSection
                 }
+                if let projectId = bridge.activeProjectId { ProjectNoticesSection(projectId: projectId) }
                 supervisorFooter
             }
             .layoutOscillationProbe("sessions-stack")

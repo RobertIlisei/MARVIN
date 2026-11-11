@@ -82,6 +82,7 @@ import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createMemoryMcpServer } from "./memory-mcp";
 import { ensureProviderModelId, latestForTier } from "./models";
 import { makeNestedInstructionsPostToolUse, resetNestedInstructions } from "./nested-instructions";
+import { noticesReminder } from "./notices";
 import { createObsidianMcpServer } from "./obsidian-mcp";
 import { makeOutputGovernorPostToolUse } from "./output-governor";
 import { foldTurnGraphUsage, registerLiveGraphUsage } from "./graph-usage";
@@ -1178,6 +1179,19 @@ export function classifyToolCall(
     };
   }
 
+  // NOTICE OWNERSHIP (ADR-0131). `.marvin/notices.json` is read into every
+  // tab's reminder suffix, so a tab that could write it could speak to its
+  // siblings with the project's own voice. Its writers are the user (the
+  // notices route) and the supervisor's `post_notice` — both server-side.
+  if (mutatesProtectedPath(name, input, (p) => p.includes(".marvin/notices.json"))) {
+    return {
+      decision: "deny",
+      reason:
+        `${name} targets .marvin/notices.json — the project's notices are posted by the user ` +
+        `or by the supervisor under its policy (ADR-0131), never by a tab. Read it if you need it.`,
+    };
+  }
+
   // SUPERVISOR MODEL / EFFORT OWNERSHIP (ADR-0127). Raising either widens the
   // supervisor's posture, so both are the user's click in the Supervisor
   // settings. They live in app-wide data-dir files that a plain Write is
@@ -1292,11 +1306,13 @@ export function turnReminders(args: {
   sessionContext?: string | undefined;
   planContext?: string | undefined;
   spineContext?: string | null | undefined;
+  /** ADR-0131 — the rendered project notices; per-turn text, so never in the system prompt. */
+  noticesContext?: string | null | undefined;
 }): string[] {
   const mode =
     modeGuidance(args.mode).trim() ||
     "## Mode: AGENT\nEdits are allowed this turn; any earlier mode reminder no longer applies.";
-  return [args.orientation, mode, args.sessionContext, args.planContext, args.spineContext].filter((x): x is string => Boolean(x));
+  return [args.orientation, mode, args.sessionContext, args.planContext, args.spineContext, args.noticesContext].filter((x): x is string => Boolean(x));
 }
 
 /** Mode-specific stanza (ADR-0036), sent in the turn's reminder suffix since
@@ -2757,6 +2773,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       sessionContext: input.sessionContext,
       planContext: input.planContext,
       spineContext,
+      noticesContext: noticesReminder(workDir),
     });
     const turnPrompt =
       reminders.length > 0

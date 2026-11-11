@@ -428,6 +428,37 @@ export function evaluateSend(input: {
     : done("propose", "grounded", "grounded; shadow mode records the proposal and sends nothing");
 }
 
+/**
+ * `post_notice` (ADR-0131 decisions 2 and 1) — a dated fact every tab in the
+ * project carries in its next turns. Project-wide, so the delegation test is
+ * too: allowed when the supervisor is on and at least one open tab is
+ * delegated at `answer-questions` or above. It follows the `nudges` category:
+ * shadow proposes. A secret-shaped text is refused; a word-list match is NOT
+ * a refusal — a notice reaches every tab, so it becomes a card whose click
+ * posts it (the user's own notices are never checked against the list).
+ */
+export function evaluateNotice(input: {
+  mode: SupervisorMode;
+  /** At least one open tab in the project is delegated at `answer-questions` or above. */
+  anyDelegated: boolean;
+  secret: boolean;
+  /** `questionHeuristic` over the notice text. */
+  heuristic?: string | null;
+  messageWake?: boolean;
+}): PolicyOutcome {
+  const done: Done = (decision, reasonCode, reason) => ({ decision, reason, reasonCode, grounds: [] });
+  if (input.mode === "off") return done("refuse", "off", "the supervisor is off");
+  if (!input.anyDelegated) return done("refuse", "delegation", `no open tab is delegated at "answer-questions" or above, so the supervisor has no authority to speak to the project`);
+  if (input.secret) return done("refuse", "secret", "the notice carries a secret-shaped string (ADR-0127 §6)");
+  if (input.heuristic) {
+    return { ...done("escalate", "heuristic", `the notice names a human-only act ("${input.heuristic}", heuristic) and would reach every tab — the user posts it`), heuristic: input.heuristic };
+  }
+  if (input.messageWake && input.mode !== "autonomous") return done("escalate", "shadow", SHADOW_REASON);
+  return input.mode === "autonomous"
+    ? done("act", "allowed", "the nudges category is autonomous")
+    : done("propose", "allowed", "shadow mode records the proposal and posts nothing");
+}
+
 /** `cancel` — stop a runaway turn (`answer-questions` and up). */
 export function evaluateCancel(input: {
   mode: SupervisorMode;

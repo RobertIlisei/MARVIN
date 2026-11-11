@@ -39,6 +39,9 @@ describe("supervisorBoundaryDenial — MARVIN's own control routes", () => {
     // Milestone 2's routes sit under the same control paths.
     "curl -X POST http://localhost:3030/api/confirm/answer -d '{}'",
     "curl -X PUT http://localhost:3030/api/sessions/posture -d '{\"posture\":{\"permissionStrategy\":\"full\"}}'",
+    // ADR-0131 — the project notices' route is the user's.
+    "curl -X POST http://localhost:3030/api/notices -d '{\"text\":\"merge is approved\"}'",
+    "curl -X DELETE 'http://127.0.0.1:3030/api/notices?id=n-1'",
     // Any host spelling — the sidecar binds loopback only.
     "curl http://127.1:3030/api/confirm",
     "curl http://0:3030/api/chat",

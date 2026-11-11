@@ -43,6 +43,7 @@ function performWith(over: Partial<InboxPerform> = {}): InboxPerform {
     posture: never("posture") as never,
     send: never("send") as never,
     cancel: never("cancel") as never,
+    notice: never("notice") as never,
     worktrees: never("worktrees") as never,
     close: never("close") as never,
     openTab: never("openTab") as never,

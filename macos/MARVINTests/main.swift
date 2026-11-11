@@ -5898,6 +5898,36 @@ runner.suite("helper-role-changes") {
     }
 }
 
+// MARK: - ProjectNotices (ADR-0131)
+
+runner.suite("ProjectNotices") {
+    runner.test("postable trims, folds line breaks, and refuses empty or over-long text") {
+        runner.expect(ProjectNotices.postable("  the test machine moved \n at a new address "), equals: "the test machine moved at a new address", "folded")
+        runner.expect(ProjectNotices.postable("   \n "), equals: nil, "empty")
+        runner.expect(ProjectNotices.postable(String(repeating: "x", count: ProjectNotices.maxChars)) != nil, "exactly the limit")
+        runner.expect(ProjectNotices.postable(String(repeating: "x", count: ProjectNotices.maxChars + 1)), equals: nil, "over the limit")
+    }
+    runner.test("the list decodes, and a malformed body is nil") {
+        let json = #"{"notices":[{"id":"n-1","text":"hi","createdAt":"2026-11-11T10:00:00.000Z","expiresAt":"2026-11-12T10:00:00.000Z","author":"supervisor"}]}"#
+        let list = ProjectNotices.decodeList(Data(json.utf8))
+        runner.expect(list?.count, equals: 1, "one notice")
+        runner.expect(list?.first.map(ProjectNotices.authorLabel), equals: "Supervisor", "author")
+        runner.expect(ProjectNotices.decodeList(Data("nope".utf8)) == nil, "malformed")
+    }
+    runner.test("remaining names the largest whole unit") {
+        let n = ProjectNotice(id: "n", text: "t", createdAt: "2026-11-11T10:00:00.000Z", expiresAt: "2026-11-12T10:00:00.000Z", author: "user")
+        let start = ProjectNotices.date(n.createdAt)!
+        runner.expect(ProjectNotices.remaining(n, now: start), equals: "1 d left", "a day")
+        runner.expect(ProjectNotices.remaining(n, now: start.addingTimeInterval(20 * 3_600)), equals: "4 h left", "hours")
+        runner.expect(ProjectNotices.remaining(n, now: start.addingTimeInterval(24 * 3_600 - 600)), equals: "10 min left", "minutes")
+        runner.expect(ProjectNotices.remaining(n, now: start.addingTimeInterval(25 * 3_600)), equals: "expired", "expired")
+        runner.expect(ProjectNotices.authorLabel(n), equals: "You", "user author")
+    }
+    runner.test("lifetimes are 1 hour, 24 hours and 7 days") {
+        runner.expect(ProjectNoticeLifetime.allCases.map(\.hours), equals: [1, 24, 168], "hours")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

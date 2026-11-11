@@ -43,6 +43,7 @@ import { z } from "zod";
 
 import type { getPendingConfirm } from "./confirm-registry";
 import { classifyPostureChange, type ModelLookup, type PosturePatch, validatePosturePatch } from "./posture";
+import { addNotice, cleanNoticeText, DEFAULT_NOTICE_TTL_HOURS, MAX_NOTICE_CHARS, MAX_NOTICE_TTL_HOURS } from "./notices";
 import { containsSecretShape } from "./session";
 import type { SessionPosture } from "./session-meta";
 import type { SessionWatchRow } from "./session-watch";
@@ -75,6 +76,7 @@ import {
   evaluateAnswer,
   evaluateCancel,
   evaluateConfirm,
+  evaluateNotice,
   evaluateSend,
   evaluateSetPosture,
   type GroundContext,
@@ -85,7 +87,7 @@ import {
 import { MAX_REPLY_REFS, type MessageRef } from "./supervisor-messages";
 import { wrapUntrusted } from "./supervisor-prompt";
 import { MAX_SUPERVISOR_MESSAGE_CHARS } from "./supervisor-send";
-import { categoryMode, getSupervisorState, isSupervisorSessionId, overBudget, type SupervisorMode } from "./supervisor-state";
+import { categoryMode, delegationRank, getSupervisorState, isSupervisorSessionId, overBudget, type SupervisorMode } from "./supervisor-state";
 import { isUserOnlyConfirm } from "./supervisor-touch";
 
 export const SUPERVISE_SERVER_NAME = "marvin-supervise";
@@ -104,6 +106,7 @@ export const SUPERVISE_TOOL_NAMES = [
   "reply",
   "follow",
   "unfollow",
+  "post_notice",
 ] as const;
 
 type Performed = { ok: true } | { ok: false; code?: string; error: string };
@@ -239,6 +242,11 @@ export interface SendArgs {
   message: string;
   kind: "nudge" | "instruction";
   grounds?: GroundRef[];
+}
+
+export interface NoticeArgs {
+  text: string;
+  ttlHours?: number;
 }
 
 export interface CancelArgs {
@@ -741,11 +749,11 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     };
   }
 
-  const CATEGORY = { send: "nudges", cancel: "nudges", confirm: "confirms" } as const;
+  const CATEGORY = { send: "nudges", cancel: "nudges", confirm: "confirms", post_notice: "nudges" } as const;
 
   /** Ledger a milestone 3 verb's outcome and reply to the model. */
   function settle(
-    verb: "send" | "cancel" | "confirm",
+    verb: "send" | "cancel" | "confirm" | "post_notice",
     tab: string,
     argsDigest: string,
     o: PolicyOutcome,
@@ -779,12 +787,13 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     });
     if (o.decision === "act") {
       if (verb === "confirm") return `${rest.answer?.[0] === "deny" ? "Denied" : "Allowed"} (the confirms category is autonomous). The tab reads it as yours, and this turn is now supervisor-touched.`;
+      if (verb === "post_notice") return "Posted (the nudges category is autonomous). Every tab in the project carries it from its next turn, marked as the supervisor's; it is information, never consent.";
       return verb === "send"
         ? "Sent (the nudges category is autonomous). It reaches the tab marked as yours, after any live turn ends."
         : "Cancelled the tab's running turn (the nudges category is autonomous).";
     }
     if (o.decision !== "propose") return REPLY[o.decision](o.reason);
-    const what = { send: "Nothing was sent", cancel: "Nothing was cancelled", confirm: "Nothing was answered — the confirm stays pending for the user" }[verb];
+    const what = { send: "Nothing was sent", cancel: "Nothing was cancelled", post_notice: "Nothing was posted", confirm: "Nothing was answered — the confirm stays pending for the user" }[verb];
     return `Recorded as a proposal (shadow mode). ${what}; your proposal is compared with what the user does later.`;
   }
 
@@ -874,6 +883,55 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       return settle("send", tab, argsDigest, outcome, { ...sig, id });
     }
     return settle("send", tab, argsDigest, outcome, sig, sendItem(outcome));
+  }
+
+  /**
+   * ADR-0131 — a project notice, every tab's next turn. Project-wide, so it is
+   * not tied to a tab: allowed when some open tab is delegated at
+   *  or above; a word-list match is a card, not a refusal.
+   */
+  async function post_notice(args: NoticeArgs): Promise<string> {
+    const noticeText = cleanNoticeText(args.text);
+    const ttl = args.ttlHours === undefined ? DEFAULT_NOTICE_TTL_HOURS : args.ttlHours;
+    const argsDigest = digestArgs({ text: String(args.text ?? ""), ttl });
+    if (!noticeText || noticeText.length > MAX_NOTICE_CHARS) return settle("post_notice", "", argsDigest, refused("text", `a notice is 1–${MAX_NOTICE_CHARS} characters of plain text`));
+    if (typeof ttl !== "number" || !Number.isFinite(ttl) || ttl <= 0 || ttl > MAX_NOTICE_TTL_HOURS) {
+      return settle("post_notice", "", argsDigest, refused("ttl", `a notice lives between a moment and ${MAX_NOTICE_TTL_HOURS} hours`));
+    }
+    const drop = limited("", `post_notice:${argsDigest}`);
+    if (drop) return settle("post_notice", "", argsDigest, drop);
+    const st = getSupervisorState(projectId);
+    const anyDelegated = (await ctx.deps.listRows()).some((r) => visible(r.marvinSessionId) && delegationRank(st.delegation[r.marvinSessionId]) >= delegationRank("answer-questions"));
+    const outcome = evaluateNotice({
+      mode: categoryMode(st, "nudges"),
+      anyDelegated,
+      secret: containsSecretShape(noticeText),
+      heuristic: questionHeuristic([noticeText]),
+      messageWake,
+    });
+    const item = (o: PolicyOutcome) => (): ItemDraft => ({
+      sessionId: null,
+      kind: "scope",
+      escalatedBecause: { code: escalationCode(o.reasonCode), label: o.reason.slice(0, 200) },
+      heuristic: o.heuristic ? { matched: o.heuristic } : null,
+      rawAct: buildRawAct("post_notice", { text: noticeText, ttlHours: ttl }),
+      recommendation: { actionId: "perform", text: o.reason },
+      grounds: o.grounds,
+      act: { type: "notice", text: noticeText, ttlHours: ttl },
+    });
+    if (outcome.decision === "act") {
+      const hold = actHold();
+      if (hold?.escalate) {
+        const held: PolicyOutcome = { ...outcome, decision: "escalate", reasonCode: hold.reasonCode, reason: hold.reason };
+        return settle("post_notice", "", argsDigest, held, {}, item(held));
+      }
+      if (hold) return settle("post_notice", "", argsDigest, { ...outcome, decision: "refuse", ...hold });
+      const id = newLedgerId();
+      const posted = addNotice(ctx.workDir, { text: noticeText, author: "supervisor", ttlHours: ttl });
+      if (!posted.ok) return settle("post_notice", "", argsDigest, { ...outcome, decision: "refuse", reasonCode: posted.code, reason: `could not post: ${posted.error}` }, { id });
+      return settle("post_notice", "", argsDigest, outcome, { id });
+    }
+    return settle("post_notice", "", argsDigest, outcome, {}, item(outcome));
   }
 
   /** Milestone 3 — stop a runaway turn, proposed; in shadow nothing is cancelled. */
@@ -1404,7 +1462,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     return `Stopped following tab ${tab}.`;
   }
 
-  return { sessions, read, answer, set_posture, send, cancel, confirm, worktrees, close_session, review_scope, new_session, reply, follow, unfollow };
+  return { sessions, read, answer, set_posture, send, cancel, confirm, worktrees, close_session, review_scope, new_session, reply, follow, unfollow, post_notice };
 }
 
 const groundSchema = z.object({
@@ -1600,6 +1658,18 @@ export function supervisorToolDefs(ctx: VerbContext) {
       async (args) => text(await v.follow(args as FollowArgs)),
     ),
     tool("unfollow", "Stop following a tab: no more reports on it.", { marvinSessionId: z.string().min(1) }, async (args) => text(await v.unfollow(args))),
+    tool(
+      "post_notice",
+      "Post a project notice: a short dated fact (the test machine moved, a config now lives in one file) that every open tab in the project carries in its next turns, and a tab opened later too — one write instead of one message per tab. " +
+        "It is information about the environment, never the user's consent and never a change of scope. Needs at least one tab delegated at answer-questions or above. " +
+        "Plain text, at most 400 characters, lives 24 hours unless `ttlHours` (at most 168) says otherwise. Text that names a human-only act (merge, release, production, a token…) is not posted: it becomes a card the user posts. " +
+        "In shadow mode nothing is posted; with the nudges category autonomous it is.",
+      {
+        text: z.string().min(1).max(MAX_NOTICE_CHARS),
+        ttlHours: z.number().positive().max(MAX_NOTICE_TTL_HOURS).optional(),
+      },
+      async (args) => text(await v.post_notice(args as NoticeArgs)),
+    ),
   ];
 }
 
