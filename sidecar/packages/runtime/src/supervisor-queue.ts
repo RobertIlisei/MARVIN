@@ -262,13 +262,6 @@ export function setGuard(projectId: string, command: string, now = new Date()): 
   });
 }
 
-export function clearGuard(projectId: string): void {
-  updateQueue(projectId, "guard", (q) => {
-    q.guard = null;
-    q.guardLast = null;
-  });
-}
-
 /** The user lifts a hold or retries a failed entry. */
 export function releaseEntry(projectId: string, id: string): boolean {
   let done = false;
@@ -410,4 +403,48 @@ export function buildProposal(
     warnings.push(`This queue holds ${total} entries and none names a scopeRef — nothing checks any of them against the plan before it opens.`);
   }
   return { ok: true, entries, warnings, dedupeKey: `queue:${digest(entries)}` };
+}
+
+/** A guard command the runtime may be asked to run: one string, bounded, no NUL, no secret shape. Null when fine. */
+export function guardCommandError(command: unknown): string | null {
+  if (typeof command !== "string" || !command.trim() || command.length > MAX_GUARD_CHARS || command.includes("\0")) return `the guard command is 1–${MAX_GUARD_CHARS} characters`;
+  if (containsSecretShape(command)) return "the command carries a secret-shaped string (ADR-0127 §6)";
+  return null;
+}
+
+/**
+ * The queue as the workspace reads it (`GET /api/supervisor/queue`): order,
+ * the cap, every hold with its reason, and each brief's first lines — never
+ * the whole brief. The guard command is shown in full: the user approved that text.
+ */
+export function queueView(projectId: string, now = Date.now()) {
+  const q = readQueue(projectId);
+  const pending = q.entries.filter((e) => e.status === "queued" || e.status === "opening");
+  return {
+    cap: q.cap,
+    effectiveCap: effectiveCap(q),
+    capLowered: q.capLowered,
+    guard: q.guard ? { command: q.guard.command, approvedAt: q.guard.approvedAt } : null,
+    guardLast: q.guardLast,
+    entries: q.entries
+      .filter((e) => e.status !== "removed")
+      .map((e) => ({
+        id: e.id,
+        title: e.title,
+        briefHead: e.brief.split("\n").slice(0, 3).join("\n").slice(0, 400),
+        status: e.status,
+        position: e.status === "queued" || e.status === "opening" ? pending.indexOf(e) + 1 : null,
+        after: e.after ?? [],
+        scopeRef: e.scopeRef ?? null,
+        posture: { model: e.posture.model, effort: String(e.posture.thinkingMode ?? ""), strategy: String(e.posture.permissionStrategy ?? ""), mode: String(e.posture.mode ?? "agent") },
+        wider: e.wider,
+        approvedAt: e.approvedAt,
+        expiresAt: new Date(Date.parse(e.approvedAt) + QUEUE_EXPIRY_MS).toISOString(),
+        openedAt: e.openedAt ?? null,
+        openedSessionId: e.openedSessionId ?? null,
+        hold: e.hold ?? null,
+        blocked: e.status === "queued" || e.status === "failed" ? (e.blocked ?? null) : null,
+      })),
+    asOf: new Date(now).toISOString(),
+  };
 }
