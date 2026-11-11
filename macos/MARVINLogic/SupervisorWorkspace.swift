@@ -11,11 +11,12 @@ import Foundation
 /// The right column's segments. There is deliberately no *Needs you* segment:
 /// the Sessions pane is the one inbox list (brief discovery answer 1, ADR-0112).
 public enum SupervisorInspectorSegment: String, CaseIterable, Sendable {
-    case tabs, log, settings
+    case tabs, queue, log, settings
 
     public var title: String {
         switch self {
         case .tabs: return "Tabs"
+        case .queue: return "Queue"
         case .log: return "Log"
         case .settings: return "Settings"
         }

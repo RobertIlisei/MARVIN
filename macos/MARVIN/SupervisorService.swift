@@ -227,6 +227,18 @@ final class SupervisorService {
         _ = try await call("api/supervisor/follows", method: "POST", body: ["projectId": projectId, "id": id, "action": "stop"])
     }
 
+    // ADR-0133 — the approved queue. Reading it, and the user's own settings (cap, release, remove, a
+    // guard-command card). An entry is approved only by the click on its inbox card, never here.
+    func queue(projectId: String) async throws -> SupervisorQueueView {
+        let data = try await call("api/supervisor/queue", query: [URLQueryItem(name: "projectId", value: projectId)])
+        guard let q = SupervisorQueueView.decode(data) else { throw SupervisorServiceError.transport("unreadable queue") }
+        return q
+    }
+
+    func queueAction(_ body: [String: Any]) async throws {
+        _ = try await call("api/supervisor/queue", method: "POST", body: body)
+    }
+
     // ADR-0131 — project notices: the user's side of `/api/notices` (token-gated like the supervisor's routes).
     func notices(projectId: String) async throws -> [ProjectNotice] {
         let data = try await call("api/notices", query: [URLQueryItem(name: "projectId", value: projectId)])
@@ -347,6 +359,7 @@ final class SupervisorModel {
         // The desk's inbox is the Sessions pane (§13.8, open decision 1).
         MarvinBridge.shared.selectLeftTabIfVisible("sessions")
         if inspectorSegment == .log { Task { await refreshLedger() } }
+        if inspectorSegment == .queue { Task { await refreshQueue() } }
         Task { await refreshChat() }
     }
 
@@ -368,6 +381,40 @@ final class SupervisorModel {
     var chatItems: [String: SupervisorInboxItem] = [:]
     /// [7.3] — `GET /api/supervisor/follows`: open follows first, then recently ended.
     var follows: [SupervisorFollow] = []
+    /// ADR-0133 — `GET /api/supervisor/queue`: order, cap, holds and the reason for each.
+    var queue: SupervisorQueueView?
+    /// The server's refusal of a queue setting (a cap out of range, an unknown entry).
+    var queueError: String?
+
+    func refreshQueue() async {
+        guard !offline, let pid = projectId else { return }
+        do {
+            let q = try await SupervisorService.shared.queue(projectId: pid)
+            guard projectId == pid else { return }
+            queue = q
+        } catch SupervisorServiceError.token(let path) {
+            tokenError = path
+        } catch {
+            NSLog("[SupervisorModel] queue failed: \(error)")
+        }
+    }
+
+    /// The user's own queue settings. The approval of an entry is the inbox card's click, not this.
+    func queueAct(_ body: (String) -> [String: Any]) async {
+        guard let pid = projectId else { return }
+        do {
+            try await SupervisorService.shared.queueAction(body(pid))
+            queueError = nil
+        } catch SupervisorServiceError.refused(_, let message, _) {
+            queueError = message
+        } catch SupervisorServiceError.token(let path) {
+            tokenError = path
+        } catch {
+            queueError = "The sidecar did not answer."
+        }
+        await refreshQueue()
+        await refreshInbox()
+    }
 
     /// Brief §12.1 — the pinned tab exists only while the supervisor is on.
     var chatTabVisible: Bool { SupervisorChat.tabVisible(mode: status?.mode) }
@@ -497,6 +544,8 @@ final class SupervisorModel {
         inspectorSegment = SupervisorInspectorSegment.restored(UserDefaults.standard.string(forKey: Self.segmentKey(pid)))
         chatItems = [:]
         follows = []
+        queue = nil
+        queueError = nil
         chatSheet = nil
         announcer = SupervisorAnnouncer()
         expandedCards = []
@@ -580,6 +629,9 @@ final class SupervisorModel {
             }
         case .follow:
             Task { await refreshFollows() }
+        case .queue:
+            // Read only while the workspace shows it, or once it has been read.
+            if inspectorSegment == .queue || queue != nil { Task { await refreshQueue() } }
         }
     }
 

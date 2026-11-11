@@ -337,6 +337,7 @@ extension SupervisorWorkspace {
                 VStack(alignment: .leading, spacing: 8) {
                     switch model.inspectorSegment {
                     case .tabs: SupervisorTabsList(model: model)
+                    case .queue: SupervisorQueueSection(model: model)
                     case .log:
                         SupervisorLogSection(model: model, tabTitle: { id in
                             SupervisorTabTitle.text(registry.entry(id) ?? SessionEntry(id: id), inbox: model.inbox)
@@ -355,6 +356,7 @@ extension SupervisorWorkspace {
         .background(MarvinTheme.background)
         .onChange(of: model.inspectorSegment) { _, seg in
             if seg == .log { Task { await model.refreshLedger() } }
+            if seg == .queue { Task { await model.refreshQueue() } }
         }
         .confirmationDialog("Disable the supervisor?", isPresented: $confirmDisable) {
             Button("Disable supervisor", role: .destructive) { Task { await model.disable() } }

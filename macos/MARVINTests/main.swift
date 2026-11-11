@@ -5680,7 +5680,8 @@ runner.suite("supervisor-workspace") {
         runner.expect(SupervisorInspectorSegment.restored("log"), equals: .log, "log restores")
         runner.expect(SupervisorInspectorSegment.restored("settings"), equals: .tabs, "settings is never the default")
         runner.expect(SupervisorInspectorSegment.restored("needs-you"), equals: .tabs, "no Needs you segment exists")
-        runner.expect(SupervisorInspectorSegment.allCases.map(\.title), equals: ["Tabs", "Log", "Settings"], "three segments, no inbox list")
+        runner.expect(SupervisorInspectorSegment.allCases.map(\.title), equals: ["Tabs", "Queue", "Log", "Settings"], "four segments, no inbox list")
+        runner.expect(SupervisorInspectorSegment.restored("queue"), equals: .queue, "the queue segment restores")
     }
     runner.test("the right column is covered only while open and enabled") {
         runner.expect(SupervisorWorkspace.coversRightColumn(open: true, mode: "shadow"), equals: true, "enabled")
@@ -5925,6 +5926,113 @@ runner.suite("ProjectNotices") {
     }
     runner.test("lifetimes are 1 hour, 24 hours and 7 days") {
         runner.expect(ProjectNoticeLifetime.allCases.map(\.hours), equals: [1, 24, 168], "hours")
+    }
+}
+
+// ADR-0133 — the approved queue as values: the card, the workspace's view, the selection.
+runner.suite("supervisor-queue") {
+    let entriesCard = #"""
+    {"items":[{"id":"i1","revision":1,"createdAt":"2026-11-11T10:00:00.000Z","sessionId":null,"kind":"queue",
+      "escalatedBecause":{"code":"human-only","label":"Opening tabs from a list is the user's act"},
+      "grounds":[],"actions":[{"id":"approve","label":"Approve all","role":"consent","recommended":true,"requiresExpanded":false},
+                              {"id":"approve-subset","label":"Approve selected…","role":"edit","recommended":false,"requiresExpanded":false},
+                              {"id":"dismiss","label":"Dismiss","role":"dismiss","recommended":false,"requiresExpanded":false}],
+      "queue":{"kind":"entries","warnings":["This queue holds 6 entries and none names a scopeRef."],
+        "entries":[{"id":"A","title":"Harvest","brief":"line 1\nline 2\nline 3\nline 4","posture":{"model":"claude-opus-5-5","thinkingMode":"high","permissionStrategy":"gated","mode":"plan"},"wider":["model"]},
+                   {"id":"B","title":"Export","brief":"b","after":["A"],"scopeRef":{"path":"docs/plan.md","heading":"Wave 8"}},
+                   {"id":"C","title":"Report","brief":"c"}]},
+      "modeAtCreation":"shadow","state":"open","resolvedBy":null,"burstRank":0}]}
+    """#
+    func card() -> SupervisorQueueCard? { SupervisorInboxItem.decodeList(Data(entriesCard.utf8))?.first?.queue }
+
+    runner.test("a queue item decodes its entries, warning and per-entry posture; other kinds carry no queue") {
+        let c = card()
+        runner.expect(c?.kind, equals: "entries", "kind")
+        runner.expect(c?.entries?.map(\.id), equals: ["A", "B", "C"], "entries in the proposal's order")
+        runner.expect(c?.entries?[0].wider, equals: ["model"], "the wider dimension is marked")
+        runner.expect(c?.entries?[1].after, equals: ["A"], "after")
+        runner.expect(c?.entries?[1].scopeRef?.heading, equals: "Wave 8", "scopeRef")
+        runner.expect(c?.warnings?.count, equals: 1, "the no-scopeRef warning reaches the card")
+        let plain = #"{"items":[{"id":"x","revision":1,"createdAt":"2026-11-11T10:00:00.000Z","sessionId":null,"kind":"confirm","escalatedBecause":{"code":"human-only","label":"l"},"grounds":[],"actions":[],"modeAtCreation":"shadow","state":"open"}]}"#
+        runner.expect(SupervisorInboxItem.decodeList(Data(plain.utf8))?.first?.queue == nil, "no queue on a confirm")
+    }
+    runner.test("a guard card carries the whole command; a card kind this client does not know still decodes") {
+        let long = "ssh runner true # " + String(repeating: "y", count: 400)
+        let json = #"{"items":[{"id":"g","revision":1,"createdAt":"2026-11-11T10:00:00.000Z","sessionId":null,"kind":"queue","escalatedBecause":{"code":"human-only","label":"l"},"grounds":[],"actions":[],"queue":{"kind":"guard","command":"\#(long)","previous":"echo old"},"modeAtCreation":"shadow","state":"open"},{"id":"f","revision":1,"createdAt":"2026-11-11T10:00:00.000Z","sessionId":null,"kind":"queue-from-the-future","escalatedBecause":{"code":"human-only","label":"l"},"grounds":[],"actions":[],"queue":{"kind":"mystery"},"modeAtCreation":"shadow","state":"open"}]}"#
+        let items = SupervisorInboxItem.decodeList(Data(json.utf8)) ?? []
+        runner.expect(items.count, equals: 2, "both decode — an unknown kind is a string, not a crash")
+        runner.expect(items[0].queue?.command, equals: long, "the command is not truncated")
+        runner.expect(items[0].queue?.previous, equals: "echo old", "what it replaces")
+        runner.expect(items[1].queue?.entries == nil && items[1].queue?.command == nil, "an unknown card kind carries nothing to act on")
+        runner.expect(SupervisorInboxItem.glyph(forKind: "queue"), equals: "list.number", "queue glyph")
+        runner.expect(SupervisorInboxItem.glyph(forKind: "queue-from-the-future"), equals: "hand.raised", "an unknown kind keeps the default glyph")
+    }
+    runner.test("the feed event decodes; an unknown event is still nil") {
+        runner.expect(SupervisorFeedEvent.decode(name: "supervisor.queue", data: Data(#"{"projectId":"p","change":"approved"}"#.utf8)), equals: .queue(change: "approved"), "queue")
+        runner.expect(SupervisorFeedEvent.decode(name: "supervisor.nonsense", data: Data("{}".utf8)) == nil, "unknown")
+    }
+    runner.test("selection: all by default, order is the card's, a subset names its ids, orphans block approval") {
+        var s = SupervisorQueueSelection(card: card()!)
+        runner.expect(s.isAll, "all ticked at first")
+        runner.expect(s.action.actionId, equals: "approve", "the whole list is one action")
+        runner.expect(s.buttonTitle, equals: "Approve all (3)", "title")
+        s.toggle("C"); s.toggle("A")
+        runner.expect(s.isAll == false, "a subset")
+        runner.expect(s.orphans, equals: ["B"], "B comes after A, which is not ticked")
+        runner.expect(s.canApprove == false, "an entry that would never open cannot be approved")
+        s.toggle("A")
+        runner.expect(s.canApprove, "ticking the predecessor lifts it")
+        runner.expect(s.action.actionId, equals: "approve-subset", "a subset is its own action")
+        runner.expect(s.action.edits?["ids"] as? [String], equals: ["A", "B"], "ids in the card's order, however they were ticked")
+        runner.expect(s.buttonTitle, equals: "Approve 2 of 3", "subset title")
+        s.toggle("nope")
+        runner.expect(s.count, equals: 2, "an id that is not on the card is ignored")
+        s.toggle("A"); s.toggle("B")
+        runner.expect(s.canApprove == false, "nothing ticked approves nothing")
+    }
+    let queueJSON = #"""
+    {"cap":3,"effectiveCap":1,"capLowered":{"from":3,"to":1,"reason":"the test machine is unreachable","at":"2026-11-11T10:00:00.000Z"},
+     "guard":{"command":"ssh runner true","approvedAt":"2026-11-11T09:00:00.000Z"},
+     "guardLast":{"at":"2026-11-11T10:01:00.000Z","ok":false,"exitCode":7,"timedOut":false},
+     "entries":[
+      {"id":"D","title":"Old one","briefHead":"d","status":"opened","position":null,"after":[],"scopeRef":null,"wider":[],"approvedAt":"2026-11-10T10:00:00.000Z","expiresAt":"2026-11-17T10:00:00.000Z","openedAt":"2026-11-10T11:00:00.000Z","openedSessionId":"s1","hold":null,"blocked":null},
+      {"id":"B","title":"Export","briefHead":"b","status":"queued","position":2,"after":["A"],"scopeRef":null,"wider":[],"approvedAt":"2026-11-11T09:00:00.000Z","expiresAt":"2026-11-18T09:00:00.000Z","openedAt":null,"openedSessionId":null,"hold":null,"blocked":{"code":"after","reason":"waiting for \"A\" (marvin/tab/a) to be merged","at":"2026-11-11T10:00:00.000Z"}},
+      {"id":"A","title":"Harvest","briefHead":"a","status":"queued","position":1,"after":[],"scopeRef":null,"wider":[],"approvedAt":"2026-11-11T09:00:00.000Z","expiresAt":"2026-11-18T09:00:00.000Z","openedAt":null,"openedSessionId":null,"hold":null,"blocked":null},
+      {"id":"C","title":"Report","briefHead":"c","status":"queued","position":3,"after":[],"scopeRef":{"path":"docs/plan.md","heading":"Wave 8"},"wider":[],"approvedAt":"2026-11-11T09:00:00.000Z","expiresAt":"2026-11-18T09:00:00.000Z","openedAt":null,"openedSessionId":null,"hold":{"reason":"the plan deferred it","at":"2026-11-11T10:00:00.000Z"},"blocked":null},
+      {"id":"E","title":"Stuck","briefHead":"e","status":"failed","position":null,"after":[],"scopeRef":null,"wider":[],"approvedAt":"2026-11-11T08:00:00.000Z","expiresAt":"2026-11-18T08:00:00.000Z","openedAt":null,"openedSessionId":null,"hold":null,"blocked":{"code":"interrupted","reason":"an earlier opening did not finish","at":"2026-11-11T10:00:00.000Z"}}]}
+    """#
+    runner.test("the queue view decodes (the guard key is a Swift keyword) and says order, cap, guard and every hold") {
+        let q = SupervisorQueueView.decode(Data(queueJSON.utf8))!
+        runner.expect(q.guardRef?.command, equals: "ssh runner true", "the guard command, whole")
+        runner.expect(SupervisorQueuePresentation.capLine(q), equals: "Cap 3 · lowered to 1: the test machine is unreachable", "a lowered cap names the alarm")
+        runner.expect(SupervisorQueuePresentation.guardLine(q), equals: "Last run: exit 7 — the queue is held.", "the guard's last run")
+        runner.expect(SupervisorQueuePresentation.summary(q), equals: "3 queued · 2 held", "summary")
+        runner.expect(SupervisorQueuePresentation.ordered(q.entries).map(\.id), equals: ["A", "B", "C", "E", "D"], "pending in approval order, then the settled")
+        let states = Dictionary(uniqueKeysWithValues: q.entries.map { ($0.id, SupervisorQueuePresentation.rowState($0)) })
+        runner.expect(states["A"]?.label, equals: "Next", "the first free entry is next")
+        runner.expect(states["B"]?.label, equals: "Waiting", "after is a wait")
+        runner.expect(states["B"]?.reason, equals: #"waiting for "A" (marvin/tab/a) to be merged"#, "with its reason")
+        runner.expect(states["C"]?.label, equals: "Held", "a supervisor hold")
+        runner.expect(states["C"]?.reason, equals: "the plan deferred it", "reads the hold's reason")
+        runner.expect(states["E"]?.tone, equals: .needsYou, "a failed opening needs the user")
+        runner.expect(states["D"]?.label, equals: "Opened", "opened")
+    }
+    runner.test("an unlowered cap, an absent guard and an empty queue read plainly") {
+        let q = SupervisorQueueView(cap: 1)
+        runner.expect(SupervisorQueuePresentation.capLine(q), equals: "Cap 1", "plain cap")
+        runner.expect(SupervisorQueuePresentation.guardLine(q), equals: "No guard command. Tabs open as soon as a slot is free.", "no guard")
+        runner.expect(SupervisorQueuePresentation.summary(q), equals: "Nothing queued", "empty")
+        runner.expect(SupervisorQueueView.decode(Data("nope".utf8)) == nil, "malformed")
+    }
+    runner.test("the user's cap steps within 0…20 and the bodies carry only the user's own settings") {
+        runner.expect(SupervisorQueuePresentation.steppedCap(20, by: 1), equals: 20, "ceiling")
+        runner.expect(SupervisorQueuePresentation.steppedCap(0, by: -1), equals: 0, "floor")
+        let cap = SupervisorQueuePresentation.capBody(projectId: "p", cap: 99)
+        runner.expect(cap["cap"] as? Int, equals: 20, "clamped")
+        runner.expect(cap["action"] as? String, equals: "cap", "action")
+        runner.expect(SupervisorQueuePresentation.proposeGuardBody(projectId: "p", command: "  true \n")["command"] as? String, equals: "true", "trimmed; it raises a card, it sets nothing")
+        let actions = [SupervisorQueuePresentation.restoreCapBody(projectId: "p"), SupervisorQueuePresentation.releaseBody(projectId: "p", id: "A"), SupervisorQueuePresentation.removeBody(projectId: "p", id: "A")].compactMap { $0["action"] as? String }
+        runner.expect(actions, equals: ["restore-cap", "release", "remove"], "no body approves an entry — that is the card's click")
     }
 }
 
