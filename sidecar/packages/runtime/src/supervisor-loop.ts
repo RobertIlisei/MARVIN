@@ -57,6 +57,7 @@ import type { VerbContext, VerbDeps, VerbPerform } from "./supervisor-mcp";
 import { addSupervisorReply, getUserMessage, type MessageRef, type ReplyOrigin, unansweredUserMessages } from "./supervisor-messages";
 import { ActionLimiter } from "./supervisor-policy";
 import type { WakeItem } from "./supervisor-prompt";
+import { ensureQueueOpener } from "./supervisor-queue-opener";
 import { sendAsSupervisor, tabSendRefusal } from "./supervisor-send";
 import {
   delegationRank,
@@ -965,6 +966,8 @@ export function ensureSupervisorLoop(): SupervisorLoop {
   if (!G.__marvinSupervisorLoop) {
     G.__marvinSupervisorLoop = new SupervisorLoop(defaultLoopDeps());
     G.__marvinSupervisorLoop.start();
+    // ADR-0133 — the approved queue's opener listens to the same project event stream.
+    ensureQueueOpener();
   }
   return G.__marvinSupervisorLoop;
 }

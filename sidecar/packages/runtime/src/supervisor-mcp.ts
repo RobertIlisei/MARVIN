@@ -1359,6 +1359,16 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     return note("new_session", null, "escalate", "human-only", "opening a tab is the user's act — the proposal is in their inbox (ADR-0127 §4 item 7)", { id, inboxItemId, argsDigest, grounds, argSummary: rawAct.summary });
   }
 
+  /** A ledger line for the ADR-0133 verbs, answered in their own words (the question-shaped `REPLY` strings do not fit). */
+  function qnote(verb: string, tab: null, decision: LedgerDecision, reasonCode: string, reason: string, extra: Partial<LedgerEntryInput> = {}): string {
+    const st = getSupervisorState(projectId);
+    appendLedgerEntry(projectId, { kind: "verb", verb, tab, wakeId: ctx.wakeId, mode: st.mode, decision, reason, reasonCode, ...extra });
+    if (decision === "refuse") return `Refused: ${reason}.`;
+    if (decision === "drop") return `Dropped: ${reason}.`;
+    if (decision === "propose") return `Recorded as a proposal (shadow mode): ${reason}. Nothing changed.`;
+    return `${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`;
+  }
+
   /**
    * ADR-0133 — propose a queue: a card listing briefs the user may approve as a
    * list. Nothing is written to the queue and nothing opens: the runtime opens
@@ -1367,12 +1377,12 @@ export function createSupervisorVerbs(ctx: VerbContext) {
    */
   async function propose_queue(args: ProposeQueueArgs): Promise<string> {
     const argsDigest = digestArgs({ entries: args.entries ?? [] });
-    const refuse = (code: string, reason: string) => note("propose_queue", null, "refuse", code, reason, { argsDigest });
+    const refuse = (code: string, reason: string) => qnote("propose_queue", null, "refuse", code, reason, { argsDigest });
     const st = getSupervisorState(projectId);
     if (st.mode === "off") return refuse("off", "the supervisor is off");
     const key = `propose_queue:${argsDigest}`;
     const gate = ctx.limiter.check(projectId, "", key, ctx.wake.acts);
-    if (!gate.ok) return note("propose_queue", null, "drop", "rate-limit", gate.reason, { argsDigest });
+    if (!gate.ok) return qnote("propose_queue", null, "drop", "rate-limit", gate.reason, { argsDigest });
     ctx.wake.acts += 1;
     ctx.limiter.record(projectId, "", key);
     const base = await ctx.deps.newTabBase?.();
@@ -1401,7 +1411,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       st.mode,
       id,
     );
-    return note("propose_queue", null, "escalate", "human-only", `${built.entries.length} brief(s) proposed — only the user's click on the card approves them; nothing opens before that (ADR-0133)`, {
+    return qnote("propose_queue", null, "escalate", "human-only", `${built.entries.length} brief(s) proposed — only the user's click on the card approves them; nothing opens before that (ADR-0133)`, {
       id,
       inboxItemId,
       argsDigest,
@@ -1413,7 +1423,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
   async function propose_guard(args: { command: string; reason?: string }): Promise<string> {
     const command = typeof args.command === "string" ? args.command.trim() : "";
     const argsDigest = digestArgs({ command });
-    const refuse = (code: string, reason: string) => note("propose_guard", null, "refuse", code, reason, { argsDigest });
+    const refuse = (code: string, reason: string) => qnote("propose_guard", null, "refuse", code, reason, { argsDigest });
     const st = getSupervisorState(projectId);
     if (st.mode === "off") return refuse("off", "the supervisor is off");
     if (!command || command.length > MAX_GUARD_CHARS || command.includes("\0")) return refuse("text", `the guard command is 1–${MAX_GUARD_CHARS} characters`);
@@ -1437,7 +1447,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       st.mode,
       id,
     );
-    return note("propose_guard", null, "escalate", "human-only", "the guard command is the user's to set — the card shows it in full (ADR-0133)", { id, inboxItemId, argsDigest, argSummary: rawAct.summary });
+    return qnote("propose_guard", null, "escalate", "human-only", "the guard command is the user's to set — the card shows it in full (ADR-0133)", { id, inboxItemId, argsDigest, argSummary: rawAct.summary });
   }
 
   /**
@@ -1450,25 +1460,25 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     const argsDigest = digestArgs({ to: args.to, reason });
     const st = getSupervisorState(projectId);
     const mode = categoryMode(st, "posture");
-    if (st.mode === "off") return note("lower_cap", null, "refuse", "off", "the supervisor is off", { argsDigest });
-    if (!reason) return note("lower_cap", null, "refuse", "reason", "say what the alarm is — the ledger and the workspace show it", { argsDigest });
+    if (st.mode === "off") return qnote("lower_cap", null, "refuse", "off", "the supervisor is off", { argsDigest });
+    if (!reason) return qnote("lower_cap", null, "refuse", "reason", "say what the alarm is — the ledger and the workspace show it", { argsDigest });
     const q = readQueue(projectId);
     const cur = q.capLowered ? Math.min(q.cap, q.capLowered.to) : q.cap;
-    if (typeof args.to !== "number" || !Number.isInteger(args.to) || args.to < 0) return note("lower_cap", null, "refuse", "cap", "the cap is a whole number, 0 or more", { argsDigest });
-    if (args.to >= cur) return note("lower_cap", null, "refuse", "raise-refused", `the cap is ${cur}; you may lower it, never raise it`, { argsDigest });
-    if (mode !== "autonomous") return note("lower_cap", null, "propose", "shadow", `would lower the cap from ${cur} to ${args.to}: ${reason}`, { argsDigest });
+    if (typeof args.to !== "number" || !Number.isInteger(args.to) || args.to < 0) return qnote("lower_cap", null, "refuse", "cap", "the cap is a whole number, 0 or more", { argsDigest });
+    if (args.to >= cur) return qnote("lower_cap", null, "refuse", "raise-refused", `the cap is ${cur}; you may lower it, never raise it`, { argsDigest });
+    if (mode !== "autonomous") return qnote("lower_cap", null, "propose", "shadow", `would lower the cap from ${cur} to ${args.to}: ${reason}`, { argsDigest });
     const hold = actHold();
-    if (hold) return note("lower_cap", null, "refuse", hold.reasonCode, hold.reason, { argsDigest });
+    if (hold) return qnote("lower_cap", null, "refuse", hold.reasonCode, hold.reason, { argsDigest });
     const done = lowerCap(projectId, args.to, reason);
-    if (!done.ok) return note("lower_cap", null, "refuse", "cap", done.error, { argsDigest });
-    return note("lower_cap", null, "act", "allowed", `lowered the cap from ${done.from} to ${done.to}: ${reason} — restore it with restore_cap when the alarm ends`, { argsDigest });
+    if (!done.ok) return qnote("lower_cap", null, "refuse", "cap", done.error, { argsDigest });
+    return qnote("lower_cap", null, "act", "allowed", `lowered the cap from ${done.from} to ${done.to}: ${reason} — restore it with restore_cap when the alarm ends`, { argsDigest });
   }
 
   /** ADR-0133 — put the cap back to the user's number. */
   async function restore_cap(_args: Record<string, never> = {}): Promise<string> {
     const done = restoreCap(projectId);
-    if (!done.ok) return note("restore_cap", null, "refuse", "not-lowered", done.error);
-    return note("restore_cap", null, "act", "allowed", `restored the cap to the user's ${done.cap}`);
+    if (!done.ok) return qnote("restore_cap", null, "refuse", "not-lowered", done.error);
+    return qnote("restore_cap", null, "act", "allowed", `restored the cap to the user's ${done.cap}`);
   }
 
   /** ADR-0133 — hold one approved entry, with a reason. Only the user releases it; the order is never yours to change. */
@@ -1478,14 +1488,14 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     const argsDigest = digestArgs({ id, reason });
     const st = getSupervisorState(projectId);
     const mode = categoryMode(st, "posture");
-    if (st.mode === "off") return note("hold_queue_entry", null, "refuse", "off", "the supervisor is off", { argsDigest });
-    if (!reason) return note("hold_queue_entry", null, "refuse", "reason", "a hold needs a reason — the user reads it in the workspace", { argsDigest });
-    if (mode !== "autonomous") return note("hold_queue_entry", null, "propose", "shadow", `would hold "${id}": ${reason}`, { argsDigest });
+    if (st.mode === "off") return qnote("hold_queue_entry", null, "refuse", "off", "the supervisor is off", { argsDigest });
+    if (!reason) return qnote("hold_queue_entry", null, "refuse", "reason", "a hold needs a reason — the user reads it in the workspace", { argsDigest });
+    if (mode !== "autonomous") return qnote("hold_queue_entry", null, "propose", "shadow", `would hold "${id}": ${reason}`, { argsDigest });
     const hold = actHold();
-    if (hold) return note("hold_queue_entry", null, "refuse", hold.reasonCode, hold.reason, { argsDigest });
+    if (hold) return qnote("hold_queue_entry", null, "refuse", hold.reasonCode, hold.reason, { argsDigest });
     const done = holdEntry(projectId, id, reason);
-    if (!done.ok) return note("hold_queue_entry", null, "refuse", "no-entry", done.error, { argsDigest });
-    return note("hold_queue_entry", null, "act", "allowed", `held "${id}": ${reason} — the user releases it`, { argsDigest });
+    if (!done.ok) return qnote("hold_queue_entry", null, "refuse", "no-entry", done.error, { argsDigest });
+    return qnote("hold_queue_entry", null, "act", "allowed", `held "${id}": ${reason} — the user releases it`, { argsDigest });
   }
 
   /** ADR-0128 §5 — what a reply links to: the ids the server can resolve, labelled from its own records. */

@@ -31,6 +31,7 @@ import {
   newLedgerId,
   supervisorRoot,
 } from "./supervisor-ledger";
+import { clearStaleQueueLocks } from "./supervisor-queue-lock";
 import { announceProjectEvent } from "./turn-registry";
 
 export { supervisorDir } from "./supervisor-ledger";
@@ -366,6 +367,12 @@ export function bootSupervisor(): { armed: string[] } {
     }
   }
   writeToken();
+  // ADR-0133 — an opener lock whose pid is gone must not hold a project's queue shut.
+  try {
+    clearStaleQueueLocks();
+  } catch {
+    /* a lock that cannot be cleared holds only the queue, and says so */
+  }
   // Authority that survived a restart is ledgered, so the ledger shows where
   // an act after a boot got its permission from.
   for (const s of st.states.values()) {

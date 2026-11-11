@@ -93,7 +93,7 @@ describe("the queue lives in the supervisor dir, and only an approved line is an
 describe("propose_queue — a card, never an entry", () => {
   it("raises a queue card listing each brief, writes nothing to the queue, and ledgers it", async () => {
     const reply = await verbs().propose_queue({ entries: [entry("A"), entry("B", { after: ["A"] })] });
-    expect(reply).toMatch(/Escalated/);
+    expect(reply).toMatch(/only the user's click/);
     expect(readQueue("proj").entries).toEqual([]);
     const [item] = listInbox("proj");
     expect(item).toMatchObject({ kind: "queue", state: "open", act: { type: "queue", what: "entries" } });

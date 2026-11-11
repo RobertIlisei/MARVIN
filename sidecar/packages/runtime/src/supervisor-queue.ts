@@ -411,23 +411,3 @@ export function buildProposal(
   }
   return { ok: true, entries, warnings, dedupeKey: `queue:${digest(entries)}` };
 }
-
-/** Branches a queued entry still needs read as `merged` (its predecessors'): a sweep must not delete them first (ADR-0133 decision 3). */
-export function branchesHeldForQueue(projectId: string): Set<string> {
-  const out = new Set<string>();
-  let q: QueueFile;
-  try {
-    q = readQueue(projectId);
-  } catch {
-    return out;
-  }
-  const byId = new Map(q.entries.map((e) => [e.id, e]));
-  for (const e of q.entries) {
-    if (e.status !== "queued") continue;
-    for (const a of e.after ?? []) {
-      const b = byId.get(a)?.openedBranch;
-      if (b) out.add(b);
-    }
-  }
-  return out;
-}
