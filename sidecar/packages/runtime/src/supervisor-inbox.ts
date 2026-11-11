@@ -104,6 +104,8 @@ export type InboxAct =
   /** `reopensScope`: a scope review's "what is missing" — sent to a scope-met tab on the user's click (§4 item 6). */
   | { type: "send"; sessionId: string; text: string; kind: "nudge" | "instruction"; grounds: LedgerGround[]; reopensScope?: boolean }
   | { type: "cancel"; sessionId: string }
+  /** ADR-0131 — a supervisor notice that named a human-only act: the user's click posts it to every tab. */
+  | { type: "notice"; text: string; ttlHours: number }
   | { type: "worktrees"; op: "merge" | "merge-all" | "prepare-mr" | "drop"; slugs: string[]; push?: boolean; openMergeRequest?: boolean }
   | { type: "close"; sessionId: string; worktree: "keep" | "merge" | "discard" }
   | { type: "new-tab"; requestId: string; title?: string; posture: SessionPosture; grounds: LedgerGround[]; delegation?: NewTabDelegation; follow?: { until: "scope-met" | "merge-ready" } }
@@ -234,6 +236,8 @@ export function buildRawAct(toolName: string, input: Record<string, unknown>): R
     }
     case "send":
       return make(`Send to tab ${String(input.marvinSessionId ?? "")}: ${firstLine(String(input.message ?? ""), 120)}`);
+    case "post_notice":
+      return make(`Post a notice to every tab in the project: ${firstLine(String(input.text ?? ""), 120)}`);
     case "cancel":
       return make(`Stop the running turn in tab ${String(input.marvinSessionId ?? "")}`);
     case "new_session":
@@ -459,6 +463,7 @@ const PERFORM_LABEL: Record<string, string> = {
   posture: "Apply posture",
   send: "Send to the tab",
   cancel: "Stop the turn",
+  notice: "Post to every tab",
 };
 
 /** The chips an item offers, in order. Labels come from here so the app invents no act verbs. */

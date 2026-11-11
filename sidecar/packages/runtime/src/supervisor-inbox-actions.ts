@@ -43,6 +43,8 @@ export interface InboxPerform {
    * Refused for a scope-met tab unless the item is a scope review's reopening.
    */
   send(a: { sessionId: string; text: string; kind: "nudge" | "instruction"; grounds: LedgerGround[]; ledgerId: string | null; editedByUser: boolean; reopensScope: boolean }): Promise<Done>;
+  /** ADR-0131 — post a project notice as the user's act (the card's text is the supervisor's; the user's click posts it). */
+  notice(a: { text: string; ttlHours: number }): Done;
   /** Stop the tab's live turn, as the user. */
   cancel(sessionId: string): Done;
   worktrees(a: { op: "merge" | "merge-all" | "prepare-mr" | "drop"; slugs: string[]; push?: boolean | undefined; openMergeRequest?: boolean | undefined }): Promise<Done>;
@@ -125,6 +127,9 @@ async function perform(projectId: string, item: InboxRecord, action: InboxAction
       const sent = await p.send({ sessionId: act.sessionId, text, kind: act.kind, grounds: act.grounds, ledgerId: item.ledgerId, editedByUser, reopensScope: act.reopensScope === true });
       return sent.ok ? { ...sent, editedByUser } : sent;
     }
+    case "notice":
+      if (containsSecretShape(act.text)) return fail(400, "the notice carries a secret-shaped string (ADR-0127 §6) — it was not posted", "secret");
+      return p.notice({ text: act.text, ttlHours: act.ttlHours });
     case "cancel":
       return p.cancel(act.sessionId);
     case "worktrees":

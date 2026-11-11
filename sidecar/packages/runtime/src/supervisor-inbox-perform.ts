@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 
 import { answerQuestion, resolveConfirm } from "./confirm-answer";
+import { addNotice } from "./notices";
 import { activeModelLookup, applyPostureChange } from "./posture";
 import { closeSession } from "./session-close";
 import { readSessionMeta, type SessionPosture, type SessionTree, upsertSessionMeta } from "./session-meta";
@@ -118,6 +119,11 @@ export function defaultInboxPerform(projectId: string, workDir: string, token: s
       }
       const r = await sendAsSupervisor({ projectId, marvinSessionId: a.sessionId, text: a.text, kind: a.kind, grounds: a.grounds, ledgerId: a.ledgerId, editedByUser: a.editedByUser });
       return r.ok ? { ok: true, message: r.queued ? "queued until the tab's turn ends" : "sent" } : { ok: false, status: 409, code: r.code, error: r.reason };
+    },
+    // The words stay the supervisor's; the user's click posted them to the project root's store.
+    notice: (a) => {
+      const r = addNotice(workDir, { text: a.text, author: "supervisor", ttlHours: a.ttlHours });
+      return r.ok ? { ok: true, message: "posted to every tab" } : { ok: false, status: r.code === "full" ? 409 : 400, error: r.error };
     },
     cancel: (sessionId) => (cancelLiveTurn(sessionId, "user") ? { ok: true } : { ok: false, status: 409, error: "the tab has no turn running" }),
     worktrees: async (a) => {

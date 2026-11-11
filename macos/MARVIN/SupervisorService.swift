@@ -226,6 +226,21 @@ final class SupervisorService {
     func stopFollow(projectId: String, id: String) async throws {
         _ = try await call("api/supervisor/follows", method: "POST", body: ["projectId": projectId, "id": id, "action": "stop"])
     }
+
+    // ADR-0131 — project notices: the user's side of `/api/notices` (token-gated like the supervisor's routes).
+    func notices(projectId: String) async throws -> [ProjectNotice] {
+        let data = try await call("api/notices", query: [URLQueryItem(name: "projectId", value: projectId)])
+        guard let list = ProjectNotices.decodeList(data) else { throw SupervisorServiceError.transport("unreadable notices") }
+        return list
+    }
+
+    func postNotice(projectId: String, text: String, ttlHours: Int) async throws {
+        _ = try await call("api/notices", method: "POST", body: ["projectId": projectId, "text": text, "ttlHours": ttlHours])
+    }
+
+    func retireNotice(projectId: String, id: String) async throws {
+        _ = try await call("api/notices", method: "DELETE", query: [URLQueryItem(name: "projectId", value: projectId), URLQueryItem(name: "id", value: id)])
+    }
 }
 
 /// What the Sessions pane draws for the supervisor, in one observable place.

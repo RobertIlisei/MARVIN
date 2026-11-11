@@ -20,6 +20,7 @@
     "./session-watch": "./src/session-watch.ts",
     "./posture": "./src/posture.ts",
     "./confirm-answer": "./src/confirm-answer.ts",
+    "./notices": "./src/notices.ts",
     "./supervisor-state": "./src/supervisor-state.ts",
     "./supervisor-ledger": "./src/supervisor-ledger.ts",
     "./supervisor-loop": "./src/supervisor-loop.ts",
