@@ -3346,6 +3346,27 @@ runner.suite("session-row-state") {
         runner.expect(SessionRowStateDeriver.derive(entry { $0.isDraft = true }) == .draft, "draft")
         runner.expect(SessionRowStateDeriver.derive(entry { _ in }) == .idle, "idle")
     }
+    // ADR-0130 — `waiting` and `done` come from the wire state; an unknown state reads idle.
+    runner.test("a waiting row and a done row are mapped from the wire; an unknown state stays idle") {
+        var l = SessionLedger()
+        let json = #"{"rows":[{"marvinSessionId":"w","state":"waiting","waitingOn":{"kind":"job","label":"build","since":"2026-11-11T10:00:00.000Z"}},{"marvinSessionId":"d","state":"done","lastTurn":{"turnId":"t","outcome":"completed","marker":"scope-met"}},{"marvinSessionId":"u","state":"quarantined-by-a-newer-sidecar"},{"marvinSessionId":"e","state":"failed","lastTurn":{"turnId":"t","outcome":"error"},"waitingOn":{"kind":"wakeup"}}]}"#
+        l.apply(snapshot: SessionWatchRowWire.decodeSnapshot(Data(json.utf8))!, now: Date())
+        runner.expect(SessionRowStateDeriver.derive(l["w"]!), equals: SessionRowState.waiting, "waiting")
+        runner.expect(l["w"]?.waitingOn?.kind, equals: "job", "what it waits on")
+        runner.expect(l["w"]?.waitingOn?.label, equals: "build", "its label")
+        runner.expect(SessionRowStateDeriver.derive(l["d"]!), equals: SessionRowState.done, "done")
+        runner.expect(SessionRowStateDeriver.derive(l["u"]!), equals: SessionRowState.idle, "unknown state reads idle")
+        runner.expect(SessionRowStateDeriver.derive(l["e"]!), equals: SessionRowState.failed, "failed outranks waiting")
+        let later = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"w","state":"idle"}]}"#.utf8))!
+        l.apply(snapshot: later, now: Date())
+        runner.expect(SessionRowStateDeriver.derive(l["w"]!), equals: SessionRowState.idle, "the wait clears with the next snapshot")
+    }
+    runner.test("a live turn outranks waiting and done; waiting sorts before idle and done") {
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.liveTurnId = "t"; $0.waitingOn = .init(kind: "job"); $0.isDone = true }) == .working, "live wins")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.waitingOn = .init(kind: "job"); $0.isDone = true }) == .waiting, "waiting outranks done")
+        let ranks = [SessionRowState.done, .idle, .waiting, .failed].sorted { $0.sortRank < $1.sortRank }
+        runner.expect(ranks == [.failed, .waiting, .idle, .done], "ordering")
+    }
     runner.test("sort rank puts attention first") {
         let ranks = [SessionRowState.idle, .needsYou(2), .draft, .working, .failed, .interrupted].sorted { $0.sortRank < $1.sortRank }
         runner.expect(ranks.first == .needsYou(2) && ranks.last == .draft, "ordering")
@@ -3363,6 +3384,12 @@ runner.suite("session-idle-collapse") {
         let p = SessionIdleCollapse.partition(rows, selected: "sel", now: now, expanded: false)
         runner.expect(p.visible, equals: ["w", "i1", "i2", "i3", "i4", "sel"], "visible in input order")
         runner.expect(p.collapsed, equals: ["i5"], "only the old, non-selected extra idle row")
+    }
+    runner.test("a done row collapses with idle rows; a waiting row never does") {
+        let rows = [row("a", .idle, age: 999), row("b", .idle, age: 999), row("c", .done, age: 999), row("d", .done, age: 999), row("w", .waiting, age: 999)]
+        let p = SessionIdleCollapse.partition(rows, selected: nil, now: now, expanded: false)
+        runner.expect(p.collapsed, equals: ["d"], "the fourth idle-or-done row collapses")
+        runner.expect(p.visible.contains("w"), "waiting stays")
     }
     runner.test("expanded shows everything; a working row is never collapsed") {
         let rows = [row("a", .idle, age: 999), row("b", .idle, age: 999), row("c", .idle, age: 999), row("d", .idle, age: 999), row("e", .working)]

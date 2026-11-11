@@ -30,6 +30,11 @@ public struct SessionEntry: Equatable, Identifiable, Sendable {
     public var lastTurnAt: Date?
     /// The sidecar marked the last turn as cut off by a restart.
     public var interrupted: Bool = false
+    /// ADR-0130 — what the session waits on (its own job or wakeup), set only
+    /// while the sidecar's row says `waiting`.
+    public var waitingOn: SessionWatchRowWire.WaitingOn?
+    /// ADR-0130 — the sidecar's row says `done`: the last turn closed scope-met.
+    public var isDone: Bool = false
     public var diff: SessionDiffSummary?
     public var plan: SessionPlanProgress?
     /// ADR-0124 — graph calls vs source reads, from the last snapshot.
@@ -108,6 +113,9 @@ public struct SessionLedger: Equatable, Sendable {
             e.interrupted = false
             e.isDraft = false
             e.closedAt = nil
+            // A new turn ends the wait and the scope-met mark; the next snapshot restates them.
+            e.waitingOn = nil
+            e.isDone = false
         case .ended(_, let turnId, let outcome, let costUsd):
             // A stale `ended` for an older turn must not close a newer one.
             if let live = e.liveTurnId, live != turnId { break }
@@ -213,6 +221,9 @@ public struct SessionLedger: Equatable, Sendable {
                 if let endedAt = last.endedAt, let d = Self.parseISO(endedAt) { e.lastTurnAt = d }
             }
             if row.state == "interrupted" { e.interrupted = true }
+            // An unknown state string sets neither, so it keeps reading as idle.
+            e.waitingOn = row.state == "waiting" ? (row.waitingOn ?? .init(kind: "job")) : nil
+            e.isDone = row.state == "done"
             entries[row.marvinSessionId] = e
         }
     }

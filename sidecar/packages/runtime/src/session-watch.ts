@@ -41,10 +41,20 @@ import { type Delegation, getSupervisorState } from "./supervisor-state";
 import { lastActAtByTab, type ProposalView, proposalView } from "./supervisor-status";
 import { isUserOnlyConfirm, type TouchedTurn, touchedTurnFor } from "./supervisor-touch";
 import { listLiveTurns } from "./turn-registry";
-import { listWakeups } from "./wakeup-scheduler";
+import { listWakeups, type WakeupRecord } from "./wakeup-scheduler";
 import { type ReconciledWorktree, reconcileSessionWorktreeAsync, reconcileWorktreesAsync } from "./worktrees";
 
-export type SessionWatchState = "working" | "idle" | "awaiting-you" | "failed" | "interrupted";
+export type SessionWatchState = "working" | "idle" | "awaiting-you" | "failed" | "interrupted" | "waiting" | "done";
+
+/** ADR-0130 — what a not-live session is waiting on: its own job or its own wakeup. */
+export interface SessionWatchWaitingOn {
+  kind: "job" | "wakeup";
+  label: string;
+  since: string;
+}
+
+/** ADR-0130 decision 3 — the last turn as the row reports it; `marker` is derived from `scopeMetAt`, never persisted. */
+export type SessionWatchLastTurn = SessionLastTurn & { marker: "scope-met" | null };
 
 export interface SessionWatchDiff {
   added: number;
@@ -97,7 +107,9 @@ export interface SessionWatchRow {
   plan: SessionPlanProgress | null;
   /** ADR-0124 — graph calls vs source reads (Read/Grep/Glob and Bash), whole session. */
   graphUsage: SessionGraphUsage | null;
-  lastTurn: SessionLastTurn | null;
+  lastTurn: SessionWatchLastTurn | null;
+  /** ADR-0130 — the session's own pending job or wakeup; `supervisor.waitingOnOwn` keeps the kind alone. */
+  waitingOn: SessionWatchWaitingOn | null;
   cost: { turns: number; costUsd: number };
   title: string | null;
   updatedAt: string;
@@ -136,17 +148,26 @@ export function deriveSessionState(input: {
   /** When the last turn started; an `interrupted` older than the window reads as idle. */
   lastStartedAt?: string | undefined;
   now?: number | undefined;
+  /** ADR-0130 decision 1 — a turn ended on something only the user can answer. Fed by milestone 2; always falsy before. */
+  attention?: boolean | number | undefined;
+  /** ADR-0130 — the session has its own job or wakeup pending. */
+  waitingOn?: "job" | "wakeup" | null | undefined;
+  /** ADR-0130 — the last turn closed scope-met (`scopeMetAt` is set). */
+  scopeMet?: boolean | undefined;
 }): SessionWatchState {
   if (input.live && input.pending > 0) return "awaiting-you";
   if (input.live) return "working";
+  if (input.attention) return "awaiting-you";
   if (input.lastOutcome === "interrupted") {
     // ADR-0107 addendum 2 — a months-old cut-off is history, not a call to
     // action; the resume offer only makes sense for a recent one.
     const startedMs = input.lastStartedAt ? Date.parse(input.lastStartedAt) : Number.NaN;
-    if (Number.isFinite(startedMs) && (input.now ?? Date.now()) - startedMs > RECENT_WINDOW_MS) return "idle";
-    return "interrupted";
+    const stale = Number.isFinite(startedMs) && (input.now ?? Date.now()) - startedMs > RECENT_WINDOW_MS;
+    if (!stale) return "interrupted";
   }
   if (input.lastOutcome === "error") return "failed";
+  if (input.waitingOn) return "waiting";
+  if (input.scopeMet) return "done";
   return "idle";
 }
 
@@ -395,7 +416,10 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
   // Milestone 5 — open inbox items per tab. Items outlive a supervisor switched off, so they are read regardless.
   const escalations = isSafeProjectId(projectId) ? openEscalationCounts(projectId).byTab : new Map<string, number>();
   // One read of the wakeup store per build, not per row: this route is polled.
-  const ownWakeups = new Set(listWakeups({ projectId }).filter((w) => w.author !== "supervisor").map((w) => w.marvinSessionId));
+  const ownWakeups = new Map<string, WakeupRecord>();
+  for (const w of listWakeups({ projectId })) {
+    if (w.author !== "supervisor" && !ownWakeups.has(w.marvinSessionId)) ownWakeups.set(w.marvinSessionId, w);
+  }
   // Rows resolve concurrently: each one's git facts are independent.
   return Promise.all(ids.slice(0, MAX_ROWS).map(async (id) => {
     const meta: SessionMeta | null = metas.get(id) ?? readSessionMeta(projectId, id);
@@ -408,6 +432,13 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
     const base = tree.mode === "worktree" ? tree.base : null;
     const summary = summaries.get(id);
     const cost = costs.get(id) ?? { turns: 0, costUsd: 0 };
+    const job = listBackgroundJobs(id)[0];
+    const wakeup = ownWakeups.get(id);
+    const waitingOn: SessionWatchWaitingOn | null = job
+      ? { kind: "job", label: job.reason || job.command.slice(0, 60), since: job.startedAt }
+      : wakeup
+        ? { kind: "wakeup", label: wakeup.reason, since: wakeup.createdAt }
+        : null;
     return {
       marvinSessionId: id,
       projectId,
@@ -417,6 +448,9 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
         lastOutcome: meta?.lastTurn?.outcome,
         lastStartedAt: meta?.lastTurn?.startedAt,
         now,
+        attention: false,
+        waitingOn: waitingOn?.kind ?? null,
+        scopeMet: !!meta?.scopeMetAt,
       }),
       turn: turn
         ? { turnId: turn.turnId, kind: turn.kind, startedAt: new Date(turn.startedAt).toISOString(), mutated: turn.mutated, ...(turn.author === "supervisor" ? { author: "supervisor" as const } : {}) }
@@ -435,7 +469,8 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
       diff: cwdInfo.present ? await sessionDiff(cwdInfo.cwd, base, now) : null,
       plan: planProgress(projectId, id),
       graphUsage: sessionGraphUsage(projectId, id),
-      lastTurn: meta?.lastTurn ?? null,
+      lastTurn: meta?.lastTurn ? { ...meta.lastTurn, marker: meta.scopeMetAt ? "scope-met" : null } : null,
+      waitingOn,
       cost,
       title: meta?.title ?? summary?.firstUserMessage ?? null,
       updatedAt: meta?.updatedAt ?? summary?.updatedAt ?? new Date(now).toISOString(),
@@ -446,7 +481,7 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
         delegation: delegations[id] ?? "off",
         sharedCheckout: tree.mode !== "worktree",
         touchedTurn: touchedTurnFor(projectId, id, meta),
-        waitingOnOwn: listBackgroundJobs(id).length ? "job" : ownWakeups.has(id) ? "wakeup" : null,
+        waitingOnOwn: waitingOn?.kind ?? null,
         stoppedByUser: meta?.lastTurn?.outcome === "stopped" && meta.lastTurn.stoppedBy !== "supervisor",
         lastActAt: lastActs.get(id) ?? null,
         openEscalations: escalations.get(id) ?? 0,

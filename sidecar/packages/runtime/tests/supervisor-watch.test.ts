@@ -56,6 +56,46 @@ describe("the watch row's `supervisor` object (brief §10.4)", () => {
     expect((await row())?.supervisor).toEqual({ delegation: "answer-questions", sharedCheckout: true, touchedTurn: touched, waitingOnOwn: "wakeup", stoppedByUser: true, lastActAt: null, openEscalations: 0 });
   });
 
+  // ADR-0130 — the row says what the tab waits on, and whether it closed scope-met.
+  it("a pending wakeup reads waiting, with its reason and creation time; the marker stays null", async () => {
+    const res = scheduleWakeup({ marvinSessionId: "tab-w", projectId: "proj", cwd: workDir, workDir, model: POSTURE.model, advisorModel: null, personality: "ultron", permissionStrategy: "auto", thinkingMode: "high", delaySeconds: 600, schedulingDepth: 0, prompt: "check", reason: "build" });
+    if (!res.ok) throw new Error(res.error);
+    updateSessionMeta("proj", "tab-w", { lastTurn: { turnId: "turn-1", startedAt: new Date().toISOString(), outcome: "completed" } });
+    const r = await row();
+    expect(r?.state).toBe("waiting");
+    expect(r?.waitingOn).toEqual({ kind: "wakeup", label: "build", since: res.record.createdAt });
+    expect(r?.lastTurn?.marker).toBeNull();
+  });
+
+  it("scopeMetAt reads done and marks the last turn scope-met", async () => {
+    updateSessionMeta("proj", "tab-w", { lastTurn: { turnId: "turn-1", startedAt: new Date().toISOString(), outcome: "completed" }, scopeMetAt: new Date().toISOString() });
+    const r = await row();
+    expect(r?.state).toBe("done");
+    expect(r?.waitingOn).toBeNull();
+    expect(r?.lastTurn?.marker).toBe("scope-met");
+  });
+
+  it("a pending job reads waiting, labelled by its reason or the first 60 characters of its command", async () => {
+    const { __resetBackgroundJobsForTests, __setJobsFileForTests, cancelBackgroundJob, startBackgroundJob } = await import("../src/background-jobs");
+    __setJobsFileForTests(path.join(dataDir, "background-jobs.json"));
+    const ctx = { marvinSessionId: "tab-w", projectId: "proj", cwd: workDir, model: "m", advisorModel: null, personality: "marvin" as const, permissionStrategy: "auto" as const, thinkingMode: "high", depth: 0 };
+    try {
+      const withReason = startBackgroundJob({ command: "sleep 30", reason: "long build", ctx });
+      if (!withReason.ok) throw new Error(withReason.error);
+      expect((await row())?.waitingOn).toMatchObject({ kind: "job", label: "long build", since: expect.any(String) });
+      const command = `sleep 30 # ${"x".repeat(80)}`;
+      const noReason = startBackgroundJob({ command, reason: "", ctx: { ...ctx, marvinSessionId: "tab-j2" } });
+      if (!noReason.ok) throw new Error(noReason.error);
+      const other = (await buildSessionWatch({ projectId: "proj", workDir, sessionIds: ["tab-j2"] }))[0];
+      expect(other?.waitingOn?.label).toBe(command.slice(0, 60));
+      cancelBackgroundJob(withReason.id);
+      cancelBackgroundJob(noReason.id);
+    } finally {
+      __resetBackgroundJobsForTests();
+      __setJobsFileForTests(null);
+    }
+  });
+
   it("the live turn row names a supervisor author", async () => {
     const t = registerLiveTurn({ turnId: "turn-s", marvinSessionId: "tab-w", projectId: "proj", kind: "machine", author: "supervisor" });
     expect((await row())?.turn).toMatchObject({ turnId: "turn-s", kind: "machine", author: "supervisor" });

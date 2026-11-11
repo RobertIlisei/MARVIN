@@ -256,6 +256,17 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
         public let endedAt: String?
         public let outcome: String?
         public let error: String?
+        /// ADR-0130 — `scope-met` when the turn closed scope-met; nil from an older sidecar.
+        public let marker: String?
+    }
+    /// ADR-0130 — what a session waits on: its own background job or wakeup.
+    public struct WaitingOn: Decodable, Equatable, Sendable {
+        public let kind: String
+        public let label: String?
+        public let since: String?
+        public init(kind: String, label: String? = nil, since: String? = nil) {
+            self.kind = kind; self.label = label; self.since = since
+        }
     }
     public struct Cost: Decodable, Equatable, Sendable {
         public let turns: Int
@@ -300,6 +311,8 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
     /// ADR-0124 — nil from an older sidecar or a session that never read anything.
     public let graphUsage: SessionGraphUsage?
     public let lastTurn: LastTurn?
+    /// ADR-0130 — nil from an older sidecar, or when the session waits on nothing.
+    public let waitingOn: WaitingOn?
     public let cost: Cost?
     public let title: String?
     public let updatedAt: String?

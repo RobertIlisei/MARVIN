@@ -3159,6 +3159,11 @@ final class ChatPreviewModel {
                         Image(systemName: "xmark")
                             .font(.system(size: 8, weight: .bold))
                             .foregroundStyle(GitDecorationColor.deleted)
+                    } else if state == .waiting || state == .done {
+                        // ADR-0130 — neutral glyphs; the outcome hues stay with outcomes.
+                        Image(systemName: state == .waiting ? "clock" : "checkmark")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(Self.tabTint(state))
                     }
                 }
             }
@@ -3264,6 +3269,10 @@ final class ChatPreviewModel {
         case .working: return GitDecorationColor.modified
         case .interrupted: return .orange
         case .failed: return GitDecorationColor.deleted
+        // ADR-0130 — neutral on purpose: green/orange/red are outcome hues (DESIGN.md);
+        // the pane tells these two apart by glyph, the dot by shade.
+        case .waiting: return .secondary
+        case .done: return MarvinTheme.textMuted
         case .idle: return MarvinTheme.textMuted
         case .draft: return .secondary
         }

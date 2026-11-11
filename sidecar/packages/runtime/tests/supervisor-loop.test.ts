@@ -58,6 +58,7 @@ function row(id: string): SessionWatchRow {
     plan: { done: 0, total: 3, open: 3, lastTodoAt: null, seeded: true },
     graphUsage: null,
     lastTurn: null,
+    waitingOn: null,
     cost: { turns: 1, costUsd: 0 },
     title: id,
     updatedAt: new Date().toISOString(),

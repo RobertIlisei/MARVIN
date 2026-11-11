@@ -37,6 +37,7 @@ enum SurfaceRoutesMore {
         "a1111111-0000-4000-8000-000000000001", "b2222222-0000-4000-8000-000000000002",
         "c3333333-0000-4000-8000-000000000003", "d4444444-0000-4000-8000-000000000004",
         "e5555555-0000-4000-8000-000000000005", "f6666666-0000-4000-8000-000000000006",
+        "a7777777-0000-4000-8000-00000000000a", "a8888888-0000-4000-8000-00000000000b",
     ]
 
     /// Relative to now, so "3m" renders as 3m whenever the snapshot is taken.
@@ -72,6 +73,10 @@ enum SurfaceRoutesMore {
             #"{"marvinSessionId":"\#(openIds[4])","state":"failed","title":"Migrate the config loader","turn":null,"activity":null,"pending":[],"worktree":null,"tree":{"mode":"shared"},"lastTurn":{"turnId":"t-e1","startedAt":"\#(iso(15))","endedAt":"\#(iso(12))","outcome":"error","error":"Typecheck failed: TS2345"},"cost":{"turns":3,"costUsd":0.26},"supervisor":{"delegation":"off","sharedCheckout":true,"touchedTurn":null,"waitingOnOwn":null,"stoppedByUser":false,"lastActAt":null,"openEscalations":0},"updatedAt":"\#(iso(12))"}"#,
             // stopped by the user · shared (derives to idle, not red)
             #"{"marvinSessionId":"\#(openIds[5])","state":"idle","title":"Explore pagination options","turn":null,"activity":null,"pending":[],"worktree":null,"tree":{"mode":"shared"},"lastTurn":{"turnId":"t-f1","startedAt":"\#(iso(42))","endedAt":"\#(iso(40))","outcome":"stopped"},"cost":{"turns":1,"costUsd":0.05},"supervisor":{"delegation":"observe","sharedCheckout":true,"touchedTurn":null,"waitingOnOwn":null,"stoppedByUser":true,"lastActAt":null,"openEscalations":0},"updatedAt":"\#(iso(40))"}"#,
+            // waiting · shared · on its own background job (ADR-0130)
+            #"{"marvinSessionId":"\#(openIds[6])","state":"waiting","title":"Run the full integration suite","turn":null,"activity":null,"pending":[],"worktree":null,"tree":{"mode":"shared"},"lastTurn":{"turnId":"t-g1","startedAt":"\#(iso(40))","endedAt":"\#(iso(38))","outcome":"completed","marker":null},"waitingOn":{"kind":"job","label":"Integration suite","since":"\#(iso(31))"},"cost":{"turns":2,"costUsd":0.21},"supervisor":{"delegation":"observe","sharedCheckout":true,"touchedTurn":null,"waitingOnOwn":"job","stoppedByUser":false,"lastActAt":null,"openEscalations":0},"updatedAt":"\#(iso(31))"}"#,
+            // done · shared · closed scope-met (ADR-0130)
+            #"{"marvinSessionId":"\#(openIds[7])","state":"done","title":"Update the changelog","turn":null,"activity":null,"pending":[],"worktree":null,"tree":{"mode":"shared"},"lastTurn":{"turnId":"t-h1","startedAt":"\#(iso(20))","endedAt":"\#(iso(18))","outcome":"completed","marker":"scope-met"},"waitingOn":null,"cost":{"turns":1,"costUsd":0.06},"supervisor":{"delegation":"off","sharedCheckout":true,"touchedTurn":null,"waitingOnOwn":null,"stoppedByUser":false,"lastActAt":null,"openEscalations":0},"updatedAt":"\#(iso(18))"}"#,
             // closed tabs whose branches are ready to integrate
             ready("r7777777-0000-4000-8000-000000000007", "rate-limit-headers", "Add rate-limit headers", commits: 3, behind: 0, endedMin: 90),
             ready("r8888888-0000-4000-8000-000000000008", "docs-quickstart", "Rewrite the quickstart", commits: 1, behind: 2, endedMin: 150),

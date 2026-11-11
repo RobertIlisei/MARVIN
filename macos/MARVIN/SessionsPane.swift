@@ -85,6 +85,7 @@ import SwiftUI
                     // its own glyph.
                     needsYouSection
                     section("Working", rows(where: { $0 == .working }), tint: GitDecorationColor.modified)
+                    section("Waiting", rows(where: { $0 == .waiting }), tint: MarvinTheme.textMuted)
                     integrateSection
                     idleSection
                     recentSection
@@ -333,7 +334,7 @@ import SwiftUI
 
     @ViewBuilder
     private var idleSection: some View {
-        let idle = rows(where: { $0 == .idle || $0 == .draft })
+        let idle = rows(where: { $0 == .idle || $0 == .draft || $0 == .done })
         if !idle.isEmpty {
             let partition = SessionIdleCollapse.partition(
                 idle.map { SessionIdleCollapse.Row(id: $0.id, state: $0.state, idleSince: $0.entry.lastTurnAt) },
@@ -665,6 +666,10 @@ import SwiftUI
             Image(systemName: "arrow.clockwise").font(.system(size: 9, weight: .semibold)).foregroundStyle(.orange).frame(width: 10)
         case .failed:
             Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(GitDecorationColor.deleted).frame(width: 10)
+        case .waiting:
+            Image(systemName: "clock").font(.system(size: 9, weight: .semibold)).foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 10)
+        case .done:
+            Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 10)
         case .idle, .draft:
             Circle().fill(ChatPreviewView.tabTint(state)).frame(width: 6, height: 6).frame(width: 10)
         }
@@ -742,7 +747,7 @@ import SwiftUI
             smallAction("Resume", role: .neutral) { Task { await registry.resume(row.id) } }
         case .failed:
             smallAction("Open", role: .neutral) { supervisor.showTab(row.id) }
-        case .idle, .draft:
+        case .waiting, .done, .idle, .draft:
             EmptyView()
         }
     }
@@ -803,6 +808,15 @@ import SwiftUI
         }
         if case .needsYou = state, let first = e.pendingConfirms.values.first {
             parts.append("waiting: \(ToolLabel.plain(first.toolName))")
+        } else if state == .waiting, let w = e.waitingOn {
+            let what = w.kind == "wakeup" ? "a wakeup" : "a job"
+            if let since = w.since.flatMap(SessionLedger.parseISO) {
+                parts.append("Waiting on \(what) · \(elapsed(since))")
+            } else {
+                parts.append("Waiting on \(what)")
+            }
+        } else if state == .done {
+            parts.append(e.lastTurnAt.map { "Done · \(elapsed($0)) ago" } ?? "Done")
         } else if e.isLive, let since = e.liveSince {
             parts.append("\(e.activityLabel ?? "running") \(elapsed(since))")
         } else if e.isLive, let label = e.activityLabel {

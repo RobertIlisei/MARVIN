@@ -16,6 +16,10 @@ public enum SessionRowState: Equatable, Sendable {
     case working
     case interrupted
     case failed
+    /// ADR-0130 — not live, waiting on its own background job or wakeup.
+    case waiting
+    /// ADR-0130 — not live, nothing pending, the last turn closed scope-met.
+    case done
     case idle
     case draft
 
@@ -26,12 +30,15 @@ public enum SessionRowState: Equatable, Sendable {
         case .working: return 1
         case .interrupted: return 2
         case .failed: return 3
-        case .idle: return 4
-        case .draft: return 5
+        case .waiting: return 4
+        case .idle: return 5
+        case .done: return 6
+        case .draft: return 7
         }
     }
 
-    public var isIdle: Bool { self == .idle }
+    /// `done` collapses with idle rows; `waiting` stays visible (it has a clock running).
+    public var isIdle: Bool { self == .idle || self == .done }
 }
 
 public enum SessionRowStateDeriver {
@@ -40,6 +47,8 @@ public enum SessionRowStateDeriver {
         if e.isLive { return .working }
         if e.interrupted { return .interrupted }
         if e.lastOutcome == .error { return .failed }
+        if e.waitingOn != nil { return .waiting }
+        if e.isDone { return .done }
         if e.isDraft && e.lastOutcome == nil { return .draft }
         return .idle
     }
