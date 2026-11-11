@@ -350,7 +350,9 @@ export function getInboxItem(projectId: string, id: string): InboxRecord | null 
 export function listInbox(projectId: string, opts: { state?: InboxState; sessionId?: string } = {}): InboxRecord[] {
   return [...load(projectId).values()]
     .filter((i) => (opts.state === undefined || i.state === opts.state) && (opts.sessionId === undefined || i.sessionId === opts.sessionId))
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    // Two items written in the same millisecond keep the order they were written in: the sort is
+    // stable and the store is append-only, so a tie must not fall to the random id.
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 /** Add an item, or return the existing one with the same `dedupeKey` (in any state). */
