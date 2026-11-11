@@ -28,10 +28,10 @@ import path from "node:path";
 
 import type { PosturePatch } from "./posture";
 import type { SessionPosture } from "./session-meta";
-import type { QueueEntryProposal } from "./supervisor-queue";
 import { shellWriteTargets, withoutGitGlobalOptions } from "./supervisor-acts";
 import { digestArgs, ensureSupervisorDir, type LedgerGround, supervisorDir, wakeOriginOf } from "./supervisor-ledger";
 import type { ReplyOrigin } from "./supervisor-messages";
+import type { QueueEntryProposal } from "./supervisor-queue";
 import { type Ground, type GroundViewContext, projectGround } from "./supervisor-view";
 import { announceProjectEvent } from "./turn-registry";
 

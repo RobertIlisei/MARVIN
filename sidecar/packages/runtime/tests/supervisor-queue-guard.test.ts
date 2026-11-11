@@ -3,10 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
+import { listInbox } from "../src/supervisor-inbox";
 import { actOnInboxItem, type InboxPerform } from "../src/supervisor-inbox-actions";
 import { defaultInboxPerform } from "../src/supervisor-inbox-perform";
-import { listInbox } from "../src/supervisor-inbox";
 import { readLedger } from "../src/supervisor-ledger";
 import { createSupervisorVerbs, type VerbContext } from "../src/supervisor-mcp";
 import { ActionLimiter } from "../src/supervisor-policy";

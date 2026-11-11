@@ -10,7 +10,7 @@ import { defaultInboxPerform } from "../src/supervisor-inbox-perform";
 import { readLedger, supervisorDir } from "../src/supervisor-ledger";
 import { createSupervisorVerbs, type VerbContext } from "../src/supervisor-mcp";
 import { ActionLimiter } from "../src/supervisor-policy";
-import { approveEntries, readQueue, queuePath } from "../src/supervisor-queue";
+import { approveEntries, queuePath, readQueue } from "../src/supervisor-queue";
 import { applySupervisorAction, bootSupervisor, currentSupervisorToken, getSupervisorState, resetSupervisorStateForTests } from "../src/supervisor-state";
 
 // ADR-0133 invariant 1 — only the user's click approves an entry. The supervisor

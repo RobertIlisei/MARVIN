@@ -42,8 +42,8 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
 import type { getPendingConfirm } from "./confirm-registry";
-import { classifyPostureChange, type ModelLookup, type PosturePatch, validatePosturePatch } from "./posture";
 import { addNotice, cleanNoticeText, DEFAULT_NOTICE_TTL_HOURS, MAX_NOTICE_CHARS, MAX_NOTICE_TTL_HOURS } from "./notices";
+import { classifyPostureChange, type ModelLookup, type PosturePatch, validatePosturePatch } from "./posture";
 import { containsSecretShape } from "./session";
 import type { SessionPosture } from "./session-meta";
 import type { SessionWatchRow } from "./session-watch";
@@ -53,9 +53,9 @@ import {
   addInboxItem,
   buildRawAct,
   type EscalationCode,
+  getInboxItem,
   type InboxDraft,
   type InboxKind,
-  getInboxItem,
   itemsForConversation,
   itemsForFollow,
   listInbox,
@@ -71,6 +71,7 @@ import {
   newLedgerId,
   readLedger,
 } from "./supervisor-ledger";
+import { MAX_REPLY_REFS, type MessageRef } from "./supervisor-messages";
 import {
   type ActionLimiter,
   evaluateAnswer,
@@ -84,7 +85,6 @@ import {
   type PolicyOutcome,
   questionHeuristic,resolveGround 
 } from "./supervisor-policy";
-import { MAX_REPLY_REFS, type MessageRef } from "./supervisor-messages";
 import { wrapUntrusted } from "./supervisor-prompt";
 import { buildProposal, holdEntry, lowerCap, MAX_GUARD_CHARS, MAX_HOLD_REASON_CHARS, MAX_PROPOSAL_ENTRIES, readQueue, restoreCap } from "./supervisor-queue";
 import { MAX_SUPERVISOR_MESSAGE_CHARS } from "./supervisor-send";

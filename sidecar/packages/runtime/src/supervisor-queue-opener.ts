@@ -24,18 +24,17 @@
  */
 
 import { randomUUID } from "node:crypto";
-
+import { getProject } from "./projects";
 import { listSessionMetas, readSessionMeta } from "./session-meta";
-import { digestArgs, appendLedgerEntry, type LedgerEntryInput } from "./supervisor-ledger";
-import { openSupervisorTab } from "./supervisor-inbox-perform";
 import { addInboxItem, buildRawAct } from "./supervisor-inbox";
+import { openSupervisorTab } from "./supervisor-inbox-perform";
+import { appendLedgerEntry, digestArgs, type LedgerEntryInput } from "./supervisor-ledger";
 import { effectiveCap, QUEUE_EXPIRY_MS, type QueueBlock, type QueueEntry, type QueueFile, readQueue, updateQueue } from "./supervisor-queue";
 import { runGuardCommand } from "./supervisor-queue-guard";
-import { checkScopeRef, type ScopeVerdict } from "./supervisor-queue-scope";
 import { acquireQueueLock, isPidAlive } from "./supervisor-queue-lock";
+import { checkScopeRef, type ScopeVerdict } from "./supervisor-queue-scope";
 import { currentSupervisorToken, getSupervisorState, isSupervisorSessionId, listEnabledSupervisors } from "./supervisor-state";
 import { getLiveTurn, type ProjectEvent, subscribeProjectEvents } from "./turn-registry";
-import { getProject } from "./projects";
 import { readWorktreeSetupConfig } from "./worktree-setup";
 import { freeDiskBytes, reconcileWorktreesAsync, worktreeMinFreeBytes } from "./worktrees";
 
