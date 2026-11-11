@@ -176,6 +176,8 @@ export type ProjectEvent =
   | { event: "supervisor.state"; data: { projectId: string; revision: number; mode: string; paused: boolean } }
   /** ADR-0133 — the approved queue changed (an approval, a cap, a hold, an opening); the app re-reads it through the token-gated GET. */
   | { event: "supervisor.queue"; data: { projectId: string; change: string } }
+  /** ADR-0134 — the standing merge authorisation, a hold or the pass's record changed; the app re-reads it through the token-gated GET, and the pass looks again. */
+  | { event: "supervisor.merge"; data: { projectId: string; change: string } }
   /** ADR-0133 — a tab was closed: a slot may have freed, so the queue's opener looks again. Ids only. */
   | { event: "session.closed"; data: { marvinSessionId: string; projectId: string } }
   /** ADR-0128 §6 — a line was added to the conversation; the app re-reads it through the token-gated GET. */

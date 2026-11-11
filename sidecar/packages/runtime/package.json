@@ -30,6 +30,8 @@
     "./supervisor-inbox": "./src/supervisor-inbox.ts",
     "./supervisor-queue": "./src/supervisor-queue.ts",
     "./supervisor-queue-opener": "./src/supervisor-queue-opener.ts",
+    "./supervisor-merge": "./src/supervisor-merge.ts",
+    "./supervisor-merge-pass": "./src/supervisor-merge-pass.ts",
     "./supervisor-inbox-actions": "./src/supervisor-inbox-actions.ts",
     "./supervisor-inbox-perform": "./src/supervisor-inbox-perform.ts",
     "./supervisor-view": "./src/supervisor-view.ts",

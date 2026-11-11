@@ -24,6 +24,7 @@ import type { SessionPosture } from "./session-meta";
 import { endFollows } from "./supervisor-follows";
 import { actionsFor, getInboxItem, type InboxAction, type InboxRecord, isInboxInFlight, listInbox, markInboxInFlight, NEW_TAB_DELEGATIONS, type NewTabDelegation, settleInboxItem } from "./supervisor-inbox";
 import { appendLedgerEntry, type LedgerGround } from "./supervisor-ledger";
+import type { MergeProposal } from "./supervisor-merge";
 import type { QueueEntryProposal } from "./supervisor-queue";
 import { MAX_SUPERVISOR_MESSAGE_CHARS } from "./supervisor-send";
 import type { SupervisorActionResult } from "./supervisor-state";
@@ -51,7 +52,7 @@ export interface InboxPerform {
    * runtime opens them as slots free) or its guard command. The only way an
    * entry or a guard comes to exist.
    */
-  queue(a: { what: "entries"; entries: QueueEntryProposal[] } | { what: "guard"; command: string }): Done;
+  queue(a: { what: "entries"; entries: QueueEntryProposal[] } | { what: "guard"; command: string } | { what: "merge"; proposal: MergeProposal }): Done;
   /** Stop the tab's live turn, as the user. */
   cancel(sessionId: string): Done;
   worktrees(a: { op: "merge" | "merge-all" | "prepare-mr" | "drop"; slugs: string[]; push?: boolean | undefined; openMergeRequest?: boolean | undefined }): Promise<Done>;
@@ -142,6 +143,11 @@ async function perform(projectId: string, item: InboxRecord, action: InboxAction
       if (act.what === "guard") {
         if (card?.kind !== "guard") return fail(409, "this card carries no guard command");
         return p.queue({ what: "guard", command: card.command });
+      }
+      // ADR-0134 — the proposal the card showed, whole: the target and the gate cannot be edited at the click.
+      if (act.what === "merge") {
+        if (card?.kind !== "merge") return fail(409, "this card carries no merge authorisation");
+        return p.queue({ what: "merge", proposal: card.proposal });
       }
       if (card?.kind !== "entries") return fail(409, "this card carries no entries");
       let chosen = card.entries;

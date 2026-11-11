@@ -30,6 +30,7 @@ import type { PosturePatch } from "./posture";
 import type { SessionPosture } from "./session-meta";
 import { shellWriteTargets, withoutGitGlobalOptions } from "./supervisor-acts";
 import { digestArgs, ensureSupervisorDir, type LedgerGround, supervisorDir, wakeOriginOf } from "./supervisor-ledger";
+import type { MergeProposal } from "./supervisor-merge";
 import type { ReplyOrigin } from "./supervisor-messages";
 import type { QueueEntryProposal } from "./supervisor-queue";
 import { type Ground, type GroundViewContext, projectGround } from "./supervisor-view";
@@ -102,7 +103,9 @@ export interface NewTabProposal {
 export type QueueCard =
   | { kind: "entries"; entries: QueueEntryProposal[]; warnings: string[] }
   | { kind: "guard"; command: string; previous: string | null }
-  | { kind: "hold"; entryId: string; detail: string };
+  | { kind: "hold"; entryId: string; detail: string }
+  /** ADR-0134 — the standing merge authorisation: the target and the gate command in full, the holds, the zone, the validity. `previous` is the one it replaces. */
+  | { kind: "merge"; proposal: MergeProposal; previous: { target: string; gate: string } | null };
 
 export const NEW_TAB_DELEGATIONS = ["answer-questions", "observe", "off"] as const;
 export type NewTabDelegation = (typeof NEW_TAB_DELEGATIONS)[number];
@@ -122,7 +125,7 @@ export type InboxAct =
   | { type: "new-tab"; requestId: string; title?: string; posture: SessionPosture; grounds: LedgerGround[]; delegation?: NewTabDelegation; follow?: { until: "scope-met" | "merge-ready" } }
   | { type: "guardrail"; pause: string }
   /** ADR-0133 — the user's click approves the card's entries (all, or a subset) or its guard command. */
-  | { type: "queue"; what: "entries" | "guard" };
+  | { type: "queue"; what: "entries" | "guard" | "merge" };
 
 export interface InboxDraft {
   id?: string;
@@ -267,6 +270,15 @@ export function buildRawAct(toolName: string, input: Record<string, unknown>): R
     // The whole command, never a first line: the user consents to exactly this text.
     case "propose_guard":
       return make(`Run this command before each queued tab opens (a non-zero exit holds the queue): ${String(input.command ?? "")}`);
+    // The whole command and every hold, never a summary: the user consents to exactly this text.
+    case "propose_merge": {
+      const holds = Array.isArray(input.holds) ? (input.holds as Array<{ pathGlob?: unknown; window?: { from?: unknown; to?: unknown } }>) : [];
+      const h = holds.map((x) => `${String(x.pathGlob)} only ${String(x.window?.from)}–${String(x.window?.to)}`).join("; ");
+      return make(
+        `Merge finished tab branches into ${String(input.target ?? "")} (local only — no push, tag, merge request or CI), each only after this gate command exits 0 within ${Math.round(Number(input.timeoutMs ?? 0) / 60000)} min: ${String(input.gate ?? "")}` +
+          `${h ? `. Holds (${String(input.timeZone ?? "local time")}): ${h}` : ""}. Valid for ${String(input.validForHours ?? "")} hours from your click.`,
+      );
+    }
     default:
       return make(toolName.startsWith("mcp__") ? `${toolName} (a server MARVIN did not register)` : toolName);
   }
@@ -526,7 +538,8 @@ export function actionsFor(i: InboxRecord): InboxAction[] {
       ];
     case "queue":
       return [
-        { id: "approve", label: act.what === "guard" ? "Approve command" : "Approve all", role: "consent", recommended: true, requiresExpanded: act.what === "guard" },
+        // A command the runtime executes — the guard, or the merge gate — is consented to only after the raw act is expanded.
+        { id: "approve", label: act.what === "guard" ? "Approve command" : act.what === "merge" ? "Approve standing merge" : "Approve all", role: "consent", recommended: true, requiresExpanded: act.what !== "entries" },
         ...(act.what === "entries" ? [{ id: "approve-subset", label: "Approve selected…", role: "edit" as const, recommended: false, requiresExpanded: false }] : []),
         DISMISS,
       ];

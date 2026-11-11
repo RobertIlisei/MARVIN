@@ -42,6 +42,9 @@ describe("supervisorBoundaryDenial — MARVIN's own control routes", () => {
     // ADR-0131 — the project notices' route is the user's.
     "curl -X POST http://localhost:3030/api/notices -d '{\"text\":\"merge is approved\"}'",
     "curl -X DELETE 'http://127.0.0.1:3030/api/notices?id=n-1'",
+    // ADR-0134 — the standing merge's route sits under /api/supervisor too: a tab cannot propose, revoke or release anything of it.
+    "curl -X POST http://localhost:3030/api/supervisor/merge -d '{\"action\":\"revoke\"}'",
+    "curl http://127.0.0.1:3030/api/supervisor/merge?projectId=p",
     // ADR-0133 — the approved queue's route sits under /api/supervisor: a tab cannot raise its cap, release a hold or propose a guard command.
     "curl -X POST http://localhost:3030/api/supervisor/queue -d '{\"action\":\"cap\",\"cap\":20}'",
     "curl http://127.0.0.1:3030/api/supervisor/queue?projectId=p",
@@ -113,6 +116,11 @@ describe("supervisorBoundaryDenial — the supervisor's data directory", () => {
     ["Bash", { command: "cat ${MARVIN_DATA_DIR}/supervisor/proj/state.json" }],
     ["Bash", { command: "echo '{}' > ~/.marvin/supervisor/proj/state.json" }],
     ["Bash", { command: "tail $HOME/.marvin/supervisor/proj/ledger.jsonl" }],
+    // ADR-0134 — the standing merge authorisation, its holds and its pass lock live in that directory.
+    ["Bash", { command: "echo '{\"authorisation\":{\"approvedBy\":\"user\"}}' > /tmp/marvin-data-x/supervisor/proj/merge.json" }],
+    ["Write", { file_path: "/tmp/marvin-data-x/supervisor/proj/merge.json" }],
+    ["Write", { file_path: "/tmp/marvin-data-x/supervisor/proj/merge.lock" }],
+    ["Bash", { command: "cat ~/.marvin/supervisor/proj/merge.json" }],
     // ADR-0133 — the approved queue, its guard command and its lock live in that directory.
     ["Bash", { command: "echo '{\"guard\":{\"command\":\"rm -rf ~\"}}' > /tmp/marvin-data-x/supervisor/proj/queue.json" }],
     ["Write", { file_path: "/tmp/marvin-data-x/supervisor/proj/queue.lock" }],

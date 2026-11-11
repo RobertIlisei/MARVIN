@@ -27,6 +27,7 @@ import { openFollow } from "./supervisor-follows";
 import type { NewTabDelegation } from "./supervisor-inbox";
 import type { InboxPerform } from "./supervisor-inbox-actions";
 import type { LedgerGround } from "./supervisor-ledger";
+import { approveMerge } from "./supervisor-merge";
 import { approveEntries, setGuard } from "./supervisor-queue";
 import { sendAsSupervisor } from "./supervisor-send";
 import { applySupervisorAction, getSupervisorState, overBudget } from "./supervisor-state";
@@ -131,6 +132,11 @@ export function defaultInboxPerform(projectId: string, workDir: string, token: s
       if (a.what === "guard") {
         setGuard(projectId, a.command);
         return { ok: true, message: "the guard command is approved" };
+      }
+      // ADR-0134 — the user's click: from here, and from nowhere else, a standing merge authorisation exists.
+      if (a.what === "merge") {
+        const r = approveMerge(projectId, a.proposal);
+        return r.ok ? { ok: true, message: `standing merge into ${a.proposal.target} approved until ${r.expiresAt}` } : { ok: false, status: 409, error: r.error };
       }
       const r = approveEntries(projectId, a.entries);
       return r.ok ? { ok: true, message: `approved ${r.added} — the runtime opens them as slots free` } : { ok: false, status: 409, error: r.error };
