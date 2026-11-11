@@ -687,11 +687,14 @@ export class MergePass {
   private async afterMerge(projectId: string, workDir: string, auth: MergeAuthorisation, row: ReconciledWorktree, commit: string, gateExit: number | null): Promise<void> {
     let tab = "no tab to close";
     if (row.sessionId) {
+      // Both facts are read again NOW: the gate ran for minutes, and a tab that was clean and scope-met before it may not be after.
       const meta = this.deps.sessionOf(projectId, row.sessionId);
+      const fresh = (await this.deps.reconcile(workDir)).find((r) => r.branch === row.branch);
+      const dirty = fresh?.dirty ?? row.dirty;
       if (!meta) tab = "tab not found — left as it is";
       else if (meta.closedAt) tab = "tab already closed";
       else if (!meta.scopeMetAt) tab = "tab left open: its last turn did not close its scope";
-      else if (row.dirty) tab = "tab left open: its worktree has uncommitted changes";
+      else if (dirty) tab = "tab left open: its worktree has uncommitted changes";
       else {
         const c = await this.deps.closeTab(projectId, workDir, row.sessionId);
         tab = c.ok ? "tab closed (branch kept)" : `tab left open: ${c.message}`;

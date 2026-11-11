@@ -840,6 +840,83 @@ describe("the lock is cleared at boot when its pid is gone", () => {
   });
 });
 
+describe("after a merge: close the tab only when it closed scope-met and is clean (invariant 12)", () => {
+  const unclosed = (t: { sessionId: string }) => {
+    const m = metas.get(t.sessionId);
+    if (m) m.closedAt = undefined;
+  };
+
+  it("closes a scope-met, clean tab through the existing close path (its branch kept), and records it", async () => {
+    const tab = makeTab("a", { "a.txt": "a\n" });
+    unclosed(tab);
+    authorise();
+    const h = harness();
+    expect((await h.run()).merged).toEqual([tab.branch]);
+    expect(h.closed).toEqual([tab.sessionId]);
+    expect(readMerge(PROJECT).branches[0]?.tab).toBe("tab closed (branch kept)");
+    expect(readLedger(PROJECT).find((l) => l.verb === "merge.merged")?.reason).toContain("tab closed (branch kept)");
+  });
+
+  it("an already closed tab is not closed again", async () => {
+    const tab = makeTab("a", { "a.txt": "a\n" });
+    authorise();
+    const h = harness();
+    await h.run();
+    expect(h.closed).toEqual([]);
+    expect(readMerge(PROJECT).branches.find((b) => b.branch === tab.branch)?.tab).toBe("tab already closed");
+  });
+
+  it("a tab that is no longer scope-met when the gate ends is left open and listed", async () => {
+    const tab = makeTab("a", { "a.txt": "a\n" });
+    unclosed(tab);
+    authorise();
+    const h = harness({
+      runGate: async (wd, cwd, command, opts) => {
+        // A turn started in the tab while the gate ran: its scope is open again.
+        const m = metas.get(tab.sessionId);
+        if (m) m.scopeMetAt = undefined;
+        return defaultPassDeps().runGate(wd, cwd, command, opts);
+      },
+    });
+    expect((await h.run()).merged).toEqual([tab.branch]);
+    expect(h.closed).toEqual([]);
+    expect(readMerge(PROJECT).branches[0]?.tab).toBe("tab left open: its last turn did not close its scope");
+  });
+
+  it("a tab whose worktree gained uncommitted changes while the gate ran is left open and listed", async () => {
+    const tab = makeTab("a", { "a.txt": "a\n" });
+    unclosed(tab);
+    authorise();
+    const h = harness({
+      runGate: async (wd, cwd, command, opts) => {
+        writeFileSync(path.join(tab.dir, "wip.txt"), "wip");
+        return defaultPassDeps().runGate(wd, cwd, command, opts);
+      },
+    });
+    expect((await h.run()).merged).toEqual([tab.branch]);
+    expect(h.closed).toEqual([]);
+    expect(readMerge(PROJECT).branches[0]?.tab).toBe("tab left open: its worktree has uncommitted changes");
+  });
+
+  it("a close the existing path refuses is listed, and the merge stands", async () => {
+    const tab = makeTab("a", { "a.txt": "a\n" });
+    unclosed(tab);
+    authorise();
+    const h = harness({ closeTab: async () => ({ ok: false, message: "a turn is running in this tab — stop it first" }) });
+    expect((await h.run()).merged).toEqual([tab.branch]);
+    expect(readMerge(PROJECT).branches[0]).toMatchObject({ status: "merged", tab: "tab left open: a turn is running in this tab — stop it first" });
+  });
+
+  it("a branch that is not merged never closes its tab", async () => {
+    const tab = makeTab("a", { "a.txt": "a\n" });
+    unclosed(tab);
+    authorise({ gate: "exit 1" });
+    const h = harness();
+    await h.run();
+    expect(h.closed).toEqual([]);
+  });
+});
+
 describe("holds are data: a path glob inside a window (invariant 10)", () => {
   const evening = { pathGlob: "scripts/gate/**", window: { from: "21:00", to: "07:00" } };
   const at = (h: number) => new Date(2026, 10, 11, h, 0, 0).getTime();
