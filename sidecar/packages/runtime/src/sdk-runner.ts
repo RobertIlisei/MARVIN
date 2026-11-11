@@ -91,6 +91,7 @@ import { readPlanState, writePlanState } from "./plan-state";
 import { loadEnabledPlugins, userPluginsOff } from "./plugin-loader";
 import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
+import type { ChainCapRefusal } from "./session-attention";
 import { readSessionMeta, type SessionTree } from "./session-meta";
 import { saveSlashCommands } from "./slash-commands";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
@@ -502,6 +503,12 @@ export interface RunAgentResult {
   permissionDenials?: number;
   /** ADR-0127 milestone 4 — the turn closed its scope with the scope-met marker (the orchestrator records `scopeMetAt`). */
   scopeMet?: boolean;
+  /** ADR-0130 — the turn's final assistant text, for the turn-end attention check. */
+  finalText?: string;
+  /** ADR-0130 — the turn called `AskUserQuestion` (tracked once, for the go-ahead rule too). */
+  askedUserQuestion?: boolean;
+  /** ADR-0130 — the chain cap refused a background job or wakeup this turn. */
+  chainCap?: ChainCapRefusal;
 }
 
 /**
@@ -2396,6 +2403,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // wired when we know which session to resume — a wakeup turn must be able
   // to re-enter THIS marvinSession. Captures the turn's config so the fired
   // turn inherits the same model / permission posture (no elevation).
+  let chainCapRefusal: ChainCapRefusal | undefined;
   const wakeupCtx: WakeupToolContext | null =
     input.marvinSessionId && input.projectId
       ? {
@@ -2411,6 +2419,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           thinkingMode: input.thinkingMode ?? "high",
           advisorThinkingMode: input.advisorThinkingMode,
           depth: input.wakeupDepth ?? 0,
+          onChainCap: (r) => {
+            chainCapRefusal ??= r;
+          },
         }
       : null;
   const wakeupMcp = wakeupCtx ? createWakeupMcpServer(wakeupCtx) : null;
@@ -3446,5 +3457,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     authMode: classifyAuthMode(authAtStart, await settledAccount()),
     permissionDenials,
     ...(reportsScopeMet(finalAssistantText, scopeClaimRejected) ? { scopeMet: true } : {}),
+    finalText: finalAssistantText,
+    askedUserQuestion,
+    ...(chainCapRefusal ? { chainCap: chainCapRefusal } : {}),
   };
 }

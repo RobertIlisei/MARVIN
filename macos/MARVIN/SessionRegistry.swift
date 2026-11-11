@@ -412,6 +412,18 @@ final class SessionRegistry {
         }
     }
 
+    /// Dismiss a session's attention item (a closing question, a chain-cap
+    /// refusal; ADR-0130). Sending the tab a message clears it too.
+    func dismissAttention(_ id: String) async {
+        guard let pid = projectId else { return }
+        do {
+            try await SessionMetaService.dismissAttention(projectId: pid, sessionId: id)
+            ledger.clearAttention(id)
+        } catch {
+            integrationNotice = "Could not dismiss: \(error.localizedDescription)"
+        }
+    }
+
     /// Hide the interrupted banner for this session without resuming.
     func dismissInterrupted(_ id: String) {
         ledger.markInterrupted(id, false)

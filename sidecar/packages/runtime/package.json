@@ -37,6 +37,7 @@
     "./graph-usage": "./src/graph-usage.ts",
     "./worktree-setup": "./src/worktree-setup.ts",
     "./session-recovery": "./src/session-recovery.ts",
+    "./session-attention": "./src/session-attention.ts",
     "./session-activity": "./src/session-activity.ts",
     "./telemetry": "./src/telemetry.ts",
     "./integration-job": {

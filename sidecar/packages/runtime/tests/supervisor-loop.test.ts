@@ -59,6 +59,7 @@ function row(id: string): SessionWatchRow {
     graphUsage: null,
     lastTurn: null,
     waitingOn: null,
+    attention: null,
     cost: { turns: 1, costUsd: 0 },
     title: id,
     updatedAt: new Date().toISOString(),

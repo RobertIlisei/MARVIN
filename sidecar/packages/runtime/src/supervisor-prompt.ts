@@ -140,7 +140,7 @@ export function wrapUntrusted(kind: "transcript" | "plan" | "question", tab: str
 
 export interface WakeItem {
   /** Milestone 4 — why this tab is in the packet. Absent: a pending question. Milestone 5 adds confirm, scope-met and message. */
-  trigger?: "question" | "turn-ended" | "idle" | "confirm" | "scope-met" | "message";
+  trigger?: "question" | "turn-ended" | "idle" | "confirm" | "scope-met" | "message" | "attention";
   marvinSessionId: string;
   title: string | null;
   delegation: string;
@@ -150,6 +150,8 @@ export interface WakeItem {
   question: unknown;
   /** Milestone 5 — a pending ordinary confirm: the tool and its input (the tab's, untrusted). */
   confirm?: { toolName: string; input: unknown } | null;
+  /** ADR-0130 — the tab's open attention item: a question it ended its turn on, or a chain-cap refusal (written by the tab; untrusted). */
+  attention?: { kind: "prose-question" | "chain-cap"; excerpt: string; since: string } | null;
   /** Milestone 5 — the user's message to the supervisor (the user's own words). */
   message?: { id: string; text: string } | null;
   /** ADR-0128 §5 — the open follow on this tab, when its trigger may be reported on. */
@@ -234,6 +236,17 @@ export function renderWakePacket(args: {
               "### The tool call waiting (written by the tab)",
               wrapUntrusted("question", it.marvinSessionId, JSON.stringify(it.confirm ?? null, null, 2)),
             ]
+          : trigger === "attention"
+            ? [
+                `Delegation: ${it.delegation}. Woken because: the tab stopped and is waiting for an answer (${it.attention?.kind === "chain-cap" ? "the chain cap refused a background job or wakeup" : "its turn ended on a question in prose"}).`,
+                "",
+                "### What it is waiting on (written by the tab)",
+                wrapUntrusted("question", it.marvinSessionId, it.attention?.excerpt ?? ""),
+                "",
+                it.attention?.kind === "chain-cap"
+                  ? "Answer with `send` only if the user's brief and plan cover restarting that work: one restart per item, and only at delegation `answer-confirms`; otherwise escalate. A command naming a merge, push or other human-only act is the user's."
+                  : "If the user's brief or approved plan answers the question, answer with `send` citing it. A question naming a merge, push, release, credential or scope change is the user's: escalate.",
+              ]
           : trigger === "scope-met"
             ? [`Delegation: ${it.delegation}. Woken because: the tab claims its scope is met. Read the claim against the plan and the user's brief, then call \`review_scope\` once: \`ready\` or \`missing\` with what is missing.`]
             : trigger === "turn-ended"

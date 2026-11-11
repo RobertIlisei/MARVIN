@@ -35,6 +35,9 @@ public struct SessionEntry: Equatable, Identifiable, Sendable {
     public var waitingOn: SessionWatchRowWire.WaitingOn?
     /// ADR-0130 — the sidecar's row says `done`: the last turn closed scope-met.
     public var isDone: Bool = false
+    /// ADR-0130 — the sidecar's row carries an attention item (a closing
+    /// question, a chain-cap refusal): the tab stopped and is waiting on the user.
+    public var attention: SessionWatchRowWire.Attention?
     public var diff: SessionDiffSummary?
     public var plan: SessionPlanProgress?
     /// ADR-0124 — graph calls vs source reads, from the last snapshot.
@@ -53,7 +56,8 @@ public struct SessionEntry: Equatable, Identifiable, Sendable {
     public init(id: String) { self.id = id }
 
     public var isLive: Bool { liveTurnId != nil }
-    public var needsYou: Int { pendingConfirms.count }
+    /// Confirms waiting on the user, plus an attention item (ADR-0130) as one.
+    public var needsYou: Int { pendingConfirms.count + (attention == nil ? 0 : 1) }
 
     /// The brain state this session would show if it were on screen — the
     /// string vocabulary `MarvinBridge.marvinState` already uses. A live turn
@@ -116,6 +120,7 @@ public struct SessionLedger: Equatable, Sendable {
             // A new turn ends the wait and the scope-met mark; the next snapshot restates them.
             e.waitingOn = nil
             e.isDone = false
+            e.attention = nil // any turn start clears the item
         case .ended(_, let turnId, let outcome, let costUsd):
             // A stale `ended` for an older turn must not close a newer one.
             if let live = e.liveTurnId, live != turnId { break }
@@ -224,6 +229,7 @@ public struct SessionLedger: Equatable, Sendable {
             // An unknown state string sets neither, so it keeps reading as idle.
             e.waitingOn = row.state == "waiting" ? (row.waitingOn ?? .init(kind: "job")) : nil
             e.isDone = row.state == "done"
+            e.attention = row.attention
             entries[row.marvinSessionId] = e
         }
     }
@@ -269,6 +275,13 @@ public struct SessionLedger: Equatable, Sendable {
     public mutating func markClosed(_ id: String, at: Date = Date()) {
         var e = ensure(id)
         e.closedAt = at
+        entries[id] = e
+    }
+
+    /// The user dismissed the attention item; the next snapshot restates the server's truth.
+    public mutating func clearAttention(_ id: String) {
+        var e = ensure(id)
+        e.attention = nil
         entries[id] = e
     }
 

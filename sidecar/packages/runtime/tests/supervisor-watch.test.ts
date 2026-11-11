@@ -75,6 +75,19 @@ describe("the watch row's `supervisor` object (brief §10.4)", () => {
     expect(r?.lastTurn?.marker).toBe("scope-met");
   });
 
+  it("an attention item reads awaiting-you when the tab is not live, rides beside (not in) pending, and outranks waiting and done", async () => {
+    const attention = { kind: "prose-question" as const, excerpt: "Shall I go ahead with step 1?", since: "2026-11-11T10:00:00Z", turnId: "turn-1" };
+    updateSessionMeta("proj", "tab-w", { lastTurn: { turnId: "turn-1", startedAt: new Date().toISOString(), outcome: "completed" }, scopeMetAt: new Date().toISOString(), attention });
+    const r = await row();
+    expect(r?.state).toBe("awaiting-you");
+    expect(r?.attention).toEqual({ kind: "prose-question", excerpt: "Shall I go ahead with step 1?", since: "2026-11-11T10:00:00Z" });
+    expect(r?.pending).toEqual([]);
+    updateSessionMeta("proj", "tab-w", { attention: undefined });
+    const cleared = await row();
+    expect(cleared?.attention).toBeNull();
+    expect(cleared?.state).toBe("done");
+  });
+
   it("a pending job reads waiting, labelled by its reason or the first 60 characters of its command", async () => {
     const { __resetBackgroundJobsForTests, __setJobsFileForTests, cancelBackgroundJob, startBackgroundJob } = await import("../src/background-jobs");
     __setJobsFileForTests(path.join(dataDir, "background-jobs.json"));

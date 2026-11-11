@@ -613,6 +613,7 @@ import SwiftUI
             if supervisor.isEnabled, let c = head, !covered.contains(c.toolUseId), let p = c.supervisorProposal {
                 SupervisorProposalLine(model: supervisor, proposal: p, revealedOnServer: c.proposalRevealed ?? false)
             }
+            if let a = e.attention { attentionLine(a, sessionId: row.id) }
             escalations(for: row)
         }
         .padding(.horizontal, 14)
@@ -673,6 +674,25 @@ import SwiftUI
         case .idle, .draft:
             Circle().fill(ChatPreviewView.tabTint(state)).frame(width: 6, height: 6).frame(width: 10)
         }
+    }
+
+    /// ADR-0130 — what a stopped tab is waiting on (its closing question, or the
+    /// job the chain cap refused) and a Dismiss that clears it. Answering it is
+    /// sending the tab a message, which clears it too.
+    private func attentionLine(_ a: SessionWatchRowWire.Attention, sessionId: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(a.excerpt)
+                .font(.system(size: 10))
+                .foregroundStyle(MarvinTheme.textMuted)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(a.excerpt)
+            Button("Dismiss") { Task { await registry.dismissAttention(sessionId) } }
+                .rowChip(.neutral)
+                .help("Clear this without answering. Sending the tab a message clears it too.")
+                .accessibilityLabel("Dismiss the waiting note for this tab")
+        }
+        .padding(.leading, 16)
     }
 
     /// The pending tool, its one-line excerpt, and Allow / Deny — the same
@@ -808,6 +828,8 @@ import SwiftUI
         }
         if case .needsYou = state, let first = e.pendingConfirms.values.first {
             parts.append("waiting: \(ToolLabel.plain(first.toolName))")
+        } else if let a = e.attention {
+            parts.append(a.kind == "chain-cap" ? "stopped at the chain cap" : "asked you a question")
         } else if state == .waiting, let w = e.waitingOn {
             let what = w.kind == "wakeup" ? "a wakeup" : "a job"
             if let since = w.since.flatMap(SessionLedger.parseISO) {

@@ -1443,7 +1443,7 @@ describe("built-in gate rows (ADR-0105 phase 3)", () => {
     const rules = ensureBuiltinRules();
     expect(rules.filter((r) => r.builtin).map((r) => r.id).sort()).toEqual([...BUILTIN_RULE_IDS].sort());
     expect(rules.every((r) => r.scope.projectId === null)).toBe(true);
-    expect(rules.filter((r) => r.tier !== "deny").map((r) => [r.id, r.tier])).toEqual([["builtin:graph-pointer", "nudge"], ["builtin:go-ahead", "nudge"]]);
+    expect(rules.filter((r) => r.tier !== "deny").map((r) => [r.id, r.tier])).toEqual([["builtin:graph-pointer", "nudge"], ["builtin:go-ahead", "nudge"], ["builtin:prose-question", "nudge"]]);
     expect(ensureBuiltinRules()).toHaveLength(BUILTIN_RULE_IDS.length);
   });
 

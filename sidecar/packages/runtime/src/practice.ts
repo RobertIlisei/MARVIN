@@ -323,6 +323,7 @@ export const BUILTIN_RULE_IDS = [
   "builtin:graph-pointer",
   "builtin:plan-spine",
   "builtin:go-ahead",
+  "builtin:prose-question",
 ] as const;
 export type BuiltinRuleId = (typeof BUILTIN_RULE_IDS)[number];
 
@@ -332,6 +333,7 @@ export type BuiltinRuleId = (typeof BUILTIN_RULE_IDS)[number];
 const BUILTIN_NATIVE_TIER: Partial<Record<BuiltinRuleId, RuleTier>> = {
   "builtin:graph-pointer": "nudge",
   "builtin:go-ahead": "nudge",
+  "builtin:prose-question": "nudge",
 };
 
 const BUILTIN_SEEDS: Record<BuiltinRuleId, { title: string; fingerprint: string; message: string }> = {
@@ -383,6 +385,14 @@ const BUILTIN_SEEDS: Record<BuiltinRuleId, { title: string; fingerprint: string;
       "In an Agent-mode tab whose plan MARVIN seeded from the brief, a turn that ends on \"Shall I go ahead with step " +
       "1?\" (one go-ahead question, no alternative offered, no AskUserQuestion) is blocked once and continues in the " +
       "same request (ADR-0132, ADR-0067). Ships at nudge; promote to deny here.",
+  },
+  "builtin:prose-question": {
+    title: "A closing question reaches the user",
+    fingerprint: "turn.prose.question",
+    message:
+      "A turn that ends on a question written in prose (no AskUserQuestion, not a scope-met close, nothing of its own " +
+      "pending) marks the session as waiting on you, with the question as the excerpt (ADR-0130). Advisory at every " +
+      "tier: it never blocks a turn. Switch the row off to stop raising it.",
   },
 };
 

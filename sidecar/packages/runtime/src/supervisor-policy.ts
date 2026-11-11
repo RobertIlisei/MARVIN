@@ -379,6 +379,10 @@ export function evaluateSend(input: {
   priorNudgesAtStep: number;
   /** The tab's turns in a row that ended in error (`failedTurnsInARow`). */
   failedTurnsInARow?: number;
+  /** ADR-0130 — the tab's open attention item, when this message answers it. */
+  attentionKind?: "prose-question" | "chain-cap" | null;
+  /** ADR-0130 — supervisor restarts already sent for a chain-cap item since the tab's last user turn. */
+  chainCapRestarts?: number;
   grounds: GroundRef[];
   groundCtx: GroundContext;
   messageWake?: boolean;
@@ -397,6 +401,16 @@ export function evaluateSend(input: {
   }
   if (input.heuristic) {
     return { ...done("escalate", "heuristic", `the message names a human-only act ("${input.heuristic}", heuristic)`), heuristic: input.heuristic };
+  }
+  if (input.attentionKind === "chain-cap" && !observeOnly) {
+    // ADR-0130 decision 4 — a restart past the cap is the user's call: it needs
+    // `answer-confirms`, and it is allowed once; a second cap before any user turn escalates.
+    if (delegationRank(input.delegation) < delegationRank("answer-confirms")) {
+      return done("escalate", "chain-cap-delegation", `the tab hit the chain cap; restarting it needs delegation "answer-confirms", this tab is at "${input.delegation ?? "off"}" — the user decides`);
+    }
+    if ((input.chainCapRestarts ?? 0) >= 1) {
+      return done("escalate", "chain-cap-repeat", "the tab hit the chain cap again after a supervisor restart and no user turn has run since — the user decides");
+    }
   }
   const failed = input.failedTurnsInARow ?? 0;
   if (failed >= FAILED_TURNS_BEFORE_ESCALATION) {

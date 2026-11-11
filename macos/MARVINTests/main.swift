@@ -3367,6 +3367,26 @@ runner.suite("session-row-state") {
         let ranks = [SessionRowState.done, .idle, .waiting, .failed].sorted { $0.sortRank < $1.sortRank }
         runner.expect(ranks == [.failed, .waiting, .idle, .done], "ordering")
     }
+    // ADR-0130 milestone 2 — an attention item is a stopped tab waiting on the user.
+    runner.test("an attention row counts as needs-you, carries its excerpt, outranks waiting and done, and clears") {
+        var l = SessionLedger()
+        let json = #"{"rows":[{"marvinSessionId":"a","state":"awaiting-you","attention":{"kind":"prose-question","excerpt":"Shall I go ahead with step 1?","since":"2026-11-11T10:00:00.000Z"},"lastTurn":{"turnId":"t","outcome":"completed","marker":"scope-met"}},{"marvinSessionId":"b","state":"idle"}]}"#
+        l.apply(snapshot: SessionWatchRowWire.decodeSnapshot(Data(json.utf8))!, now: Date())
+        runner.expect(SessionRowStateDeriver.derive(l["a"]!), equals: SessionRowState.needsYou(1), "attention reads needs-you")
+        runner.expect(l["a"]?.attention?.excerpt, equals: "Shall I go ahead with step 1?", "the excerpt")
+        runner.expect(l["a"]?.attention?.kind, equals: "prose-question", "the kind")
+        runner.expect(l.needsYouCount, equals: 1, "it counts toward the badge")
+        runner.expect(SessionRowStateDeriver.derive(l["b"]!), equals: SessionRowState.idle, "no attention reads idle")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.waitingOn = .init(kind: "job"); $0.isDone = true; $0.attention = .init(kind: "chain-cap", excerpt: "x") }) == .needsYou(1), "attention outranks waiting and done")
+        var dismissed = l
+        dismissed.clearAttention("a")
+        runner.expect(dismissed["a"]?.attention == nil, "dismissing clears it")
+        l.apply(.registered(sessionId: "a", turnId: "t2", kind: "human", startedAt: 0), now: Date())
+        runner.expect(l["a"]?.attention == nil, "a turn starting clears it")
+        let later = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"a","state":"idle"}]}"#.utf8))!
+        l.apply(snapshot: later, now: Date())
+        runner.expect(SessionRowStateDeriver.derive(l["a"]!), equals: SessionRowState.idle, "the next snapshot restates it")
+    }
     runner.test("sort rank puts attention first") {
         let ranks = [SessionRowState.idle, .needsYou(2), .draft, .working, .failed, .interrupted].sorted { $0.sortRank < $1.sortRank }
         runner.expect(ranks.first == .needsYou(2) && ranks.last == .draft, "ordering")

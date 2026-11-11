@@ -159,6 +159,8 @@ export interface VerbDeps {
   scopeMet(marvinSessionId: string): boolean;
   /** The tab's turns in a row that ended in error (`failedTurnsInARow`, §6). Optional: absent reads as none. */
   failedTurnsInARow?(marvinSessionId: string): number;
+  /** When a turn the user started last began (ADR-0130's chain-cap restart bound counts from it); absent reads as never. */
+  lastUserTurnAt?(marvinSessionId: string): string | null;
   /*
    * Milestone 5. Optional so a fixture that predates them still builds; an
    * absent one makes its verb refuse, never act.
@@ -811,12 +813,22 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     if (isSupervisorSessionId(tab)) return settle("send", tab, argsDigest, refused("supervisor-session", "a supervisor session is never a target (no recursion)"));
     const row = await rowFor(tab);
     if (!row) return settle("send", tab, argsDigest, refused("no-tab", `no open tab ${tab}`));
-    const planSignature = kind === "nudge" ? (row.plan ? `${row.plan.done}/${row.plan.total}@${row.plan.lastTodoAt ?? "-"}` : "no-plan") : undefined;
+    // ADR-0130 — a send to a tab with an open attention item answers it. A chain-cap
+    // restart is marked in the ledger by the item's `since`, so a restart is counted from records.
+    const attention = row.attention;
+    const chainCap = attention?.kind === "chain-cap" ? attention : null;
+    const planSignature = chainCap ? `chain-cap@${chainCap.since}` : kind === "nudge" ? (row.plan ? `${row.plan.done}/${row.plan.total}@${row.plan.lastTodoAt ?? "-"}` : "no-plan") : undefined;
     const drop = limited(tab, `send:${argsDigest}`);
     if (drop) return settle("send", tab, argsDigest, drop, planSignature ? { planSignature } : {});
     // Counted from the ledger, not memory, so a restart does not reset the cap (§6).
-    const priorNudgesAtStep = planSignature
+    const priorNudgesAtStep = planSignature && !chainCap
       ? readLedger(projectId, { tab, limit: 200 }).filter((e) => e.verb === "send" && e.planSignature === planSignature && (e.decision === "propose" || e.decision === "act")).length
+      : 0;
+    const userTurnAt = ctx.deps.lastUserTurnAt?.(tab) ?? null;
+    const chainCapRestarts = chainCap
+      ? readLedger(projectId, { tab, limit: 200 }).filter(
+          (e) => e.verb === "send" && e.planSignature?.startsWith("chain-cap@") && (e.decision === "propose" || e.decision === "act") && (!userTurnAt || e.at > userTurnAt),
+        ).length
       : 0;
     const st = getSupervisorState(projectId);
     const outcome = evaluateSend({
@@ -827,8 +839,11 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       tabRefusal: ctx.deps.sendRefusal(tab),
       scopeMet: ctx.deps.scopeMet(tab),
       secret: containsSecretShape(message),
-      heuristic: questionHeuristic([message]),
+      // The tab's own question (the excerpt) is read as well as the reply: a question naming a human-only act is the user's.
+      heuristic: questionHeuristic(attention ? [message, attention.excerpt] : [message]),
       priorNudgesAtStep,
+      attentionKind: attention?.kind ?? null,
+      chainCapRestarts,
       failedTurnsInARow: ctx.deps.failedTurnsInARow?.(tab) ?? 0,
       grounds: Array.isArray(args.grounds) ? args.grounds : [],
       groundCtx: groundContextFor(row, st.charter),

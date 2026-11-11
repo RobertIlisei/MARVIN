@@ -178,7 +178,7 @@ const state: JobsState = g[STATE_KEY] ?? (g[STATE_KEY] = { jobs: new Map() });
 
 export type StartJobResult =
   | { ok: true; id: string; pid: number }
-  | { ok: false; error: string };
+  | { ok: false; error: string; /** ADR-0130 — set for the chain-depth refusal. */ code?: "chain-depth" };
 
 export function startBackgroundJob(input: {
   command: string;
@@ -193,6 +193,7 @@ export function startBackgroundJob(input: {
     return {
       ok: false,
       error: `job chain depth ${nextDepth} exceeds the cap of ${MAX_CHAIN_DEPTH} — refusing to start another background job from a job-completion turn.`,
+      code: "chain-depth",
     };
   }
   const running = [...state.jobs.values()].filter(

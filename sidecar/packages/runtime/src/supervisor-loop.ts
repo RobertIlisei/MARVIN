@@ -86,7 +86,7 @@ function guarded(fn: () => unknown): void {
  * Why a wake was raised. A question or confirm ref names it; turn-ended, idle
  * and scope-met name the turn that ended; a message ref names the user's message.
  */
-export type WakeTrigger = "question" | "turn-ended" | "idle" | "confirm" | "scope-met" | "message";
+export type WakeTrigger = "question" | "turn-ended" | "idle" | "confirm" | "scope-met" | "message" | "attention";
 
 export interface PendingRef {
   trigger?: WakeTrigger;
@@ -96,6 +96,8 @@ export interface PendingRef {
   toolUseId: string;
   /** An idle ref's plan signature — the idle trigger fires once per signature. */
   planSignature?: string;
+  /** An attention ref's item (`SessionMeta.attention.since`) — one wake per item. */
+  attentionSince?: string;
 }
 
 /** What the idle and turn-ended rules read about a tab. */
@@ -111,6 +113,8 @@ export interface TabFacts {
   waitingOnOwn: boolean;
   /** Milestone 5 — when the tab closed its scope, or null. One scope-met wake and one close item per value. */
   scopeMetAt?: string | null;
+  /** ADR-0130 — the tab's open attention item (a closing question, a chain-cap refusal), or null. */
+  attention?: { kind: "prose-question" | "chain-cap"; excerpt: string; since: string } | null;
 }
 
 export interface LoopDeps {
@@ -180,6 +184,8 @@ const refKey = (r: PendingRef) => {
       return `idle:${r.marvinSessionId}`;
     case "scope-met":
       return `scope:${r.marvinSessionId}`;
+    case "attention":
+      return `attention:${r.marvinSessionId}`;
     case "message":
       return `message:${r.toolUseId}`;
     default:
@@ -202,6 +208,8 @@ export class SupervisorLoop {
   private readonly idleWoken = new Map<string, string>();
   /** `projectId:sessionId` → the scope-met close a review wake was last raised for (milestone 5). */
   private readonly scopeWoken = new Map<string, string>();
+  /** `projectId:sessionId` → the attention item (its `since`) a wake was last raised for (ADR-0130). */
+  private readonly attentionWoken = new Map<string, string>();
   /** A message wake that failed or ended without a reply: retried with backoff, then shown as failed (ADR-0128 §6). */
   private readonly messageRetry = new Map<string, { messageIds: string[]; attempts: number; nextRetryAt: number | null; timer: ReturnType<typeof setTimeout> | null }>();
   private unsubscribers: Array<() => void> = [];
@@ -397,6 +405,7 @@ export class SupervisorLoop {
       const d = e.data;
       this.clearIdle(d.projectId, d.marvinSessionId);
       this.queues.get(d.projectId)?.delete(`idle:${d.marvinSessionId}`);
+      this.queues.get(d.projectId)?.delete(`attention:${d.marvinSessionId}`); // any turn start clears the item (ADR-0130)
       // A user or supervisor turn opens new scope (milestone 4's `scopeMetAt` rule): the close
       // proposal for the old scope is moot, and so is a review of its claim.
       if (d.kind === "human" || d.author === "supervisor") {
@@ -409,10 +418,21 @@ export class SupervisorLoop {
       // Armed for every watched tab: a finished one is offered for closing even at `observe`.
       this.armIdle(d.projectId, d.marvinSessionId, d.turnId);
       if (!this.actionableTab(d.projectId, d.marvinSessionId)) return;
-      // Only a turn a person or the supervisor started (see the header).
-      if (d.kind !== "human" && d.author !== "supervisor") return;
+      const startedByPerson = d.kind === "human" || d.author === "supervisor";
       void this.deps.tabFacts(d.projectId, d.marvinSessionId).then((f) => {
         if (!f || f.stopped || f.live) return;
+        // ADR-0130 — a stop the user has not been told about wakes the supervisor once per item,
+        // whichever kind of turn raised it (a chain-cap refusal usually ends a machine turn).
+        if (f.attention) {
+          const k = this.idleKey(d.projectId, d.marvinSessionId);
+          if (this.attentionWoken.get(k) === f.attention.since) return;
+          this.attentionWoken.set(k, f.attention.since);
+          this.enqueue(d.projectId, { trigger: "attention", marvinSessionId: d.marvinSessionId, turnId: d.turnId, toolUseId: "", attentionSince: f.attention.since });
+          this.schedule(d.projectId);
+          return;
+        }
+        // Only a turn a person or the supervisor started (see the header).
+        if (!startedByPerson) return;
         if (f.scopeMet) {
           // ADR-0127 §2 trigger 4 — read the scope-met claim, once per close.
           const k = this.idleKey(d.projectId, d.marvinSessionId);
@@ -451,7 +471,8 @@ export class SupervisorLoop {
   private async onIdle(projectId: string, id: string, turnId: string): Promise<void> {
     if (!this.eligibleTab(projectId, id)) return;
     const f = await this.deps.tabFacts(projectId, id).catch(() => null);
-    if (!f || f.live || f.pending > 0 || f.stopped || f.waitingOnOwn) return;
+    // An open attention item has its own wake (ADR-0130); the idle timer does not repeat it.
+    if (!f || f.live || f.pending > 0 || f.stopped || f.waitingOnOwn || f.attention) return;
     if (f.scopeMet) {
       // Milestone 5 — a finished tab idle past the threshold: one close-with-keep item per scope-met close.
       if (f.scopeMetAt) guarded(() => (this.deps.proposeClose ?? proposeCloseKeep)(projectId, id, f.scopeMetAt as string));
@@ -529,9 +550,13 @@ export class SupervisorLoop {
           if (getPendingConfirm(r.turnId, r.toolUseId) !== null) refs.push(r);
           continue;
         }
-        // A turn-ended, idle or scope-met ref is checked again: the tab may have moved on.
+        // A turn-ended, idle, scope-met or attention ref is checked again: the tab may have moved on.
         const f = await this.deps.tabFacts(projectId, r.marvinSessionId).catch(() => null);
         if (!f || f.live || f.stopped) continue;
+        if (trigger === "attention") {
+          if (f.attention && f.attention.since === r.attentionSince) refs.push(r);
+          continue;
+        }
         if (trigger === "scope-met" ? f.scopeMet : !f.scopeMet) refs.push(r);
       }
       if (!refs.length || abortController.signal.aborted) return;
@@ -670,6 +695,7 @@ export function defaultVerbDeps(projectId: string, workDir: string, conversation
     scopeMet: (id) => !!readSessionMeta(projectId, id)?.scopeMetAt,
     scopeMetAt: (id) => readSessionMeta(projectId, id)?.scopeMetAt ?? null,
     failedTurnsInARow: (id) => readSessionMeta(projectId, id)?.failedTurnsInARow ?? 0,
+    lastUserTurnAt: (id) => readSessionMeta(projectId, id)?.lastUserTurnAt ?? null,
     modelLabel: async (id) => {
       try {
         return (await listModelsCached()).models.find((m) => m.id === id)?.displayName ?? id;
@@ -833,6 +859,7 @@ async function defaultTabFacts(projectId: string, marvinSessionId: string): Prom
     stopped: meta.lastTurn?.outcome === "stopped",
     waitingOnOwn: refusal?.code === "waiting-on-own",
     scopeMetAt: meta.scopeMetAt ?? null,
+    attention: meta.attention ? { kind: meta.attention.kind, excerpt: meta.attention.excerpt, since: meta.attention.since } : null,
   };
 }
 
@@ -902,6 +929,7 @@ async function defaultBuildItems(projectId: string, workDir: string, refs: Pendi
       turnId: r.turnId,
       toolUseId: r.toolUseId,
       question: trigger === "question" ? (pending?.originalInput ?? null) : null,
+      ...(trigger === "attention" && row?.attention ? { attention: row.attention } : {}),
       follow: (() => {
         const f = follows.find((x) => x.sessionId === r.marvinSessionId);
         return f ? { id: f.id, until: f.until } : null;

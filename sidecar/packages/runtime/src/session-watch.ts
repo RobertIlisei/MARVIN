@@ -110,6 +110,8 @@ export interface SessionWatchRow {
   lastTurn: SessionWatchLastTurn | null;
   /** ADR-0130 — the session's own pending job or wakeup; `supervisor.waitingOnOwn` keeps the kind alone. */
   waitingOn: SessionWatchWaitingOn | null;
+  /** ADR-0130 — why a stopped session needs the user (a closing question, a chain-cap refusal); not part of `pending`. */
+  attention: { kind: "prose-question" | "chain-cap"; excerpt: string; since: string } | null;
   cost: { turns: number; costUsd: number };
   title: string | null;
   updatedAt: string;
@@ -448,7 +450,7 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
         lastOutcome: meta?.lastTurn?.outcome,
         lastStartedAt: meta?.lastTurn?.startedAt,
         now,
-        attention: false,
+        attention: !!meta?.attention,
         waitingOn: waitingOn?.kind ?? null,
         scopeMet: !!meta?.scopeMetAt,
       }),
@@ -471,6 +473,7 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
       graphUsage: sessionGraphUsage(projectId, id),
       lastTurn: meta?.lastTurn ? { ...meta.lastTurn, marker: meta.scopeMetAt ? "scope-met" : null } : null,
       waitingOn,
+      attention: meta?.attention ? { kind: meta.attention.kind, excerpt: meta.attention.excerpt, since: meta.attention.since } : null,
       cost,
       title: meta?.title ?? summary?.firstUserMessage ?? null,
       updatedAt: meta?.updatedAt ?? summary?.updatedAt ?? new Date(now).toISOString(),
