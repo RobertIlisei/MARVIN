@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readLedger } from "../src/supervisor-ledger";
 import { createSupervisorVerbs, SUPERVISE_TOOL_NAMES, type VerbContext } from "../src/supervisor-mcp";
@@ -21,6 +21,9 @@ import { createSessionWorktree, markSessionWorktreeClosed, mergeAllWorktrees, re
 // run; a target that moved under the gate is discarded and retried; a dirty
 // checkout makes the fast-forward wait; and every git argv the pass issued is
 // checked against the never-list.
+
+// Real git, several processes per test: under the whole suite's parallel load the 5 s default is too tight.
+vi.setConfig({ testTimeout: 120_000 });
 
 const PROJECT = "proj";
 let dataDir: string;

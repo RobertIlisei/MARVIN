@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
       const p = checked.proposal;
       if (!localBranchExists(project.workDir, p.target)) return NextResponse.json({ error: `there is no local branch "${p.target}" to merge into` }, { status: 400 });
       const cur = readMerge(projectId).authorisation;
-      const previous = cur ? { target: cur.target, gate: cur.gate } : null;
+      const replaces = cur ? { target: cur.target, gate: cur.gate } : null;
       const proposal = { ...p, timeZone: localTimeZone() };
       const st = getSupervisorState(projectId);
       const item = addInboxItem(projectId, {
@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
         kind: "queue",
         escalatedBecause: { code: "human-only", label: "Merging is the user's — a standing authorisation is theirs to give", rule: "ADR-0134" },
         rawAct: buildRawAct("propose_merge", { ...proposal }),
-        queue: { kind: "merge", proposal, previous },
+        queue: { kind: "merge", proposal, replaces },
         recommendation: { actionId: "approve", text: "You wrote this; approve it here to start it. It merges only into the named local branch and never pushes." },
         grounds: [],
         act: { type: "queue", what: "merge" },

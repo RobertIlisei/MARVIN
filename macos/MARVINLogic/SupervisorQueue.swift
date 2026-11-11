@@ -53,11 +53,16 @@ public struct SupervisorQueueCard: Decodable, Equatable, Sendable {
     /// A hold card: the entry and the two lines.
     public let entryId: String?
     public let detail: String?
+    /// ADR-0134 — a `merge` card: the standing authorisation as proposed (target and gate in full), and the one it would end.
+    public let proposal: SupervisorMergeProposal?
+    public let replaces: SupervisorMergeReplaces?
 
     public init(kind: String, entries: [Entry]? = nil, warnings: [String]? = nil, command: String? = nil,
-                previous: String? = nil, entryId: String? = nil, detail: String? = nil) {
+                previous: String? = nil, entryId: String? = nil, detail: String? = nil,
+                proposal: SupervisorMergeProposal? = nil, replaces: SupervisorMergeReplaces? = nil) {
         self.kind = kind; self.entries = entries; self.warnings = warnings; self.command = command
         self.previous = previous; self.entryId = entryId; self.detail = detail
+        self.proposal = proposal; self.replaces = replaces
     }
 }
 

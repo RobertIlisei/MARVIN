@@ -5971,6 +5971,70 @@ runner.suite("supervisor-queue") {
         runner.expect(SupervisorFeedEvent.decode(name: "supervisor.queue", data: Data(#"{"projectId":"p","change":"approved"}"#.utf8)), equals: .queue(change: "approved"), "queue")
         runner.expect(SupervisorFeedEvent.decode(name: "supervisor.nonsense", data: Data("{}".utf8)) == nil, "unknown")
     }
+    // ADR-0134 [6.6] — the standing merge.
+    runner.test("merge: the feed event, the card and the view decode; unknown shapes do not crash") {
+        runner.expect(SupervisorFeedEvent.decode(name: "supervisor.merge", data: Data(#"{"projectId":"p","change":"approved"}"#.utf8)), equals: .merge(change: "approved"), "merge event")
+        let json = #"{"items":[{"id":"m","revision":1,"createdAt":"2026-11-11T10:00:00.000Z","sessionId":null,"kind":"queue","escalatedBecause":{"code":"human-only","label":"l"},"grounds":[],"actions":[],"queue":{"kind":"merge","proposal":{"target":"integration","gate":"pnpm test:full # long","timeoutMs":3000000,"holds":[{"pathGlob":"scripts/gate/**","window":{"from":"21:00","to":"07:00"}}],"validForHours":168,"timeZone":"Europe/Bucharest"},"replaces":{"target":"old","gate":"true"}},"modeAtCreation":"shadow","state":"open"}]}"#
+        let items = SupervisorInboxItem.decodeList(Data(json.utf8)) ?? []
+        runner.expect(items.count, equals: 1, "the merge card decodes")
+        let p = items.first?.queue?.proposal
+        runner.expect(p?.gate, equals: "pnpm test:full # long", "the gate command is whole")
+        runner.expect(p?.holds.first?.window.to, equals: "07:00", "the hold window")
+        runner.expect(items.first?.queue?.replaces?.target, equals: "old", "what it replaces")
+        let lines = SupervisorMergePresentation.cardLines(p!, replaces: items.first?.queue?.replaces)
+        runner.expect(lines.contains { $0.contains("never pushed, tagged or sent as a merge request") }, "the card says what it never does")
+        runner.expect(lines.contains { $0.contains("scripts/gate/** only 21:00–07:00 (Europe/Bucharest)") }, "the zone is stated")
+        runner.expect(lines.contains { $0.contains("50 minutes") }, "the time limit is stated")
+        runner.expect(lines.contains { $0.contains("7 days") }, "the validity is stated")
+        let view = #"{"authorisation":{"target":"integration","gate":"true","timeoutSeconds":600,"holds":[],"approvedAt":"2026-11-11T10:00:00.000Z","expiresAt":"2026-11-18T10:00:00.000Z","timeZone":"UTC","expired":false},"ended":null,"holds":[{"branch":"marvin/tab/a","reason":"wait","at":"2026-11-11T10:00:00.000Z","by":"supervisor"}],"branches":[{"branch":"marvin/tab/a","status":"merged","code":"merged","reason":"merged","at":"2026-11-11T10:00:00.000Z","prediction":"clean","gateExit":0,"commit":"abcdef0123456789","tab":"tab already closed","surprise":1},{"branch":"b","status":"from-the-future","code":"x","reason":"r","at":"2026-11-11T10:00:00.000Z"}],"running":null}"#
+        let v = SupervisorMergeView.decode(Data(view.utf8))
+        runner.expect(v?.authorisation?.gate, equals: "true", "authorisation")
+        runner.expect(v?.branches.count, equals: 2, "branches, an unknown field ignored")
+        runner.expect(SupervisorMergePresentation.rowState(v!.branches[1]).label, equals: "Skipped", "an unknown status reads as skipped")
+        runner.expect(SupervisorMergePresentation.factsLine(v!.branches[0]), equals: "predicted clean · gate exit 0 · commit abcdef0123 · tab already closed", "facts")
+        runner.expect(SupervisorMergePresentation.holdLine(v!.holds[0]), equals: "marvin/tab/a — held by the supervisor: wait", "who held what")
+        runner.expect(SupervisorMergeView.decode(Data(#"{}"#.utf8))?.authorisation == nil, "an empty view is off")
+    }
+    runner.test("merge: the status line is shown at all times and says how it ended") {
+        let now = ISO8601DateFormatter().date(from: "2026-11-11T10:00:00Z")!
+        runner.expect(SupervisorMergePresentation.statusLine(nil, now: now), equals: "Standing merge: reading…", "reading")
+        runner.expect(SupervisorMergePresentation.statusLine(SupervisorMergeView(), now: now), equals: "Standing merge: off — nothing merges without your click", "off")
+        let a = SupervisorMergeView.Authorisation(target: "integration", gate: "g", timeoutSeconds: 60, holds: [], approvedAt: "2026-11-11T10:00:00Z", expiresAt: "2026-11-14T10:00:00Z", timeZone: "UTC", expired: false)
+        runner.expect(SupervisorMergePresentation.statusLine(SupervisorMergeView(authorisation: a), now: now), equals: "Standing merge into integration · expires in 3 days", "on")
+        let e = SupervisorMergeView.Ended(why: "revoked", at: "2026-11-11T10:00:00Z", target: "integration")
+        runner.expect(SupervisorMergePresentation.statusLine(SupervisorMergeView(ended: e), now: now), equals: "Standing merge into integration: revoked — nothing merges without your click", "revoked")
+        runner.expect(SupervisorMergePresentation.expiryText("2026-11-11T09:00:00Z", now: now), equals: "expired", "past")
+        runner.expect(SupervisorMergePresentation.expiryText("2026-11-11T12:00:00Z", now: now), equals: "expires in 2 h", "hours")
+    }
+    runner.test("merge: the form checks what the server checks; holds parse line by line; bodies are the user's acts") {
+        runner.expect(SupervisorMergePresentation.formError(target: "integration", gate: "make test", validDays: 7, timeoutMinutes: 90) == nil, "a good form")
+        runner.expect(SupervisorMergePresentation.formError(target: " ", gate: "x", validDays: 7, timeoutMinutes: 90) != nil, "no target")
+        runner.expect(SupervisorMergePresentation.formError(target: "marvin/tab/x", gate: "x", validDays: 7, timeoutMinutes: 90) != nil, "not a tab branch")
+        runner.expect(SupervisorMergePresentation.formError(target: "t", gate: "", validDays: 7, timeoutMinutes: 90) != nil, "no gate")
+        runner.expect(SupervisorMergePresentation.formError(target: "t", gate: "x", validDays: 15, timeoutMinutes: 90) != nil, "more than 14 days")
+        runner.expect(SupervisorMergePresentation.formError(target: "t", gate: "x", validDays: 7, timeoutMinutes: 0) != nil, "timeout out of range")
+        let ok = SupervisorMergePresentation.parseHolds("scripts/gate/** | 21:00-07:00\n\n docs/** | 09:00-17:30 ")
+        runner.expect(ok.error == nil && ok.holds.count == 2, "two rules")
+        runner.expect(ok.holds[1].window.to, equals: "17:30", "trimmed")
+        for bad in ["no bar", "a | 9am-10pm", "a | 21:00-21:00", "| 21:00-07:00", "a | 25:00-07:00"] {
+            runner.expect(SupervisorMergePresentation.parseHolds(bad).error != nil, "refused: \(bad)")
+        }
+        let body = SupervisorMergePresentation.proposeBody(projectId: "p", target: " integration ", gate: " make test ", validDays: 99, timeoutMinutes: 999, holds: ok.holds)
+        runner.expect(body["action"] as? String, equals: "propose", "propose")
+        runner.expect(body["target"] as? String, equals: "integration", "trimmed target")
+        runner.expect(body["validForHours"] as? Int, equals: 14 * 24, "clamped to 14 days")
+        runner.expect(body["timeoutSeconds"] as? Int, equals: 240 * 60, "clamped to 4 hours")
+        runner.expect(SupervisorMergePresentation.revokeBody(projectId: "p")["action"] as? String, equals: "revoke", "revoke")
+        runner.expect(SupervisorMergePresentation.releaseHoldBody(projectId: "p", branch: "b")["branch"] as? String, equals: "b", "release")
+        runner.expect(SupervisorMergePresentation.retryBody(projectId: "p")["action"] as? String, equals: "retry", "retry")
+    }
+    runner.test("merge: a fast-forward waiting for the checkout is named, with the pass's own words") {
+        let w = SupervisorMergeView.Branch(branch: "b", status: "waiting", code: "checkout-busy", reason: "tested and ready — waiting to fast-forward integration: uncommitted changes", at: "2026-11-11T10:00:00Z", prediction: nil, gateExit: 0, commit: nil, report: nil, reported: nil, tab: nil)
+        let v = SupervisorMergeView(branches: [w])
+        runner.expect(SupervisorMergePresentation.waitingForCheckout(v)?.branch, equals: "b", "found")
+        runner.expect(SupervisorMergePresentation.rowState(w).label, equals: "Waiting", "waiting")
+        runner.expect(SupervisorMergePresentation.summary(v), equals: "0 merged · 1 waiting or held", "summary")
+    }
     runner.test("selection: all by default, order is the card's, a subset names its ids, orphans block approval") {
         var s = SupervisorQueueSelection(card: card()!)
         runner.expect(s.isAll, "all ticked at first")

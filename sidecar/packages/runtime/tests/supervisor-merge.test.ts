@@ -51,7 +51,7 @@ const mergeCard = (p: MergeProposal) =>
     kind: "queue",
     escalatedBecause: { code: "human-only", label: "x" },
     rawAct: buildRawAct("propose_merge", { ...p }),
-    queue: { kind: "merge", proposal: p, previous: null },
+    queue: { kind: "merge", proposal: p, replaces: null },
     grounds: [],
     act: { type: "queue", what: "merge" },
     modeAtCreation: "shadow",

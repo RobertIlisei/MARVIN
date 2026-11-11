@@ -670,6 +670,8 @@ public enum SupervisorFeedEvent: Equatable, Sendable {
     case follow(id: String, sessionId: String, state: String)
     /// ADR-0133 — the approved queue changed (an approval, a cap, a hold, an opening); the app re-reads it.
     case queue(change: String)
+    /// ADR-0134 — the standing merge's authorisation, a hold or the pass's record changed; the app re-reads it.
+    case merge(change: String)
 
     public static func decode(name: String, data: Data) -> SupervisorFeedEvent? {
         let d = JSONDecoder()
@@ -698,6 +700,10 @@ public enum SupervisorFeedEvent: Equatable, Sendable {
             struct Q: Decodable { let change: String }
             guard let q = try? d.decode(Q.self, from: data) else { return nil }
             return .queue(change: q.change)
+        case "supervisor.merge":
+            struct M: Decodable { let change: String }
+            guard let m = try? d.decode(M.self, from: data) else { return nil }
+            return .merge(change: m.change)
         default:
             return nil
         }

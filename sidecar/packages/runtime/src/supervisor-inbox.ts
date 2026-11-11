@@ -104,8 +104,8 @@ export type QueueCard =
   | { kind: "entries"; entries: QueueEntryProposal[]; warnings: string[] }
   | { kind: "guard"; command: string; previous: string | null }
   | { kind: "hold"; entryId: string; detail: string }
-  /** ADR-0134 — the standing merge authorisation: the target and the gate command in full, the holds, the zone, the validity. `previous` is the one it replaces. */
-  | { kind: "merge"; proposal: MergeProposal; previous: { target: string; gate: string } | null };
+  /** ADR-0134 — the standing merge authorisation: the target and the gate command in full, the holds, the zone, the validity. `replaces` is the authorisation this one would end (the client has `previous` on the guard card, a string; this is an object, so it has its own name). */
+  | { kind: "merge"; proposal: MergeProposal; replaces: { target: string; gate: string } | null };
 
 export const NEW_TAB_DELEGATIONS = ["answer-questions", "observe", "off"] as const;
 export type NewTabDelegation = (typeof NEW_TAB_DELEGATIONS)[number];

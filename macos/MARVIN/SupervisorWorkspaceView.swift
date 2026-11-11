@@ -323,6 +323,9 @@ extension SupervisorWorkspace {
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
             }
+            // ADR-0134 — the standing merge authorisation is shown at all times, with Revoke.
+            SupervisorMergeStrip(model: model)
+            MarvinDivider()
             Picker("Supervisor inspector", selection: $model.inspectorSegment) {
                 ForEach(SupervisorInspectorSegment.allCases, id: \.self) { Text($0.title).tag($0) }
             }

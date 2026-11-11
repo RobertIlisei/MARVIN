@@ -239,6 +239,18 @@ final class SupervisorService {
         _ = try await call("api/supervisor/queue", method: "POST", body: body)
     }
 
+    // ADR-0134 — the standing merge. Reading it, and the user's own acts (a card to review, revoke, release a
+    // hold, check again). The authorisation is created only by the click on its inbox card, never here.
+    func merge(projectId: String) async throws -> SupervisorMergeView {
+        let data = try await call("api/supervisor/merge", query: [URLQueryItem(name: "projectId", value: projectId)])
+        guard let m = SupervisorMergeView.decode(data) else { throw SupervisorServiceError.transport("unreadable merge state") }
+        return m
+    }
+
+    func mergeAction(_ body: [String: Any]) async throws {
+        _ = try await call("api/supervisor/merge", method: "POST", body: body)
+    }
+
     // ADR-0131 — project notices: the user's side of `/api/notices` (token-gated like the supervisor's routes).
     func notices(projectId: String) async throws -> [ProjectNotice] {
         let data = try await call("api/notices", query: [URLQueryItem(name: "projectId", value: projectId)])
@@ -360,6 +372,8 @@ final class SupervisorModel {
         MarvinBridge.shared.selectLeftTabIfVisible("sessions")
         if inspectorSegment == .log { Task { await refreshLedger() } }
         if inspectorSegment == .queue { Task { await refreshQueue() } }
+        // The standing merge is shown at all times, so it is read on every open.
+        Task { await refreshMerge() }
         Task { await refreshChat() }
     }
 
@@ -385,6 +399,43 @@ final class SupervisorModel {
     var queue: SupervisorQueueView?
     /// The server's refusal of a queue setting (a cap out of range, an unknown entry).
     var queueError: String?
+    /// ADR-0134 — `GET /api/supervisor/merge`: the authorisation (shown at all times), holds and what the pass did.
+    var merge: SupervisorMergeView?
+    /// The server's refusal of a merge act (a target that is not a local branch, a gate that is too long).
+    var mergeError: String?
+    /// The card a successful "Review on a card" raised — the form says where to click.
+    var mergeCardRaised = false
+
+    func refreshMerge() async {
+        guard !offline, let pid = projectId else { return }
+        do {
+            let m = try await SupervisorService.shared.merge(projectId: pid)
+            guard projectId == pid else { return }
+            merge = m
+        } catch SupervisorServiceError.token(let path) {
+            tokenError = path
+        } catch {
+            NSLog("[SupervisorModel] merge failed: \(error)")
+        }
+    }
+
+    /// The user's own merge acts. The authorisation itself is the inbox card's click, not this.
+    func mergeAct(_ body: (String) -> [String: Any], raisesCard: Bool = false) async {
+        guard let pid = projectId else { return }
+        do {
+            try await SupervisorService.shared.mergeAction(body(pid))
+            mergeError = nil
+            mergeCardRaised = raisesCard
+        } catch SupervisorServiceError.refused(_, let message, _) {
+            mergeError = message
+        } catch SupervisorServiceError.token(let path) {
+            tokenError = path
+        } catch {
+            mergeError = "The sidecar did not answer."
+        }
+        await refreshMerge()
+        await refreshInbox()
+    }
 
     func refreshQueue() async {
         guard !offline, let pid = projectId else { return }
@@ -546,6 +597,9 @@ final class SupervisorModel {
         follows = []
         queue = nil
         queueError = nil
+        merge = nil
+        mergeError = nil
+        mergeCardRaised = false
         chatSheet = nil
         announcer = SupervisorAnnouncer()
         expandedCards = []
@@ -632,6 +686,9 @@ final class SupervisorModel {
         case .queue:
             // Read only while the workspace shows it, or once it has been read.
             if inspectorSegment == .queue || queue != nil { Task { await refreshQueue() } }
+        case .merge:
+            // Shown at all times once the workspace has read it.
+            if workspaceOpen || merge != nil { Task { await refreshMerge() } }
         }
     }
 

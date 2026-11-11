@@ -187,6 +187,9 @@ import SwiftUI
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // ADR-0134 — the standing merge sits above the queue it shares a segment with.
+            SupervisorMergeSection(model: model)
+            MarvinDivider()
             if let q = model.queue {
                 capRow(q)
                 guardRow(q)

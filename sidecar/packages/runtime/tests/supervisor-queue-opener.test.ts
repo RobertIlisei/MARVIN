@@ -115,7 +115,8 @@ describe("invariant 2 — the runtime opens, no supervisor verb does", () => {
     await v.hold_queue_entry({ id: "A", reason: "x" });
     expect(f.opened).toEqual([]);
     expect(readQueue("proj").entries).toEqual([]);
-    expect(Object.keys(v).filter((k) => /open|approve|release|reorder|raise/i.test(k))).toEqual([]);
+    // `release_merge` (ADR-0134) undoes the supervisor's own merge hold; it has nothing to do with the queue.
+    expect(Object.keys(v).filter((k) => /open|approve|release|reorder|raise/i.test(k) && k !== "release_merge")).toEqual([]);
   });
 });
 

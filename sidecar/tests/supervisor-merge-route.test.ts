@@ -64,7 +64,7 @@ describe("/api/supervisor/merge", () => {
     expect(r.status).toBe(200);
     expect(readMerge(P).authorisation).toBeNull();
     const [item] = listInbox(P);
-    expect(item).toMatchObject({ kind: "queue", act: { type: "queue", what: "merge" }, queue: { kind: "merge", proposal: { target: "integration", gate: "pnpm test:full", timeoutMs: 3_000_000, validForHours: 48 }, previous: null } });
+    expect(item).toMatchObject({ kind: "queue", act: { type: "queue", what: "merge" }, queue: { kind: "merge", proposal: { target: "integration", gate: "pnpm test:full", timeoutMs: 3_000_000, validForHours: 48 }, replaces: null } });
     expect((item?.queue as { proposal: { timeZone: string } }).proposal.timeZone.length).toBeGreaterThan(0);
     expect(item?.rawAct?.summary).toContain("pnpm test:full");
     expect(item?.rawAct?.summary).toContain("integration");
