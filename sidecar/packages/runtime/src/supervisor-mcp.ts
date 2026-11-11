@@ -71,6 +71,7 @@ import {
   newLedgerId,
   readLedger,
 } from "./supervisor-ledger";
+import { holdBranch, MAX_BRANCH_HOLD_REASON_CHARS, releaseOwnHold } from "./supervisor-merge";
 import { MAX_REPLY_REFS, type MessageRef } from "./supervisor-messages";
 import {
   type ActionLimiter,
@@ -109,6 +110,8 @@ export const SUPERVISE_TOOL_NAMES = [
   "lower_cap",
   "restore_cap",
   "hold_queue_entry",
+  "hold_merge",
+  "release_merge",
   "reply",
   "follow",
   "unfollow",
@@ -1498,6 +1501,45 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     return qnote("hold_queue_entry", null, "act", "allowed", `held "${id}": ${reason} — the user releases it`, { argsDigest });
   }
 
+  /**
+   * ADR-0134 — hold one finished branch out of the standing merge, with a reason
+   * the user reads. It only narrows: it cannot start a pass, merge, approve an
+   * authorisation, or move a branch through a window, a gate or a skipped check.
+   */
+  async function hold_merge(args: { branch: string; reason: string }): Promise<string> {
+    const branch = String(args.branch ?? "").trim();
+    const reason = String(args.reason ?? "").trim().slice(0, MAX_BRANCH_HOLD_REASON_CHARS);
+    const argsDigest = digestArgs({ branch, reason });
+    const st = getSupervisorState(projectId);
+    const mode = categoryMode(st, "posture");
+    if (st.mode === "off") return qnote("hold_merge", null, "refuse", "off", "the supervisor is off", { argsDigest });
+    if (!reason) return qnote("hold_merge", null, "refuse", "reason", "a hold needs a reason — the user reads it in the workspace", { argsDigest });
+    if (mode !== "autonomous") return qnote("hold_merge", null, "propose", "shadow", `would hold "${branch}" out of the standing merge: ${reason}`, { argsDigest });
+    const hold = actHold();
+    if (hold) return qnote("hold_merge", null, "refuse", hold.reasonCode, hold.reason, { argsDigest });
+    const done = holdBranch(projectId, branch, reason);
+    if (!done.ok) return qnote("hold_merge", null, "refuse", "no-hold", done.error, { argsDigest });
+    return qnote("hold_merge", null, "act", "allowed", `held "${branch}" out of the standing merge: ${reason} — release it with release_merge, or the user does`, { argsDigest });
+  }
+
+  /**
+   * ADR-0134 — undo YOUR OWN hold on a branch. A hold window and a failed gate
+   * are not holds you placed; no verb of yours moves a branch past either.
+   */
+  async function release_merge(args: { branch: string }): Promise<string> {
+    const branch = String(args.branch ?? "").trim();
+    const argsDigest = digestArgs({ branch });
+    const st = getSupervisorState(projectId);
+    const mode = categoryMode(st, "posture");
+    if (st.mode === "off") return qnote("release_merge", null, "refuse", "off", "the supervisor is off", { argsDigest });
+    if (mode !== "autonomous") return qnote("release_merge", null, "propose", "shadow", `would release your hold on "${branch}"`, { argsDigest });
+    const hold = actHold();
+    if (hold) return qnote("release_merge", null, "refuse", hold.reasonCode, hold.reason, { argsDigest });
+    const done = releaseOwnHold(projectId, branch);
+    if (!done.ok) return qnote("release_merge", null, "refuse", "not-yours", done.error, { argsDigest });
+    return qnote("release_merge", null, "act", "allowed", `released your hold on "${branch}" — a hold window, a failed gate or a skipped check still keeps it out`, { argsDigest });
+  }
+
   /** ADR-0128 §5 — what a reply links to: the ids the server can resolve, labelled from its own records. */
   function resolveRefs(raw: unknown[]): MessageRef[] {
     const out: MessageRef[] = [];
@@ -1617,7 +1659,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     return `Stopped following tab ${tab}.`;
   }
 
-  return { sessions, read, answer, set_posture, send, cancel, confirm, worktrees, close_session, review_scope, new_session, reply, follow, unfollow, post_notice, propose_queue, propose_guard, lower_cap, restore_cap, hold_queue_entry };
+  return { sessions, read, answer, set_posture, send, cancel, confirm, worktrees, close_session, review_scope, new_session, reply, follow, unfollow, post_notice, propose_queue, propose_guard, lower_cap, restore_cap, hold_queue_entry, hold_merge, release_merge };
 }
 
 const groundSchema = z.object({
@@ -1836,6 +1878,18 @@ export function supervisorToolDefs(ctx: VerbContext) {
       "Hold one approved queue entry, with a reason the user reads. You cannot release it (the user does), reorder entries, approve, or open one.",
       { id: z.string().min(1).max(40), reason: z.string().min(1).max(MAX_HOLD_REASON_CHARS) },
       async (args) => text(await v.hold_queue_entry(args as { id: string; reason: string })),
+    ),
+    tool(
+      "hold_merge",
+      "Hold one finished branch out of the user's standing merge, with a reason the user reads. You can only hold: you cannot start a pass, merge, approve an authorisation, or push a branch through a hold window, a failed gate or a skipped check.",
+      { branch: z.string().min(1).max(200), reason: z.string().min(1).max(MAX_BRANCH_HOLD_REASON_CHARS) },
+      async (args) => text(await v.hold_merge(args as { branch: string; reason: string })),
+    ),
+    tool(
+      "release_merge",
+      "Undo your OWN hold on a branch (hold_merge). It releases nothing else: a hold window, a failed gate and the user's own holds are not yours to lift.",
+      { branch: z.string().min(1).max(200) },
+      async (args) => text(await v.release_merge(args as { branch: string })),
     ),
     tool(
       "reply",

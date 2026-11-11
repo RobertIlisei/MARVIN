@@ -6,10 +6,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { readLedger } from "../src/supervisor-ledger";
+import { createSupervisorVerbs, SUPERVISE_TOOL_NAMES, type VerbContext } from "../src/supervisor-mcp";
 import { approveMerge, GATE_DEFAULT_TIMEOUT_MS, type MergeProposal, readMerge, revokeMerge } from "../src/supervisor-merge";
 import { argvViolation, defaultPassDeps, MergePass, MergeRunner, type PassDeps, type PassResult } from "../src/supervisor-merge-pass";
+import { ActionLimiter } from "../src/supervisor-policy";
 import { acquireMergeLock, clearStaleMergeLocks, mergeLockPath } from "../src/supervisor-queue-lock";
-import { bootSupervisor, resetSupervisorStateForTests } from "../src/supervisor-state";
+import { applySupervisorAction, bootSupervisor, currentSupervisorToken, getSupervisorState, resetSupervisorStateForTests } from "../src/supervisor-state";
 import type { ProjectEvent } from "../src/turn-registry";
 import { createSessionWorktree, markSessionWorktreeClosed, mergeAllWorktrees, reconcileWorktrees } from "../src/worktrees";
 
@@ -835,5 +837,111 @@ describe("the lock is cleared at boot when its pid is gone", () => {
     resetSupervisorStateForTests();
     bootSupervisor();
     expect(existsSync(mergeLockPath(PROJECT))).toBe(false);
+  });
+});
+
+describe("holds are data: a path glob inside a window (invariant 10)", () => {
+  const evening = { pathGlob: "scripts/gate/**", window: { from: "21:00", to: "07:00" } };
+  const at = (h: number) => new Date(2026, 10, 11, h, 0, 0).getTime();
+
+  it("a branch touching the glob waits outside the window and merges inside it; a branch that does not touch it is never held", async () => {
+    const gate = makeTab("gate", { "scripts/gate/run.sh": "exit 0\n" });
+    const plain = makeTab("plain", { "src/x.ts": "x\n" });
+    authorise({ holds: [evening] });
+    const h = harness({ now: () => at(14) });
+    const r = await h.run();
+    expect(r.merged).toEqual([plain.branch]);
+    const held = readMerge(PROJECT).branches.find((b) => b.branch === gate.branch);
+    expect(held).toMatchObject({ status: "held", code: "window" });
+    expect(held?.reason).toContain("scripts/gate/**");
+    expect(held?.reason).toContain("21:00–07:00");
+    expect(held?.reason).toContain("UTC");
+    expect(reconcileWorktrees(workDir).find((w) => w.branch === gate.branch)?.state).toBe("ready");
+    // The window opens: the next pass merges it.
+    const h2 = harness({ now: () => at(22) });
+    expect((await h2.run()).merged).toEqual([gate.branch]);
+    expect(readMerge(PROJECT).branches.find((b) => b.branch === gate.branch)).toMatchObject({ status: "merged" });
+  });
+
+  it("a hold window is local time and wraps midnight (03:00 is inside 21:00–07:00)", async () => {
+    const gate = makeTab("gate", { "scripts/gate/run.sh": "exit 0\n" });
+    authorise({ holds: [evening] });
+    expect((await harness({ now: () => at(3) }).run()).merged).toEqual([gate.branch]);
+  });
+});
+
+describe("the supervisor's verbs: hold and release its own hold, nothing more (invariant 10)", () => {
+  const ctx = (token: string) =>
+    ({
+      projectId: PROJECT,
+      workDir,
+      wakeId: "wake-1",
+      wake: { acts: 0 },
+      limiter: new ActionLimiter(() => getSupervisorState(PROJECT).caps),
+      deps: { listRows: async () => [], newTabBase: async () => ({}), modelLookup: async () => () => null },
+      token,
+    }) as unknown as VerbContext;
+  const act = (body: Record<string, unknown>) => applySupervisorAction({ projectId: PROJECT, ...body }, currentSupervisorToken());
+  const verbs = () => createSupervisorVerbs(ctx(currentSupervisorToken() as string));
+
+  it("in shadow it proposes and changes nothing", async () => {
+    authorise();
+    act({ action: "start" });
+    const text = await verbs().hold_merge({ branch: "marvin/tab/a", reason: "wait for the schema" });
+    expect(text).toMatch(/shadow/i);
+    expect(readMerge(PROJECT).holds).toEqual([]);
+  });
+
+  it("autonomous: a held branch is skipped by the pass until its hold is released; the release is the supervisor's own", async () => {
+    const tab = makeTab("a", { "a.txt": "a\n" });
+    authorise();
+    act({ action: "start" });
+    act({ action: "autonomy", category: "posture", value: "autonomous" });
+    const v = verbs();
+    expect(await v.hold_merge({ branch: tab.branch, reason: "the schema it depends on is not in yet" })).toMatch(/held/i);
+    const h = harness();
+    const before = ref("integration");
+    await h.run();
+    expect(ref("integration")).toBe(before);
+    expect(h.gateRuns).toEqual([]);
+    expect(readMerge(PROJECT).branches[0]).toMatchObject({ status: "held", code: "supervisor-hold" });
+    expect(readLedger(PROJECT).some((l) => l.verb === "hold_merge" && l.decision === "act")).toBe(true);
+    expect(await v.release_merge({ branch: tab.branch })).toMatch(/released/i);
+    expect((await h.run()).merged).toEqual([tab.branch]);
+  });
+
+  it("release_merge cannot undo a hold window, a failed gate or the user's own hold: there is nothing of the supervisor's to release", async () => {
+    const gate = makeTab("gate", { "scripts/gate/run.sh": "exit 0\n" });
+    const bad = makeTab("bad", { "b.txt": "b\n" });
+    authorise({ holds: [{ pathGlob: "scripts/gate/**", window: { from: "21:00", to: "07:00" } }], gate: "test ! -f b.txt" });
+    act({ action: "start" });
+    act({ action: "autonomy", category: "posture", value: "autonomous" });
+    const h = harness({ now: () => new Date(2026, 10, 11, 14).getTime() });
+    await h.run();
+    expect(readMerge(PROJECT).branches.find((b) => b.branch === gate.branch)?.status).toBe("held");
+    expect(readMerge(PROJECT).branches.find((b) => b.branch === bad.branch)?.status).toBe("failed");
+    const v = verbs();
+    for (const b of [gate.branch, bad.branch]) expect(await v.release_merge({ branch: b })).toMatch(/refused/i);
+    // The window still holds, the failed gate still failed, and the next pass at the same hour does the same.
+    const before = ref("integration");
+    await h.run();
+    expect(ref("integration")).toBe(before);
+    expect(readMerge(PROJECT).branches.find((b) => b.branch === gate.branch)?.status).toBe("held");
+  });
+
+  it("a hold needs a reason and an authorisation; the supervisor off refuses", async () => {
+    act({ action: "start" });
+    act({ action: "autonomy", category: "posture", value: "autonomous" });
+    const v = verbs();
+    expect(await v.hold_merge({ branch: "marvin/tab/a", reason: "  " })).toMatch(/refused/i);
+    expect(await v.hold_merge({ branch: "marvin/tab/a", reason: "r" })).toMatch(/refused/i);
+    expect(readMerge(PROJECT).holds).toEqual([]);
+  });
+
+  it("no verb starts a pass, merges, approves or revokes an authorisation, or pushes a branch through anything", () => {
+    const names = Object.keys(verbs());
+    expect(names.filter((n) => /merge/i.test(n)).sort()).toEqual(["hold_merge", "release_merge"]);
+    expect(names.filter((n) => /approve|authori[sz]e|start|run|force|pass|retry|revoke/i.test(n))).toEqual([]);
+    expect(SUPERVISE_TOOL_NAMES.filter((n) => /merge/i.test(n))).toEqual(["hold_merge", "release_merge"]);
   });
 });
