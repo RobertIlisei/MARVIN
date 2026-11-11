@@ -28,8 +28,10 @@ import { randomUUID } from "node:crypto";
 import { listSessionMetas, readSessionMeta } from "./session-meta";
 import { digestArgs, appendLedgerEntry, type LedgerEntryInput } from "./supervisor-ledger";
 import { openSupervisorTab } from "./supervisor-inbox-perform";
-import { type QueueBlock, type QueueEntry, type QueueFile, effectiveCap, readQueue, updateQueue } from "./supervisor-queue";
+import { addInboxItem, buildRawAct } from "./supervisor-inbox";
+import { effectiveCap, QUEUE_EXPIRY_MS, type QueueBlock, type QueueEntry, type QueueFile, readQueue, updateQueue } from "./supervisor-queue";
 import { runGuardCommand } from "./supervisor-queue-guard";
+import { checkScopeRef, type ScopeVerdict } from "./supervisor-queue-scope";
 import { acquireQueueLock, isPidAlive } from "./supervisor-queue-lock";
 import { currentSupervisorToken, getSupervisorState, isSupervisorSessionId, listEnabledSupervisors } from "./supervisor-state";
 import { getLiveTurn, type ProjectEvent, subscribeProjectEvents } from "./turn-registry";
@@ -41,7 +43,6 @@ import { freeDiskBytes, reconcileWorktreesAsync, worktreeMinFreeBytes } from "./
 const OPEN_TAB_WINDOW_MS = 7 * 24 * 3600 * 1000;
 
 export type GuardResult = { ok: true } | { ok: false; exitCode: number | null; timedOut: boolean; detail: string };
-export type ScopeVerdict = { ok: true } | { ok: false; reason: string; detail: string };
 export type OpenResult = { ok: true; marvinSessionId: string; branch: string | null } | { ok: false; code: string; error: string; tabExists: boolean };
 
 export interface OpenerDeps {
@@ -100,6 +101,9 @@ export function defaultOpenerDeps(): OpenerDeps {
     },
     // ADR-0133 decision 1 — the command comes from the queue (the user approved it on a card), never from a file in the project.
     runGuard: (_projectId, workDir, command) => runGuardCommand(workDir, command),
+    // ADR-0133 decision 5 — a text comparison against the project's own plan; no model reads it.
+    checkScope: (_projectId, workDir, entry) => checkScopeRef(workDir, entry),
+    escalate: (projectId, entry, detail) => raiseScopeHold(projectId, entry, detail),
     open: async (projectId, workDir, entry, ledgerId) => {
       const r = await openSupervisorTab(
         projectId,
@@ -134,6 +138,31 @@ const ledger = (projectId: string, line: Pick<LedgerEntryInput, "verb" | "decisi
     /* a ledger write must not stop the queue; the entry's own block still says why */
   }
 };
+
+/**
+ * A scope miss is an escalation naming both lines — where the brief was queued
+ * and where its id sits now. A card with no act: it is information, and the
+ * entry stays held until the plan says otherwise (or the user removes it).
+ * One card per distinct miss (`dedupeKey`).
+ */
+function raiseScopeHold(projectId: string, entry: QueueEntry, detail: string): void {
+  try {
+    const st = getSupervisorState(projectId);
+    addInboxItem(projectId, {
+      sessionId: null,
+      kind: "queue",
+      escalatedBecause: { code: "human-only", label: `Queued brief "${entry.id}" was held: its scope no longer holds`, rule: "ADR-0133 decision 5" },
+      rawAct: buildRawAct("queue_hold", { id: entry.id, detail }),
+      queue: { kind: "hold", entryId: entry.id, detail },
+      recommendation: { actionId: "dismiss", text: "Check the plan; remove the entry or fix the plan, then release it from the queue." },
+      grounds: [],
+      dedupeKey: `queue-scope:${entry.id}:${digestArgs({ detail })}`,
+      modeAtCreation: st.mode === "autonomous" ? "autonomous" : "shadow",
+    });
+  } catch {
+    /* the entry is held and ledgered either way */
+  }
+}
 
 /** What the opener's pass decided about one project, for tests and the route. */
 export interface PassResult {
@@ -219,6 +248,7 @@ export class QueueOpener {
     this.interrupted(projectId);
 
     for (let guardTurns = 0; guardTurns < 50; guardTurns++) {
+      this.expire(projectId);
       const q = readQueue(projectId);
       const merged = await this.deps.mergedBranches(projectId, workDir);
       const eligible: QueueEntry[] = [];
@@ -327,6 +357,17 @@ export class QueueOpener {
     });
     ledger(projectId, { id: lineId, verb: "queue.refused", decision: "refuse", reason: `could not open "${e.id}": ${r.error}`, reasonCode: r.code, argsDigest: digestArgs({ id: e.id }) });
     return false;
+  }
+
+  /** ADR-0133 open question 2 — an entry still unopened 7 days after the user approved it was written against an older tree: it expires. */
+  private expire(projectId: string): void {
+    const now = this.deps.now();
+    const stale = readQueue(projectId).entries.filter((e) => e.status === "queued" && now - Date.parse(e.approvedAt) > QUEUE_EXPIRY_MS);
+    if (!stale.length) return;
+    updateQueue(projectId, "expired", (f) => {
+      for (const e of f.entries) if (stale.some((s) => s.id === e.id)) e.status = "expired";
+    });
+    for (const e of stale) ledger(projectId, { verb: "queue.expired", decision: "drop", reason: `"${e.id}" was not opened within 7 days of its approval — it expired; the user may approve it again`, reasonCode: "expired", argsDigest: digestArgs({ id: e.id }) });
   }
 
   /** An "opening" left by a process that died mid-open: the tab may exist, so it is never opened on the queue's say-so again. */

@@ -256,6 +256,8 @@ export function buildRawAct(toolName: string, input: Record<string, unknown>): R
       return make(`Post a notice to every tab in the project: ${firstLine(String(input.text ?? ""), 120)}`);
     case "cancel":
       return make(`Stop the running turn in tab ${String(input.marvinSessionId ?? "")}`);
+    case "queue_hold":
+      return make(`Queued brief "${String(input.id ?? "")}" held: ${String(input.detail ?? "")}`);
     case "new_session":
       return make("Open a new tab in a fresh worktree");
     case "propose_queue": {
