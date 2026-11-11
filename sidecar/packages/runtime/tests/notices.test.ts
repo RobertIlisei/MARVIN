@@ -121,6 +121,17 @@ describe("the reminder block", () => {
     expect(renderNoticesBlock([])).toBeNull();
   });
 
+  it("does not vouch for an entry's author: a file entry claiming to be the user's renders without attribution", () => {
+    putFile([entry({ author: "user" }), entry({ id: "n-2", author: "supervisor" })]);
+    const lines = (noticesReminder(root, NOW) ?? "").split("\n").filter((l) => l.startsWith("- "));
+    expect(lines).toHaveLength(2);
+    for (const l of lines) {
+      expect(l).toMatch(/^- \(until \S+\) /);
+      expect(l).not.toMatch(/the user|the supervisor/);
+    }
+    expect(noticesReminder(root, NOW)).toMatch(/author is not verified/);
+  });
+
   it("rides turnReminders for any session of the project, and not at all without notices", () => {
     expect(turnReminders({ mode: "agent", noticesContext: noticesReminder(root, NOW) }).join("\n")).not.toContain("Project notices");
     putFile([entry()]);
