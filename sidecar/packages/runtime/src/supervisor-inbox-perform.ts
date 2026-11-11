@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 
 import { answerQuestion, resolveConfirm } from "./confirm-answer";
+import { addNotice } from "./notices";
 import { activeModelLookup, applyPostureChange } from "./posture";
 import { closeSession } from "./session-close";
 import { readSessionMeta, type SessionPosture, type SessionTree, upsertSessionMeta } from "./session-meta";
@@ -26,6 +27,8 @@ import { openFollow } from "./supervisor-follows";
 import type { NewTabDelegation } from "./supervisor-inbox";
 import type { InboxPerform } from "./supervisor-inbox-actions";
 import type { LedgerGround } from "./supervisor-ledger";
+import { approveMerge } from "./supervisor-merge";
+import { approveEntries, setGuard } from "./supervisor-queue";
 import { sendAsSupervisor } from "./supervisor-send";
 import { applySupervisorAction, getSupervisorState, overBudget } from "./supervisor-state";
 import { announceProjectEvent, cancelLiveTurn, getLiveTurn } from "./turn-registry";
@@ -118,6 +121,25 @@ export function defaultInboxPerform(projectId: string, workDir: string, token: s
       }
       const r = await sendAsSupervisor({ projectId, marvinSessionId: a.sessionId, text: a.text, kind: a.kind, grounds: a.grounds, ledgerId: a.ledgerId, editedByUser: a.editedByUser });
       return r.ok ? { ok: true, message: r.queued ? "queued until the tab's turn ends" : "sent" } : { ok: false, status: 409, code: r.code, error: r.reason };
+    },
+    // The words stay the supervisor's; the user's click posted them to the project root's store.
+    notice: (a) => {
+      const r = addNotice(workDir, { text: a.text, author: "supervisor", ttlHours: a.ttlHours });
+      return r.ok ? { ok: true, message: "posted to every tab" } : { ok: false, status: r.code === "full" ? 409 : 400, error: r.error };
+    },
+    // ADR-0133 — the user's click: the entries and the command exist from here on, and from nowhere else.
+    queue: (a) => {
+      if (a.what === "guard") {
+        setGuard(projectId, a.command);
+        return { ok: true, message: "the guard command is approved" };
+      }
+      // ADR-0134 — the user's click: from here, and from nowhere else, a standing merge authorisation exists.
+      if (a.what === "merge") {
+        const r = approveMerge(projectId, a.proposal);
+        return r.ok ? { ok: true, message: `standing merge into ${a.proposal.target} approved until ${r.expiresAt}` } : { ok: false, status: 409, error: r.error };
+      }
+      const r = approveEntries(projectId, a.entries);
+      return r.ok ? { ok: true, message: `approved ${r.added} — the runtime opens them as slots free` } : { ok: false, status: 409, error: r.error };
     },
     cancel: (sessionId) => (cancelLiveTurn(sessionId, "user") ? { ok: true } : { ok: false, status: 409, error: "the tab has no turn running" }),
     worktrees: async (a) => {

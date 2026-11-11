@@ -86,6 +86,18 @@ enum SessionMetaService {
         guard (200..<300).contains(status) else { throw failure(status: status, data: data) }
     }
 
+    /// POST /api/sessions/attention — dismiss a session's attention item (ADR-0130).
+    static func dismissAttention(projectId: String, sessionId: String) async throws {
+        var req = URLRequest(url: baseURL.appendingPathComponent("api/sessions/attention"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["projectId": projectId, "marvinSessionId": sessionId])
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else { throw failure(status: status, data: data) }
+    }
+
     /// ADR-0111 — ask the session that owns a branch to bring it up to date
     /// with the current branch, in its own worktree: merge, resolve, test,
     /// commit. One turn through the resume path; 202 when dispatched.

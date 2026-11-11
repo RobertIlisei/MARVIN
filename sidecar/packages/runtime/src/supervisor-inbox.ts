@@ -30,11 +30,13 @@ import type { PosturePatch } from "./posture";
 import type { SessionPosture } from "./session-meta";
 import { shellWriteTargets, withoutGitGlobalOptions } from "./supervisor-acts";
 import { digestArgs, ensureSupervisorDir, type LedgerGround, supervisorDir, wakeOriginOf } from "./supervisor-ledger";
+import type { MergeProposal } from "./supervisor-merge";
 import type { ReplyOrigin } from "./supervisor-messages";
+import type { QueueEntryProposal } from "./supervisor-queue";
 import { type Ground, type GroundViewContext, projectGround } from "./supervisor-view";
 import { announceProjectEvent } from "./turn-registry";
 
-export const INBOX_KINDS = ["question", "confirm", "integration", "containment", "discard", "boundary-path", "posture-widen", "scope", "new-tab", "guardrail"] as const;
+export const INBOX_KINDS = ["question", "confirm", "integration", "containment", "discard", "boundary-path", "posture-widen", "scope", "new-tab", "guardrail", "queue"] as const;
 export type InboxKind = (typeof INBOX_KINDS)[number];
 export type InboxState = "open" | "resolved" | "dismissed" | "superseded";
 export type InboxResolvedBy = "user" | "tab" | "expired";
@@ -93,6 +95,18 @@ export interface NewTabProposal {
   follow?: { until: "scope-met" | "merge-ready" };
 }
 
+/**
+ * ADR-0133 — what a `queue` card shows. Server-built: entries and the command
+ * come from the verb's validated input, and the card's click is the consent.
+ * `hold` is an escalation naming why a queued entry did not open; it carries no act.
+ */
+export type QueueCard =
+  | { kind: "entries"; entries: QueueEntryProposal[]; warnings: string[] }
+  | { kind: "guard"; command: string; previous: string | null }
+  | { kind: "hold"; entryId: string; detail: string }
+  /** ADR-0134 — the standing merge authorisation: the target and the gate command in full, the holds, the zone, the validity. `replaces` is the authorisation this one would end (the client has `previous` on the guard card, a string; this is an object, so it has its own name). */
+  | { kind: "merge"; proposal: MergeProposal; replaces: { target: string; gate: string } | null };
+
 export const NEW_TAB_DELEGATIONS = ["answer-questions", "observe", "off"] as const;
 export type NewTabDelegation = (typeof NEW_TAB_DELEGATIONS)[number];
 
@@ -104,10 +118,14 @@ export type InboxAct =
   /** `reopensScope`: a scope review's "what is missing" — sent to a scope-met tab on the user's click (§4 item 6). */
   | { type: "send"; sessionId: string; text: string; kind: "nudge" | "instruction"; grounds: LedgerGround[]; reopensScope?: boolean }
   | { type: "cancel"; sessionId: string }
+  /** ADR-0131 — a supervisor notice that named a human-only act: the user's click posts it to every tab. */
+  | { type: "notice"; text: string; ttlHours: number }
   | { type: "worktrees"; op: "merge" | "merge-all" | "prepare-mr" | "drop"; slugs: string[]; push?: boolean; openMergeRequest?: boolean }
   | { type: "close"; sessionId: string; worktree: "keep" | "merge" | "discard" }
   | { type: "new-tab"; requestId: string; title?: string; posture: SessionPosture; grounds: LedgerGround[]; delegation?: NewTabDelegation; follow?: { until: "scope-met" | "merge-ready" } }
-  | { type: "guardrail"; pause: string };
+  | { type: "guardrail"; pause: string }
+  /** ADR-0133 — the user's click approves the card's entries (all, or a subset) or its guard command. */
+  | { type: "queue"; what: "entries" | "guard" | "merge" };
 
 export interface InboxDraft {
   id?: string;
@@ -124,6 +142,8 @@ export interface InboxDraft {
   newTab?: NewTabProposal | null;
   postureChange?: { from: Record<string, unknown>; to: Record<string, unknown>; widenedDimensions: string[] } | null;
   guardrail?: { kind: string; detail: string; verb?: "raise-cap" | "resume" | "open-tab" } | null;
+  /** ADR-0133 — a queue card's entries, guard command or hold. */
+  queue?: QueueCard | null;
   modeAtCreation: "shadow" | "autonomous";
   wakeId?: string | null;
   /** The ledger line that escalated it. */
@@ -168,6 +188,7 @@ export const INBOX_ITEM_FIELDS = [
   "newTab",
   "postureChange",
   "guardrail",
+  "queue",
   "modeAtCreation",
   "state",
   "resolvedBy",
@@ -234,10 +255,30 @@ export function buildRawAct(toolName: string, input: Record<string, unknown>): R
     }
     case "send":
       return make(`Send to tab ${String(input.marvinSessionId ?? "")}: ${firstLine(String(input.message ?? ""), 120)}`);
+    case "post_notice":
+      return make(`Post a notice to every tab in the project: ${firstLine(String(input.text ?? ""), 120)}`);
     case "cancel":
       return make(`Stop the running turn in tab ${String(input.marvinSessionId ?? "")}`);
+    case "queue_hold":
+      return make(`Queued brief "${String(input.id ?? "")}" held: ${String(input.detail ?? "")}`);
     case "new_session":
       return make("Open a new tab in a fresh worktree");
+    case "propose_queue": {
+      const n = Array.isArray(input.entries) ? input.entries.length : 0;
+      return make(`Approve a queue of ${n} brief${n === 1 ? "" : "s"}: the runtime opens each in a fresh worktree as slots free`);
+    }
+    // The whole command, never a first line: the user consents to exactly this text.
+    case "propose_guard":
+      return make(`Run this command before each queued tab opens (a non-zero exit holds the queue): ${String(input.command ?? "")}`);
+    // The whole command and every hold, never a summary: the user consents to exactly this text.
+    case "propose_merge": {
+      const holds = Array.isArray(input.holds) ? (input.holds as Array<{ pathGlob?: unknown; window?: { from?: unknown; to?: unknown } }>) : [];
+      const h = holds.map((x) => `${String(x.pathGlob)} only ${String(x.window?.from)}–${String(x.window?.to)}`).join("; ");
+      return make(
+        `Merge finished tab branches into ${String(input.target ?? "")} (local only — no push, tag, merge request or CI), each only after this gate command exits 0 within ${Math.round(Number(input.timeoutMs ?? 0) / 60000)} min: ${String(input.gate ?? "")}` +
+          `${h ? `. Holds (${String(input.timeZone ?? "local time")}): ${h}` : ""}. Valid for ${String(input.validForHours ?? "")} hours from your click.`,
+      );
+    }
     default:
       return make(toolName.startsWith("mcp__") ? `${toolName} (a server MARVIN did not register)` : toolName);
   }
@@ -335,6 +376,7 @@ export function addInboxItem(projectId: string, draft: InboxDraft): InboxRecord 
     newTab: draft.newTab ?? null,
     postureChange: draft.postureChange ?? null,
     guardrail: draft.guardrail ?? null,
+    queue: draft.queue ?? null,
     modeAtCreation: draft.modeAtCreation,
     wakeId: draft.wakeId ?? null,
     origin: wakeOriginOf(draft.wakeId) ?? draft.origin ?? null,
@@ -459,6 +501,7 @@ const PERFORM_LABEL: Record<string, string> = {
   posture: "Apply posture",
   send: "Send to the tab",
   cancel: "Stop the turn",
+  notice: "Post to every tab",
 };
 
 /** The chips an item offers, in order. Labels come from here so the app invents no act verbs. */
@@ -491,6 +534,13 @@ export function actionsFor(i: InboxRecord): InboxAction[] {
       return [
         { id: "perform", label: PERFORM_LABEL.send as string, role: "consent", recommended: true, requiresExpanded: false },
         { id: "edit", label: "Edit…", role: "edit", recommended: false, requiresExpanded: false },
+        DISMISS,
+      ];
+    case "queue":
+      return [
+        // A command the runtime executes — the guard, or the merge gate — is consented to only after the raw act is expanded.
+        { id: "approve", label: act.what === "guard" ? "Approve command" : act.what === "merge" ? "Approve standing merge" : "Approve all", role: "consent", recommended: true, requiresExpanded: act.what !== "entries" },
+        ...(act.what === "entries" ? [{ id: "approve-subset", label: "Approve selected…", role: "edit" as const, recommended: false, requiresExpanded: false }] : []),
         DISMISS,
       ];
     case "guardrail":
@@ -528,6 +578,7 @@ export interface InboxItemView {
   newTab: NewTabProposal | null;
   postureChange: InboxRecord["postureChange"];
   guardrail: InboxRecord["guardrail"];
+  queue: QueueCard | null;
   modeAtCreation: "shadow" | "autonomous";
   state: InboxState;
   resolvedBy: InboxResolvedBy | null;
@@ -561,6 +612,7 @@ export function projectInboxItem(i: InboxRecord, ctx: GroundViewContext, all: re
     newTab: i.newTab,
     postureChange: i.postureChange,
     guardrail: i.guardrail,
+    queue: i.queue ?? null,
     modeAtCreation: i.modeAtCreation,
     state: i.state,
     resolvedBy: i.resolvedBy,

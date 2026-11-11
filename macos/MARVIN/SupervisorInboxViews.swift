@@ -448,6 +448,11 @@ enum SupervisorCardSheet: Identifiable {
             SupervisorNewTabCard(model: model, item: item, newTab: nt, enabled: enabled, surface: surface)
         } else if item.kind == "guardrail" {
             SupervisorGuardrailStrip(model: model, item: item, enabled: enabled, surface: surface)
+        } else if item.kind == "queue", let card = item.queue, card.kind == "merge", let proposal = card.proposal {
+            SupervisorMergeCardView(model: model, item: item, proposal: proposal, replaces: card.replaces, enabled: enabled)
+        } else if item.kind == "queue", let card = item.queue, ["entries", "guard", "hold"].contains(card.kind) {
+            // An unknown card kind from a newer sidecar falls through to the plain escalation below.
+            SupervisorQueueCardView(model: model, item: item, card: card, enabled: enabled)
         } else {
             SupervisorEscalationCard(model: model, item: item, enabled: enabled, surface: surface)
         }

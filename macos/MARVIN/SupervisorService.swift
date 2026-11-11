@@ -226,6 +226,45 @@ final class SupervisorService {
     func stopFollow(projectId: String, id: String) async throws {
         _ = try await call("api/supervisor/follows", method: "POST", body: ["projectId": projectId, "id": id, "action": "stop"])
     }
+
+    // ADR-0133 — the approved queue. Reading it, and the user's own settings (cap, release, remove, a
+    // guard-command card). An entry is approved only by the click on its inbox card, never here.
+    func queue(projectId: String) async throws -> SupervisorQueueView {
+        let data = try await call("api/supervisor/queue", query: [URLQueryItem(name: "projectId", value: projectId)])
+        guard let q = SupervisorQueueView.decode(data) else { throw SupervisorServiceError.transport("unreadable queue") }
+        return q
+    }
+
+    func queueAction(_ body: [String: Any]) async throws {
+        _ = try await call("api/supervisor/queue", method: "POST", body: body)
+    }
+
+    // ADR-0134 — the standing merge. Reading it, and the user's own acts (a card to review, revoke, release a
+    // hold, check again). The authorisation is created only by the click on its inbox card, never here.
+    func merge(projectId: String) async throws -> SupervisorMergeView {
+        let data = try await call("api/supervisor/merge", query: [URLQueryItem(name: "projectId", value: projectId)])
+        guard let m = SupervisorMergeView.decode(data) else { throw SupervisorServiceError.transport("unreadable merge state") }
+        return m
+    }
+
+    func mergeAction(_ body: [String: Any]) async throws {
+        _ = try await call("api/supervisor/merge", method: "POST", body: body)
+    }
+
+    // ADR-0131 — project notices: the user's side of `/api/notices` (token-gated like the supervisor's routes).
+    func notices(projectId: String) async throws -> [ProjectNotice] {
+        let data = try await call("api/notices", query: [URLQueryItem(name: "projectId", value: projectId)])
+        guard let list = ProjectNotices.decodeList(data) else { throw SupervisorServiceError.transport("unreadable notices") }
+        return list
+    }
+
+    func postNotice(projectId: String, text: String, ttlHours: Int) async throws {
+        _ = try await call("api/notices", method: "POST", body: ["projectId": projectId, "text": text, "ttlHours": ttlHours])
+    }
+
+    func retireNotice(projectId: String, id: String) async throws {
+        _ = try await call("api/notices", method: "DELETE", query: [URLQueryItem(name: "projectId", value: projectId), URLQueryItem(name: "id", value: id)])
+    }
 }
 
 /// What the Sessions pane draws for the supervisor, in one observable place.
@@ -332,6 +371,9 @@ final class SupervisorModel {
         // The desk's inbox is the Sessions pane (§13.8, open decision 1).
         MarvinBridge.shared.selectLeftTabIfVisible("sessions")
         if inspectorSegment == .log { Task { await refreshLedger() } }
+        if inspectorSegment == .queue { Task { await refreshQueue() } }
+        // The standing merge is shown at all times, so it is read on every open.
+        Task { await refreshMerge() }
         Task { await refreshChat() }
     }
 
@@ -353,6 +395,77 @@ final class SupervisorModel {
     var chatItems: [String: SupervisorInboxItem] = [:]
     /// [7.3] — `GET /api/supervisor/follows`: open follows first, then recently ended.
     var follows: [SupervisorFollow] = []
+    /// ADR-0133 — `GET /api/supervisor/queue`: order, cap, holds and the reason for each.
+    var queue: SupervisorQueueView?
+    /// The server's refusal of a queue setting (a cap out of range, an unknown entry).
+    var queueError: String?
+    /// ADR-0134 — `GET /api/supervisor/merge`: the authorisation (shown at all times), holds and what the pass did.
+    var merge: SupervisorMergeView?
+    /// The server's refusal of a merge act (a target that is not a local branch, a gate that is too long).
+    var mergeError: String?
+    /// The card a successful "Review on a card" raised — the form says where to click.
+    var mergeCardRaised = false
+
+    func refreshMerge() async {
+        guard !offline, let pid = projectId else { return }
+        do {
+            let m = try await SupervisorService.shared.merge(projectId: pid)
+            guard projectId == pid else { return }
+            merge = m
+        } catch SupervisorServiceError.token(let path) {
+            tokenError = path
+        } catch {
+            NSLog("[SupervisorModel] merge failed: \(error)")
+        }
+    }
+
+    /// The user's own merge acts. The authorisation itself is the inbox card's click, not this.
+    func mergeAct(_ body: (String) -> [String: Any], raisesCard: Bool = false) async {
+        guard let pid = projectId else { return }
+        do {
+            try await SupervisorService.shared.mergeAction(body(pid))
+            mergeError = nil
+            mergeCardRaised = raisesCard
+        } catch SupervisorServiceError.refused(_, let message, _) {
+            mergeError = message
+        } catch SupervisorServiceError.token(let path) {
+            tokenError = path
+        } catch {
+            mergeError = "The sidecar did not answer."
+        }
+        await refreshMerge()
+        await refreshInbox()
+    }
+
+    func refreshQueue() async {
+        guard !offline, let pid = projectId else { return }
+        do {
+            let q = try await SupervisorService.shared.queue(projectId: pid)
+            guard projectId == pid else { return }
+            queue = q
+        } catch SupervisorServiceError.token(let path) {
+            tokenError = path
+        } catch {
+            NSLog("[SupervisorModel] queue failed: \(error)")
+        }
+    }
+
+    /// The user's own queue settings. The approval of an entry is the inbox card's click, not this.
+    func queueAct(_ body: (String) -> [String: Any]) async {
+        guard let pid = projectId else { return }
+        do {
+            try await SupervisorService.shared.queueAction(body(pid))
+            queueError = nil
+        } catch SupervisorServiceError.refused(_, let message, _) {
+            queueError = message
+        } catch SupervisorServiceError.token(let path) {
+            tokenError = path
+        } catch {
+            queueError = "The sidecar did not answer."
+        }
+        await refreshQueue()
+        await refreshInbox()
+    }
 
     /// Brief §12.1 — the pinned tab exists only while the supervisor is on.
     var chatTabVisible: Bool { SupervisorChat.tabVisible(mode: status?.mode) }
@@ -482,6 +595,11 @@ final class SupervisorModel {
         inspectorSegment = SupervisorInspectorSegment.restored(UserDefaults.standard.string(forKey: Self.segmentKey(pid)))
         chatItems = [:]
         follows = []
+        queue = nil
+        queueError = nil
+        merge = nil
+        mergeError = nil
+        mergeCardRaised = false
         chatSheet = nil
         announcer = SupervisorAnnouncer()
         expandedCards = []
@@ -565,6 +683,12 @@ final class SupervisorModel {
             }
         case .follow:
             Task { await refreshFollows() }
+        case .queue:
+            // Read only while the workspace shows it, or once it has been read.
+            if inspectorSegment == .queue || queue != nil { Task { await refreshQueue() } }
+        case .merge:
+            // Shown at all times once the workspace has read it.
+            if workspaceOpen || merge != nil { Task { await refreshMerge() } }
         }
     }
 

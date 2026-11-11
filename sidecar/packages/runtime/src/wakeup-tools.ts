@@ -15,6 +15,7 @@ import {
   MAX_JOBS_PER_SESSION,
   startBackgroundJob,
 } from "./background-jobs";
+import type { ChainCapRefusal } from "./session-attention";
 
 import {
   cancelWakeup,
@@ -46,6 +47,13 @@ export interface WakeupToolContext {
   advisorThinkingMode?: string | undefined;
   /** Depth of THIS turn in a wakeup chain (0 if started by a human). */
   depth: number;
+  /** ADR-0130 — called when the chain cap refuses a job or wakeup, so the turn's end can tell the user. */
+  onChainCap?: ((refusal: ChainCapRefusal) => void) | undefined;
+}
+
+/** What the model sees when the cap refuses: the user has been told, so end the turn. */
+function chainCapText(what: string): string {
+  return `The chain cap refused this ${what}: this session has run too many automatic follow-up turns in a row. The user has been notified and will restart it. END THE TURN NOW — do not retry, and do not tell the user to "send any message" to start it.`;
 }
 
 function textResult(text: string) {
@@ -105,6 +113,10 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
         schedulingDepth: ctx.depth,
       });
       if (!result.ok) {
+        if (result.code === "chain-depth") {
+          ctx.onChainCap?.({ what: "wakeup", label: reason });
+          return textResult(chainCapText("wakeup"));
+        }
         return textResult(`Could not schedule wakeup: ${result.error}`);
       }
       return textResult(
@@ -174,7 +186,13 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
           depth: ctx.depth,
         },
       });
-      if (!result.ok) return textResult(`Could not start background job: ${result.error}`);
+      if (!result.ok) {
+        if (result.code === "chain-depth") {
+          ctx.onChainCap?.({ what: "job", label: command.length > 120 ? `${command.slice(0, 119)}…` : command });
+          return textResult(chainCapText("background job"));
+        }
+        return textResult(`Could not start background job: ${result.error}`);
+      }
       return textResult(
         `Background job started (id ${result.id}, pid ${result.pid}): \`${command}\`. END THE TURN now — when it finishes, a new turn will start automatically with the result. Do NOT narrate watching it; the completion turn is real.`,
       );

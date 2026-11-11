@@ -3346,6 +3346,47 @@ runner.suite("session-row-state") {
         runner.expect(SessionRowStateDeriver.derive(entry { $0.isDraft = true }) == .draft, "draft")
         runner.expect(SessionRowStateDeriver.derive(entry { _ in }) == .idle, "idle")
     }
+    // ADR-0130 — `waiting` and `done` come from the wire state; an unknown state reads idle.
+    runner.test("a waiting row and a done row are mapped from the wire; an unknown state stays idle") {
+        var l = SessionLedger()
+        let json = #"{"rows":[{"marvinSessionId":"w","state":"waiting","waitingOn":{"kind":"job","label":"build","since":"2026-11-11T10:00:00.000Z"}},{"marvinSessionId":"d","state":"done","lastTurn":{"turnId":"t","outcome":"completed","marker":"scope-met"}},{"marvinSessionId":"u","state":"quarantined-by-a-newer-sidecar"},{"marvinSessionId":"e","state":"failed","lastTurn":{"turnId":"t","outcome":"error"},"waitingOn":{"kind":"wakeup"}}]}"#
+        l.apply(snapshot: SessionWatchRowWire.decodeSnapshot(Data(json.utf8))!, now: Date())
+        runner.expect(SessionRowStateDeriver.derive(l["w"]!), equals: SessionRowState.waiting, "waiting")
+        runner.expect(l["w"]?.waitingOn?.kind, equals: "job", "what it waits on")
+        runner.expect(l["w"]?.waitingOn?.label, equals: "build", "its label")
+        runner.expect(SessionRowStateDeriver.derive(l["d"]!), equals: SessionRowState.done, "done")
+        runner.expect(SessionRowStateDeriver.derive(l["u"]!), equals: SessionRowState.idle, "unknown state reads idle")
+        runner.expect(SessionRowStateDeriver.derive(l["e"]!), equals: SessionRowState.failed, "failed outranks waiting")
+        let later = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"w","state":"idle"}]}"#.utf8))!
+        l.apply(snapshot: later, now: Date())
+        runner.expect(SessionRowStateDeriver.derive(l["w"]!), equals: SessionRowState.idle, "the wait clears with the next snapshot")
+    }
+    runner.test("a live turn outranks waiting and done; waiting sorts before idle and done") {
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.liveTurnId = "t"; $0.waitingOn = .init(kind: "job"); $0.isDone = true }) == .working, "live wins")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.waitingOn = .init(kind: "job"); $0.isDone = true }) == .waiting, "waiting outranks done")
+        let ranks = [SessionRowState.done, .idle, .waiting, .failed].sorted { $0.sortRank < $1.sortRank }
+        runner.expect(ranks == [.failed, .waiting, .idle, .done], "ordering")
+    }
+    // ADR-0130 milestone 2 — an attention item is a stopped tab waiting on the user.
+    runner.test("an attention row counts as needs-you, carries its excerpt, outranks waiting and done, and clears") {
+        var l = SessionLedger()
+        let json = #"{"rows":[{"marvinSessionId":"a","state":"awaiting-you","attention":{"kind":"prose-question","excerpt":"Shall I go ahead with step 1?","since":"2026-11-11T10:00:00.000Z"},"lastTurn":{"turnId":"t","outcome":"completed","marker":"scope-met"}},{"marvinSessionId":"b","state":"idle"}]}"#
+        l.apply(snapshot: SessionWatchRowWire.decodeSnapshot(Data(json.utf8))!, now: Date())
+        runner.expect(SessionRowStateDeriver.derive(l["a"]!), equals: SessionRowState.needsYou(1), "attention reads needs-you")
+        runner.expect(l["a"]?.attention?.excerpt, equals: "Shall I go ahead with step 1?", "the excerpt")
+        runner.expect(l["a"]?.attention?.kind, equals: "prose-question", "the kind")
+        runner.expect(l.needsYouCount, equals: 1, "it counts toward the badge")
+        runner.expect(SessionRowStateDeriver.derive(l["b"]!), equals: SessionRowState.idle, "no attention reads idle")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.waitingOn = .init(kind: "job"); $0.isDone = true; $0.attention = .init(kind: "chain-cap", excerpt: "x") }) == .needsYou(1), "attention outranks waiting and done")
+        var dismissed = l
+        dismissed.clearAttention("a")
+        runner.expect(dismissed["a"]?.attention == nil, "dismissing clears it")
+        l.apply(.registered(sessionId: "a", turnId: "t2", kind: "human", startedAt: 0), now: Date())
+        runner.expect(l["a"]?.attention == nil, "a turn starting clears it")
+        let later = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"a","state":"idle"}]}"#.utf8))!
+        l.apply(snapshot: later, now: Date())
+        runner.expect(SessionRowStateDeriver.derive(l["a"]!), equals: SessionRowState.idle, "the next snapshot restates it")
+    }
     runner.test("sort rank puts attention first") {
         let ranks = [SessionRowState.idle, .needsYou(2), .draft, .working, .failed, .interrupted].sorted { $0.sortRank < $1.sortRank }
         runner.expect(ranks.first == .needsYou(2) && ranks.last == .draft, "ordering")
@@ -3363,6 +3404,12 @@ runner.suite("session-idle-collapse") {
         let p = SessionIdleCollapse.partition(rows, selected: "sel", now: now, expanded: false)
         runner.expect(p.visible, equals: ["w", "i1", "i2", "i3", "i4", "sel"], "visible in input order")
         runner.expect(p.collapsed, equals: ["i5"], "only the old, non-selected extra idle row")
+    }
+    runner.test("a done row collapses with idle rows; a waiting row never does") {
+        let rows = [row("a", .idle, age: 999), row("b", .idle, age: 999), row("c", .done, age: 999), row("d", .done, age: 999), row("w", .waiting, age: 999)]
+        let p = SessionIdleCollapse.partition(rows, selected: nil, now: now, expanded: false)
+        runner.expect(p.collapsed, equals: ["d"], "the fourth idle-or-done row collapses")
+        runner.expect(p.visible.contains("w"), "waiting stays")
     }
     runner.test("expanded shows everything; a working row is never collapsed") {
         let rows = [row("a", .idle, age: 999), row("b", .idle, age: 999), row("c", .idle, age: 999), row("d", .idle, age: 999), row("e", .working)]
@@ -5633,7 +5680,8 @@ runner.suite("supervisor-workspace") {
         runner.expect(SupervisorInspectorSegment.restored("log"), equals: .log, "log restores")
         runner.expect(SupervisorInspectorSegment.restored("settings"), equals: .tabs, "settings is never the default")
         runner.expect(SupervisorInspectorSegment.restored("needs-you"), equals: .tabs, "no Needs you segment exists")
-        runner.expect(SupervisorInspectorSegment.allCases.map(\.title), equals: ["Tabs", "Log", "Settings"], "three segments, no inbox list")
+        runner.expect(SupervisorInspectorSegment.allCases.map(\.title), equals: ["Tabs", "Queue", "Log", "Settings"], "four segments, no inbox list")
+        runner.expect(SupervisorInspectorSegment.restored("queue"), equals: .queue, "the queue segment restores")
     }
     runner.test("the right column is covered only while open and enabled") {
         runner.expect(SupervisorWorkspace.coversRightColumn(open: true, mode: "shadow"), equals: true, "enabled")
@@ -5848,6 +5896,207 @@ runner.suite("helper-role-changes") {
         let same = ["scout": "claude-haiku-5-5"]
         runner.expect(HelperRoleChanges.changes(saved: same, chosen: same).isEmpty, "no changes")
         runner.expect(HelperRoleChanges.changes(saved: [:], chosen: [:]).isEmpty, "empty")
+    }
+}
+
+// MARK: - ProjectNotices (ADR-0131)
+
+runner.suite("ProjectNotices") {
+    runner.test("postable trims, folds line breaks, and refuses empty or over-long text") {
+        runner.expect(ProjectNotices.postable("  the test machine moved \n at a new address "), equals: "the test machine moved at a new address", "folded")
+        runner.expect(ProjectNotices.postable("   \n "), equals: nil, "empty")
+        runner.expect(ProjectNotices.postable(String(repeating: "x", count: ProjectNotices.maxChars)) != nil, "exactly the limit")
+        runner.expect(ProjectNotices.postable(String(repeating: "x", count: ProjectNotices.maxChars + 1)), equals: nil, "over the limit")
+    }
+    runner.test("the list decodes, and a malformed body is nil") {
+        let json = #"{"notices":[{"id":"n-1","text":"hi","createdAt":"2026-11-11T10:00:00.000Z","expiresAt":"2026-11-12T10:00:00.000Z","author":"supervisor"}]}"#
+        let list = ProjectNotices.decodeList(Data(json.utf8))
+        runner.expect(list?.count, equals: 1, "one notice")
+        runner.expect(list?.first.map(ProjectNotices.authorLabel), equals: "Supervisor", "author")
+        runner.expect(ProjectNotices.decodeList(Data("nope".utf8)) == nil, "malformed")
+    }
+    runner.test("remaining names the largest whole unit") {
+        let n = ProjectNotice(id: "n", text: "t", createdAt: "2026-11-11T10:00:00.000Z", expiresAt: "2026-11-12T10:00:00.000Z", author: "user")
+        let start = ProjectNotices.date(n.createdAt)!
+        runner.expect(ProjectNotices.remaining(n, now: start), equals: "1 d left", "a day")
+        runner.expect(ProjectNotices.remaining(n, now: start.addingTimeInterval(20 * 3_600)), equals: "4 h left", "hours")
+        runner.expect(ProjectNotices.remaining(n, now: start.addingTimeInterval(24 * 3_600 - 600)), equals: "10 min left", "minutes")
+        runner.expect(ProjectNotices.remaining(n, now: start.addingTimeInterval(25 * 3_600)), equals: "expired", "expired")
+        runner.expect(ProjectNotices.authorLabel(n), equals: "You", "user author")
+    }
+    runner.test("lifetimes are 1 hour, 24 hours and 7 days") {
+        runner.expect(ProjectNoticeLifetime.allCases.map(\.hours), equals: [1, 24, 168], "hours")
+    }
+}
+
+// ADR-0133 — the approved queue as values: the card, the workspace's view, the selection.
+runner.suite("supervisor-queue") {
+    let entriesCard = #"""
+    {"items":[{"id":"i1","revision":1,"createdAt":"2026-11-11T10:00:00.000Z","sessionId":null,"kind":"queue",
+      "escalatedBecause":{"code":"human-only","label":"Opening tabs from a list is the user's act"},
+      "grounds":[],"actions":[{"id":"approve","label":"Approve all","role":"consent","recommended":true,"requiresExpanded":false},
+                              {"id":"approve-subset","label":"Approve selected…","role":"edit","recommended":false,"requiresExpanded":false},
+                              {"id":"dismiss","label":"Dismiss","role":"dismiss","recommended":false,"requiresExpanded":false}],
+      "queue":{"kind":"entries","warnings":["This queue holds 6 entries and none names a scopeRef."],
+        "entries":[{"id":"A","title":"Harvest","brief":"line 1\nline 2\nline 3\nline 4","posture":{"model":"claude-opus-5-5","thinkingMode":"high","permissionStrategy":"gated","mode":"plan"},"wider":["model"]},
+                   {"id":"B","title":"Export","brief":"b","after":["A"],"scopeRef":{"path":"docs/plan.md","heading":"Wave 8"}},
+                   {"id":"C","title":"Report","brief":"c"}]},
+      "modeAtCreation":"shadow","state":"open","resolvedBy":null,"burstRank":0}]}
+    """#
+    func card() -> SupervisorQueueCard? { SupervisorInboxItem.decodeList(Data(entriesCard.utf8))?.first?.queue }
+
+    runner.test("a queue item decodes its entries, warning and per-entry posture; other kinds carry no queue") {
+        let c = card()
+        runner.expect(c?.kind, equals: "entries", "kind")
+        runner.expect(c?.entries?.map(\.id), equals: ["A", "B", "C"], "entries in the proposal's order")
+        runner.expect(c?.entries?[0].wider, equals: ["model"], "the wider dimension is marked")
+        runner.expect(c?.entries?[1].after, equals: ["A"], "after")
+        runner.expect(c?.entries?[1].scopeRef?.heading, equals: "Wave 8", "scopeRef")
+        runner.expect(c?.warnings?.count, equals: 1, "the no-scopeRef warning reaches the card")
+        let plain = #"{"items":[{"id":"x","revision":1,"createdAt":"2026-11-11T10:00:00.000Z","sessionId":null,"kind":"confirm","escalatedBecause":{"code":"human-only","label":"l"},"grounds":[],"actions":[],"modeAtCreation":"shadow","state":"open"}]}"#
+        runner.expect(SupervisorInboxItem.decodeList(Data(plain.utf8))?.first?.queue == nil, "no queue on a confirm")
+    }
+    runner.test("a guard card carries the whole command; a card kind this client does not know still decodes") {
+        let long = "ssh runner true # " + String(repeating: "y", count: 400)
+        let json = #"{"items":[{"id":"g","revision":1,"createdAt":"2026-11-11T10:00:00.000Z","sessionId":null,"kind":"queue","escalatedBecause":{"code":"human-only","label":"l"},"grounds":[],"actions":[],"queue":{"kind":"guard","command":"\#(long)","previous":"echo old"},"modeAtCreation":"shadow","state":"open"},{"id":"f","revision":1,"createdAt":"2026-11-11T10:00:00.000Z","sessionId":null,"kind":"queue-from-the-future","escalatedBecause":{"code":"human-only","label":"l"},"grounds":[],"actions":[],"queue":{"kind":"mystery"},"modeAtCreation":"shadow","state":"open"}]}"#
+        let items = SupervisorInboxItem.decodeList(Data(json.utf8)) ?? []
+        runner.expect(items.count, equals: 2, "both decode — an unknown kind is a string, not a crash")
+        runner.expect(items[0].queue?.command, equals: long, "the command is not truncated")
+        runner.expect(items[0].queue?.previous, equals: "echo old", "what it replaces")
+        runner.expect(items[1].queue?.entries == nil && items[1].queue?.command == nil, "an unknown card kind carries nothing to act on")
+        runner.expect(SupervisorInboxItem.glyph(forKind: "queue"), equals: "list.number", "queue glyph")
+        runner.expect(SupervisorInboxItem.glyph(forKind: "queue-from-the-future"), equals: "hand.raised", "an unknown kind keeps the default glyph")
+    }
+    runner.test("the feed event decodes; an unknown event is still nil") {
+        runner.expect(SupervisorFeedEvent.decode(name: "supervisor.queue", data: Data(#"{"projectId":"p","change":"approved"}"#.utf8)), equals: .queue(change: "approved"), "queue")
+        runner.expect(SupervisorFeedEvent.decode(name: "supervisor.nonsense", data: Data("{}".utf8)) == nil, "unknown")
+    }
+    // ADR-0134 [6.6] — the standing merge.
+    runner.test("merge: the feed event, the card and the view decode; unknown shapes do not crash") {
+        runner.expect(SupervisorFeedEvent.decode(name: "supervisor.merge", data: Data(#"{"projectId":"p","change":"approved"}"#.utf8)), equals: .merge(change: "approved"), "merge event")
+        let json = #"{"items":[{"id":"m","revision":1,"createdAt":"2026-11-11T10:00:00.000Z","sessionId":null,"kind":"queue","escalatedBecause":{"code":"human-only","label":"l"},"grounds":[],"actions":[],"queue":{"kind":"merge","proposal":{"target":"integration","gate":"pnpm test:full # long","timeoutMs":3000000,"holds":[{"pathGlob":"scripts/gate/**","window":{"from":"21:00","to":"07:00"}}],"validForHours":168,"timeZone":"Europe/Bucharest"},"replaces":{"target":"old","gate":"true"}},"modeAtCreation":"shadow","state":"open"}]}"#
+        let items = SupervisorInboxItem.decodeList(Data(json.utf8)) ?? []
+        runner.expect(items.count, equals: 1, "the merge card decodes")
+        let p = items.first?.queue?.proposal
+        runner.expect(p?.gate, equals: "pnpm test:full # long", "the gate command is whole")
+        runner.expect(p?.holds.first?.window.to, equals: "07:00", "the hold window")
+        runner.expect(items.first?.queue?.replaces?.target, equals: "old", "what it replaces")
+        let lines = SupervisorMergePresentation.cardLines(p!, replaces: items.first?.queue?.replaces)
+        runner.expect(lines.contains { $0.contains("never pushed, tagged or sent as a merge request") }, "the card says what it never does")
+        runner.expect(lines.contains { $0.contains("scripts/gate/** only 21:00–07:00 (Europe/Bucharest)") }, "the zone is stated")
+        runner.expect(lines.contains { $0.contains("50 minutes") }, "the time limit is stated")
+        runner.expect(lines.contains { $0.contains("7 days") }, "the validity is stated")
+        let view = #"{"authorisation":{"target":"integration","gate":"true","timeoutSeconds":600,"holds":[],"approvedAt":"2026-11-11T10:00:00.000Z","expiresAt":"2026-11-18T10:00:00.000Z","timeZone":"UTC","expired":false},"ended":null,"holds":[{"branch":"marvin/tab/a","reason":"wait","at":"2026-11-11T10:00:00.000Z","by":"supervisor"}],"branches":[{"branch":"marvin/tab/a","status":"merged","code":"merged","reason":"merged","at":"2026-11-11T10:00:00.000Z","prediction":"clean","gateExit":0,"commit":"abcdef0123456789","tab":"tab already closed","surprise":1},{"branch":"b","status":"from-the-future","code":"x","reason":"r","at":"2026-11-11T10:00:00.000Z"}],"running":null}"#
+        let v = SupervisorMergeView.decode(Data(view.utf8))
+        runner.expect(v?.authorisation?.gate, equals: "true", "authorisation")
+        runner.expect(v?.branches.count, equals: 2, "branches, an unknown field ignored")
+        runner.expect(SupervisorMergePresentation.rowState(v!.branches[1]).label, equals: "Skipped", "an unknown status reads as skipped")
+        runner.expect(SupervisorMergePresentation.factsLine(v!.branches[0]), equals: "predicted clean · gate exit 0 · commit abcdef0123 · tab already closed", "facts")
+        runner.expect(SupervisorMergePresentation.holdLine(v!.holds[0]), equals: "marvin/tab/a — held by the supervisor: wait", "who held what")
+        runner.expect(SupervisorMergeView.decode(Data(#"{}"#.utf8))?.authorisation == nil, "an empty view is off")
+    }
+    runner.test("merge: the status line is shown at all times and says how it ended") {
+        let now = ISO8601DateFormatter().date(from: "2026-11-11T10:00:00Z")!
+        runner.expect(SupervisorMergePresentation.statusLine(nil, now: now), equals: "Standing merge: reading…", "reading")
+        runner.expect(SupervisorMergePresentation.statusLine(SupervisorMergeView(), now: now), equals: "Standing merge: off — nothing merges without your click", "off")
+        let a = SupervisorMergeView.Authorisation(target: "integration", gate: "g", timeoutSeconds: 60, holds: [], approvedAt: "2026-11-11T10:00:00Z", expiresAt: "2026-11-14T10:00:00Z", timeZone: "UTC", expired: false)
+        runner.expect(SupervisorMergePresentation.statusLine(SupervisorMergeView(authorisation: a), now: now), equals: "Standing merge into integration · expires in 3 days", "on")
+        let e = SupervisorMergeView.Ended(why: "revoked", at: "2026-11-11T10:00:00Z", target: "integration")
+        runner.expect(SupervisorMergePresentation.statusLine(SupervisorMergeView(ended: e), now: now), equals: "Standing merge into integration: revoked — nothing merges without your click", "revoked")
+        runner.expect(SupervisorMergePresentation.expiryText("2026-11-11T09:00:00Z", now: now), equals: "expired", "past")
+        runner.expect(SupervisorMergePresentation.expiryText("2026-11-11T12:00:00Z", now: now), equals: "expires in 2 h", "hours")
+    }
+    runner.test("merge: the form checks what the server checks; holds parse line by line; bodies are the user's acts") {
+        runner.expect(SupervisorMergePresentation.formError(target: "integration", gate: "make test", validDays: 7, timeoutMinutes: 90) == nil, "a good form")
+        runner.expect(SupervisorMergePresentation.formError(target: " ", gate: "x", validDays: 7, timeoutMinutes: 90) != nil, "no target")
+        runner.expect(SupervisorMergePresentation.formError(target: "marvin/tab/x", gate: "x", validDays: 7, timeoutMinutes: 90) != nil, "not a tab branch")
+        runner.expect(SupervisorMergePresentation.formError(target: "t", gate: "", validDays: 7, timeoutMinutes: 90) != nil, "no gate")
+        runner.expect(SupervisorMergePresentation.formError(target: "t", gate: "x", validDays: 15, timeoutMinutes: 90) != nil, "more than 14 days")
+        runner.expect(SupervisorMergePresentation.formError(target: "t", gate: "x", validDays: 7, timeoutMinutes: 0) != nil, "timeout out of range")
+        let ok = SupervisorMergePresentation.parseHolds("scripts/gate/** | 21:00-07:00\n\n docs/** | 09:00-17:30 ")
+        runner.expect(ok.error == nil && ok.holds.count == 2, "two rules")
+        runner.expect(ok.holds[1].window.to, equals: "17:30", "trimmed")
+        for bad in ["no bar", "a | 9am-10pm", "a | 21:00-21:00", "| 21:00-07:00", "a | 25:00-07:00"] {
+            runner.expect(SupervisorMergePresentation.parseHolds(bad).error != nil, "refused: \(bad)")
+        }
+        let body = SupervisorMergePresentation.proposeBody(projectId: "p", target: " integration ", gate: " make test ", validDays: 99, timeoutMinutes: 999, holds: ok.holds)
+        runner.expect(body["action"] as? String, equals: "propose", "propose")
+        runner.expect(body["target"] as? String, equals: "integration", "trimmed target")
+        runner.expect(body["validForHours"] as? Int, equals: 14 * 24, "clamped to 14 days")
+        runner.expect(body["timeoutSeconds"] as? Int, equals: 240 * 60, "clamped to 4 hours")
+        runner.expect(SupervisorMergePresentation.revokeBody(projectId: "p")["action"] as? String, equals: "revoke", "revoke")
+        runner.expect(SupervisorMergePresentation.releaseHoldBody(projectId: "p", branch: "b")["branch"] as? String, equals: "b", "release")
+        runner.expect(SupervisorMergePresentation.retryBody(projectId: "p")["action"] as? String, equals: "retry", "retry")
+    }
+    runner.test("merge: a fast-forward waiting for the checkout is named, with the pass's own words") {
+        let w = SupervisorMergeView.Branch(branch: "b", status: "waiting", code: "checkout-busy", reason: "tested and ready — waiting to fast-forward integration: uncommitted changes", at: "2026-11-11T10:00:00Z", prediction: nil, gateExit: 0, commit: nil, report: nil, reported: nil, tab: nil)
+        let v = SupervisorMergeView(branches: [w])
+        runner.expect(SupervisorMergePresentation.waitingForCheckout(v)?.branch, equals: "b", "found")
+        runner.expect(SupervisorMergePresentation.rowState(w).label, equals: "Waiting", "waiting")
+        runner.expect(SupervisorMergePresentation.summary(v), equals: "0 merged · 1 waiting or held", "summary")
+    }
+    runner.test("selection: all by default, order is the card's, a subset names its ids, orphans block approval") {
+        var s = SupervisorQueueSelection(card: card()!)
+        runner.expect(s.isAll, "all ticked at first")
+        runner.expect(s.action.actionId, equals: "approve", "the whole list is one action")
+        runner.expect(s.buttonTitle, equals: "Approve all (3)", "title")
+        s.toggle("C"); s.toggle("A")
+        runner.expect(s.isAll == false, "a subset")
+        runner.expect(s.orphans, equals: ["B"], "B comes after A, which is not ticked")
+        runner.expect(s.canApprove == false, "an entry that would never open cannot be approved")
+        s.toggle("A")
+        runner.expect(s.canApprove, "ticking the predecessor lifts it")
+        runner.expect(s.action.actionId, equals: "approve-subset", "a subset is its own action")
+        runner.expect(s.action.edits?["ids"] as? [String], equals: ["A", "B"], "ids in the card's order, however they were ticked")
+        runner.expect(s.buttonTitle, equals: "Approve 2 of 3", "subset title")
+        s.toggle("nope")
+        runner.expect(s.count, equals: 2, "an id that is not on the card is ignored")
+        s.toggle("A"); s.toggle("B")
+        runner.expect(s.canApprove == false, "nothing ticked approves nothing")
+    }
+    let queueJSON = #"""
+    {"cap":3,"effectiveCap":1,"capLowered":{"from":3,"to":1,"reason":"the test machine is unreachable","at":"2026-11-11T10:00:00.000Z"},
+     "guard":{"command":"ssh runner true","approvedAt":"2026-11-11T09:00:00.000Z"},
+     "guardLast":{"at":"2026-11-11T10:01:00.000Z","ok":false,"exitCode":7,"timedOut":false},
+     "entries":[
+      {"id":"D","title":"Old one","briefHead":"d","status":"opened","position":null,"after":[],"scopeRef":null,"wider":[],"approvedAt":"2026-11-10T10:00:00.000Z","expiresAt":"2026-11-17T10:00:00.000Z","openedAt":"2026-11-10T11:00:00.000Z","openedSessionId":"s1","hold":null,"blocked":null},
+      {"id":"B","title":"Export","briefHead":"b","status":"queued","position":2,"after":["A"],"scopeRef":null,"wider":[],"approvedAt":"2026-11-11T09:00:00.000Z","expiresAt":"2026-11-18T09:00:00.000Z","openedAt":null,"openedSessionId":null,"hold":null,"blocked":{"code":"after","reason":"waiting for \"A\" (marvin/tab/a) to be merged","at":"2026-11-11T10:00:00.000Z"}},
+      {"id":"A","title":"Harvest","briefHead":"a","status":"queued","position":1,"after":[],"scopeRef":null,"wider":[],"approvedAt":"2026-11-11T09:00:00.000Z","expiresAt":"2026-11-18T09:00:00.000Z","openedAt":null,"openedSessionId":null,"hold":null,"blocked":null},
+      {"id":"C","title":"Report","briefHead":"c","status":"queued","position":3,"after":[],"scopeRef":{"path":"docs/plan.md","heading":"Wave 8"},"wider":[],"approvedAt":"2026-11-11T09:00:00.000Z","expiresAt":"2026-11-18T09:00:00.000Z","openedAt":null,"openedSessionId":null,"hold":{"reason":"the plan deferred it","at":"2026-11-11T10:00:00.000Z"},"blocked":null},
+      {"id":"E","title":"Stuck","briefHead":"e","status":"failed","position":null,"after":[],"scopeRef":null,"wider":[],"approvedAt":"2026-11-11T08:00:00.000Z","expiresAt":"2026-11-18T08:00:00.000Z","openedAt":null,"openedSessionId":null,"hold":null,"blocked":{"code":"interrupted","reason":"an earlier opening did not finish","at":"2026-11-11T10:00:00.000Z"}}]}
+    """#
+    runner.test("the queue view decodes (the guard key is a Swift keyword) and says order, cap, guard and every hold") {
+        let q = SupervisorQueueView.decode(Data(queueJSON.utf8))!
+        runner.expect(q.guardRef?.command, equals: "ssh runner true", "the guard command, whole")
+        runner.expect(SupervisorQueuePresentation.capLine(q), equals: "Cap 3 · lowered to 1: the test machine is unreachable", "a lowered cap names the alarm")
+        runner.expect(SupervisorQueuePresentation.guardLine(q), equals: "Last run: exit 7 — the queue is held.", "the guard's last run")
+        runner.expect(SupervisorQueuePresentation.summary(q), equals: "3 queued · 2 held", "summary")
+        runner.expect(SupervisorQueuePresentation.ordered(q.entries).map(\.id), equals: ["A", "B", "C", "E", "D"], "pending in approval order, then the settled")
+        let states = Dictionary(uniqueKeysWithValues: q.entries.map { ($0.id, SupervisorQueuePresentation.rowState($0)) })
+        runner.expect(states["A"]?.label, equals: "Next", "the first free entry is next")
+        runner.expect(states["B"]?.label, equals: "Waiting", "after is a wait")
+        runner.expect(states["B"]?.reason, equals: #"waiting for "A" (marvin/tab/a) to be merged"#, "with its reason")
+        runner.expect(states["C"]?.label, equals: "Held", "a supervisor hold")
+        runner.expect(states["C"]?.reason, equals: "the plan deferred it", "reads the hold's reason")
+        runner.expect(states["E"]?.tone, equals: .needsYou, "a failed opening needs the user")
+        runner.expect(states["D"]?.label, equals: "Opened", "opened")
+    }
+    runner.test("an unlowered cap, an absent guard and an empty queue read plainly") {
+        let q = SupervisorQueueView(cap: 1)
+        runner.expect(SupervisorQueuePresentation.capLine(q), equals: "Cap 1", "plain cap")
+        runner.expect(SupervisorQueuePresentation.guardLine(q), equals: "No guard command. Tabs open as soon as a slot is free.", "no guard")
+        runner.expect(SupervisorQueuePresentation.summary(q), equals: "Nothing queued", "empty")
+        runner.expect(SupervisorQueueView.decode(Data("nope".utf8)) == nil, "malformed")
+    }
+    runner.test("the user's cap steps within 0…20 and the bodies carry only the user's own settings") {
+        runner.expect(SupervisorQueuePresentation.steppedCap(20, by: 1), equals: 20, "ceiling")
+        runner.expect(SupervisorQueuePresentation.steppedCap(0, by: -1), equals: 0, "floor")
+        let cap = SupervisorQueuePresentation.capBody(projectId: "p", cap: 99)
+        runner.expect(cap["cap"] as? Int, equals: 20, "clamped")
+        runner.expect(cap["action"] as? String, equals: "cap", "action")
+        runner.expect(SupervisorQueuePresentation.proposeGuardBody(projectId: "p", command: "  true \n")["command"] as? String, equals: "true", "trimmed; it raises a card, it sets nothing")
+        let actions = [SupervisorQueuePresentation.restoreCapBody(projectId: "p"), SupervisorQueuePresentation.releaseBody(projectId: "p", id: "A"), SupervisorQueuePresentation.removeBody(projectId: "p", id: "A")].compactMap { $0["action"] as? String }
+        runner.expect(actions, equals: ["restore-cap", "release", "remove"], "no body approves an entry — that is the card's click")
     }
 }
 

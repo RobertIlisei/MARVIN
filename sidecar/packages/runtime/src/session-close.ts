@@ -21,7 +21,7 @@
 import { readSessionMeta, updateSessionMeta } from "./session-meta";
 import { endFollows } from "./supervisor-follows";
 import { logTelemetry } from "./telemetry";
-import { getLiveTurn } from "./turn-registry";
+import { announceProjectEvent, getLiveTurn } from "./turn-registry";
 import { readWorktreeSetupConfig } from "./worktree-setup";
 import {
   commitWorktreeWorkInProgress,
@@ -46,6 +46,15 @@ function endFollowsOf(projectId: string, sessionId: string): void {
     endFollows(projectId, (f) => f.sessionId === sessionId, "closed");
   } catch {
     /* an unreadable follows file must not fail a close */
+  }
+}
+
+/** ADR-0133 — a slot may have freed; the approved queue's opener looks again. */
+function announceClosed(projectId: string, marvinSessionId: string): void {
+  try {
+    announceProjectEvent({ event: "session.closed", data: { marvinSessionId, projectId } });
+  } catch {
+    /* the close stands; only the notification is lost */
   }
 }
 
@@ -80,6 +89,7 @@ export async function closeSession(args: { projectId: string; workDir: string; s
     }
     if (meta) updateSessionMeta(projectId, sessionId, { closedAt });
     endFollowsOf(projectId, sessionId);
+    announceClosed(projectId, sessionId);
     return { status: 200, body: { ok: true, worktree: null, message: "closed" } };
   }
 
@@ -140,5 +150,6 @@ export async function closeSession(args: { projectId: string; workDir: string; s
       /* best-effort */
     });
   endFollowsOf(projectId, sessionId);
+  announceClosed(projectId, sessionId);
   return { status: 200, body: { ok: true, worktree: { slug: rec.slug, branch: rec.branch, action }, message } };
 }

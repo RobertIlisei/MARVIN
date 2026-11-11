@@ -162,7 +162,7 @@ export interface ScheduleWakeupInput {
 
 export type ScheduleResult =
   | { ok: true; record: WakeupRecord }
-  | { ok: false; error: string };
+  | { ok: false; error: string; /** ADR-0130 — set for the chain-depth refusal. */ code?: "chain-depth" };
 
 /** Starts the turn and resolves once it has STARTED, never when it ends — `fireNow`'s callers wait on it. */
 type FireHandler = (record: WakeupRecord) => void | Promise<unknown>;
@@ -276,6 +276,7 @@ export function scheduleWakeup(input: ScheduleWakeupInput): ScheduleResult {
     return {
       ok: false,
       error: `wakeup chain depth ${nextDepth} exceeds the cap of ${MAX_CHAIN_DEPTH} — refusing to schedule another self-wakeup.`,
+      code: "chain-depth",
     };
   }
   const pending = listWakeups({ marvinSessionId: input.marvinSessionId });

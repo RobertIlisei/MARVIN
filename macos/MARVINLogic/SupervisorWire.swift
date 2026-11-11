@@ -464,6 +464,8 @@ public struct SupervisorInboxItem: Decodable, Equatable, Sendable, Identifiable 
     public let newTab: NewTab?
     public let postureChange: PostureChange?
     public let guardrail: Guardrail?
+    /// ADR-0133 — a `queue` item's entries, guard command or hold. Absent on every other kind.
+    public let queue: SupervisorQueueCard?
     /// `shadow` | `autonomous`.
     public let modeAtCreation: String?
     /// `open` | `resolved` | `dismissed` | `superseded`.
@@ -477,8 +479,10 @@ public struct SupervisorInboxItem: Decodable, Equatable, Sendable, Identifiable 
                 question: QuestionSet? = nil, linkedConfirm: LinkedConfirm? = nil,
                 recommendation: Recommendation? = nil, grounds: [SupervisorGround] = [], actions: [Action] = [],
                 newTab: NewTab? = nil, postureChange: PostureChange? = nil, guardrail: Guardrail? = nil,
+                queue: SupervisorQueueCard? = nil,
                 modeAtCreation: String? = "shadow", state: String = "open", resolvedBy: String? = nil,
                 burstRank: Int? = 0) {
+        self.queue = queue
         self.id = id; self.revision = revision; self.createdAt = createdAt; self.wakeId = wakeId
         self.sessionId = sessionId; self.tabTitle = tabTitle; self.ledgerId = ledgerId; self.kind = kind
         self.escalatedBecause = escalatedBecause; self.heuristic = heuristic; self.rawAct = rawAct
@@ -664,6 +668,10 @@ public enum SupervisorFeedEvent: Equatable, Sendable {
     case message(id: String, from: String)
     /// [7.3] — a follow opened or ended (`supervisor.follow`).
     case follow(id: String, sessionId: String, state: String)
+    /// ADR-0133 — the approved queue changed (an approval, a cap, a hold, an opening); the app re-reads it.
+    case queue(change: String)
+    /// ADR-0134 — the standing merge's authorisation, a hold or the pass's record changed; the app re-reads it.
+    case merge(change: String)
 
     public static func decode(name: String, data: Data) -> SupervisorFeedEvent? {
         let d = JSONDecoder()
@@ -688,6 +696,14 @@ public enum SupervisorFeedEvent: Equatable, Sendable {
             struct F: Decodable { let id: String; let sessionId: String; let state: String }
             guard let f = try? d.decode(F.self, from: data) else { return nil }
             return .follow(id: f.id, sessionId: f.sessionId, state: f.state)
+        case "supervisor.queue":
+            struct Q: Decodable { let change: String }
+            guard let q = try? d.decode(Q.self, from: data) else { return nil }
+            return .queue(change: q.change)
+        case "supervisor.merge":
+            struct M: Decodable { let change: String }
+            guard let m = try? d.decode(M.self, from: data) else { return nil }
+            return .merge(change: m.change)
         default:
             return nil
         }

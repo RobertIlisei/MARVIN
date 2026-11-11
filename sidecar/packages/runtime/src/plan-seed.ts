@@ -187,6 +187,12 @@ export function seededOpenSteps(state: unknown): string[] {
   return out;
 }
 
+/** Number of steps in the active plan when MARVIN seeded it, else 0. */
+export function seededStepCount(state: unknown): number {
+  const a = activePlan(state);
+  return a && a.plan.seeded === true && Array.isArray(a.plan.steps) ? a.plan.steps.length : 0;
+}
+
 /** True when the active plan is one MARVIN seeded. */
 export function hasSeededPlan(state: unknown): boolean {
   return activePlan(state)?.plan.seeded === true;

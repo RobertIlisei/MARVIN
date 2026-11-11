@@ -24,6 +24,8 @@ import type { SessionPosture } from "./session-meta";
 import { endFollows } from "./supervisor-follows";
 import { actionsFor, getInboxItem, type InboxAction, type InboxRecord, isInboxInFlight, listInbox, markInboxInFlight, NEW_TAB_DELEGATIONS, type NewTabDelegation, settleInboxItem } from "./supervisor-inbox";
 import { appendLedgerEntry, type LedgerGround } from "./supervisor-ledger";
+import type { MergeProposal } from "./supervisor-merge";
+import type { QueueEntryProposal } from "./supervisor-queue";
 import { MAX_SUPERVISOR_MESSAGE_CHARS } from "./supervisor-send";
 import type { SupervisorActionResult } from "./supervisor-state";
 
@@ -43,6 +45,14 @@ export interface InboxPerform {
    * Refused for a scope-met tab unless the item is a scope review's reopening.
    */
   send(a: { sessionId: string; text: string; kind: "nudge" | "instruction"; grounds: LedgerGround[]; ledgerId: string | null; editedByUser: boolean; reopensScope: boolean }): Promise<Done>;
+  /** ADR-0131 — post a project notice as the user's act (the card's text is the supervisor's; the user's click posts it). */
+  notice(a: { text: string; ttlHours: number }): Done;
+  /**
+   * ADR-0133 — the user's click on a queue card: approve its entries (the
+   * runtime opens them as slots free) or its guard command. The only way an
+   * entry or a guard comes to exist.
+   */
+  queue(a: { what: "entries"; entries: QueueEntryProposal[] } | { what: "guard"; command: string } | { what: "merge"; proposal: MergeProposal }): Done;
   /** Stop the tab's live turn, as the user. */
   cancel(sessionId: string): Done;
   worktrees(a: { op: "merge" | "merge-all" | "prepare-mr" | "drop"; slugs: string[]; push?: boolean | undefined; openMergeRequest?: boolean | undefined }): Promise<Done>;
@@ -124,6 +134,32 @@ async function perform(projectId: string, item: InboxRecord, action: InboxAction
       const editedByUser = text !== act.text;
       const sent = await p.send({ sessionId: act.sessionId, text, kind: act.kind, grounds: act.grounds, ledgerId: item.ledgerId, editedByUser, reopensScope: act.reopensScope === true });
       return sent.ok ? { ...sent, editedByUser } : sent;
+    }
+    case "notice":
+      if (containsSecretShape(act.text)) return fail(400, "the notice carries a secret-shaped string (ADR-0127 §6) — it was not posted", "secret");
+      return p.notice({ text: act.text, ttlHours: act.ttlHours });
+    case "queue": {
+      const card = item.queue;
+      if (act.what === "guard") {
+        if (card?.kind !== "guard") return fail(409, "this card carries no guard command");
+        return p.queue({ what: "guard", command: card.command });
+      }
+      // ADR-0134 — the proposal the card showed, whole: the target and the gate cannot be edited at the click.
+      if (act.what === "merge") {
+        if (card?.kind !== "merge") return fail(409, "this card carries no merge authorisation");
+        return p.queue({ what: "merge", proposal: card.proposal });
+      }
+      if (card?.kind !== "entries") return fail(409, "this card carries no entries");
+      let chosen = card.entries;
+      if (action.id === "approve-subset") {
+        const ids = Array.isArray(edits.ids) ? edits.ids.filter((x): x is string => typeof x === "string") : [];
+        if (!ids.length) return fail(400, "edits.ids names the entries to approve");
+        const unknown = ids.filter((id) => !card.entries.some((e) => e.id === id));
+        if (unknown.length) return fail(400, `not on this card: ${unknown.join(", ")}`);
+        // The card's order, whatever order the click named them in: reordering is not the user's edit here, nor the supervisor's.
+        chosen = card.entries.filter((e) => ids.includes(e.id));
+      }
+      return p.queue({ what: "entries", entries: chosen });
     }
     case "cancel":
       return p.cancel(act.sessionId);

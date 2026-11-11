@@ -323,6 +323,9 @@ extension SupervisorWorkspace {
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
             }
+            // ADR-0134 — the standing merge authorisation is shown at all times, with Revoke.
+            SupervisorMergeStrip(model: model)
+            MarvinDivider()
             Picker("Supervisor inspector", selection: $model.inspectorSegment) {
                 ForEach(SupervisorInspectorSegment.allCases, id: \.self) { Text($0.title).tag($0) }
             }
@@ -337,6 +340,7 @@ extension SupervisorWorkspace {
                 VStack(alignment: .leading, spacing: 8) {
                     switch model.inspectorSegment {
                     case .tabs: SupervisorTabsList(model: model)
+                    case .queue: SupervisorQueueSection(model: model)
                     case .log:
                         SupervisorLogSection(model: model, tabTitle: { id in
                             SupervisorTabTitle.text(registry.entry(id) ?? SessionEntry(id: id), inbox: model.inbox)
@@ -355,6 +359,7 @@ extension SupervisorWorkspace {
         .background(MarvinTheme.background)
         .onChange(of: model.inspectorSegment) { _, seg in
             if seg == .log { Task { await model.refreshLedger() } }
+            if seg == .queue { Task { await model.refreshQueue() } }
         }
         .confirmationDialog("Disable the supervisor?", isPresented: $confirmDisable) {
             Button("Disable supervisor", role: .destructive) { Task { await model.disable() } }

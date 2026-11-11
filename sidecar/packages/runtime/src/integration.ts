@@ -75,13 +75,19 @@ function gitOut(cwd: string, args: string[]): Promise<{ status: number; stdout: 
  * per line, then a blank line and the informational messages. Anything else
  * (older git, a bad ref) is `unknown`, never a guess.
  */
-export async function dryRunMerge(workDir: string, target: string, branch: string): Promise<{ verdict: IntegrationVerdict; conflicts: string[] }> {
+export async function dryRunMerge(
+  workDir: string,
+  target: string,
+  branch: string,
+  /** The git runner; the standing merge pass (ADR-0134) passes its own so every argv it issues is the pass's to see. */
+  run: (cwd: string, args: string[]) => Promise<{ status: number; stdout: string }> = gitOut,
+): Promise<{ verdict: IntegrationVerdict; conflicts: string[] }> {
   // A missing ref ALSO exits 1 ("not something we can merge", on stderr), so
   // both refs are checked first, and a conflict must come with its tree id.
   for (const ref of [target, branch]) {
-    if ((await gitOut(workDir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).status !== 0) return { verdict: "unknown", conflicts: [] };
+    if ((await run(workDir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).status !== 0) return { verdict: "unknown", conflicts: [] };
   }
-  const out = await gitOut(workDir, ["merge-tree", "--write-tree", "--name-only", target, branch]);
+  const out = await run(workDir, ["merge-tree", "--write-tree", "--name-only", target, branch]);
   if (out.status === 0) return { verdict: "clean", conflicts: [] };
   if (out.status !== 1) return { verdict: "unknown", conflicts: [] };
   const lines = out.stdout.split("\n");

@@ -135,6 +135,21 @@ export interface SessionMeta {
    * turns keep failing (`FAILED_TURNS_BEFORE_ESCALATION`).
    */
   failedTurnsInARow?: number;
+  /**
+   * ADR-0130 — why a session that is not running is waiting on the user: its
+   * last turn ended on a question in prose, or was refused a background job or
+   * wakeup by the chain cap. Cleared when any turn starts or the user dismisses it.
+   */
+  attention?: SessionAttention;
+  /** ADR-0130 — when a turn the user started last began (not a machine or supervisor turn). */
+  lastUserTurnAt?: string;
+}
+
+export interface SessionAttention {
+  kind: "prose-question" | "chain-cap";
+  excerpt: string;
+  since: string;
+  turnId: string;
 }
 
 /**
@@ -159,6 +174,26 @@ export function nextScopeMetAt(
 ): { scopeMetAt: string | undefined } | null {
   if (e.phase === "start") return e.kind === "human" || e.author === "supervisor" ? { scopeMetAt: undefined } : null;
   return e.scopeMet ? { scopeMetAt: e.at ?? new Date().toISOString() } : null;
+}
+
+/**
+ * The `attention` transition (ADR-0130). ANY turn start clears it — a message,
+ * a wakeup, a resume all mean the session moved; a turn end sets it when it
+ * raised one and otherwise leaves it. A start by the user (a human turn the
+ * supervisor did not author) also stamps `lastUserTurnAt`, which the
+ * supervisor's one-restart bound for a chain-cap item counts from.
+ * Returns the patch, or null for no change.
+ */
+export function nextAttention(
+  e:
+    | { phase: "start"; kind?: "human" | "machine"; author?: "user" | "supervisor"; at?: string }
+    | { phase: "end"; raised: Omit<SessionAttention, "since"> | null; at?: string },
+): { attention: SessionAttention | undefined; lastUserTurnAt?: string } | null {
+  if (e.phase === "start") {
+    const byUser = e.kind === "human" && e.author !== "supervisor";
+    return { attention: undefined, ...(byUser ? { lastUserTurnAt: e.at ?? new Date().toISOString() } : {}) };
+  }
+  return e.raised ? { attention: { ...e.raised, since: e.at ?? new Date().toISOString() } } : null;
 }
 
 export function sessionMetaPath(projectId: string, sessionId: string): string {

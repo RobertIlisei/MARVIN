@@ -29,7 +29,7 @@ import path from "node:path";
 
 import type { ToolPolicyClass } from "./policy";
 
-const CONTROL = "(?:supervisor|confirm|chat|sessions|worktrees|models/roles)(?![a-z])";
+const CONTROL = "(?:supervisor|confirm|chat|sessions|worktrees|notices|models/roles)(?![a-z])";
 /** A network tool in command position (so `grep "http://…"` is not one). */
 const NETWORK_TOOL_RE =
   /(?:^|[\s|;&(])(?:nc|ncat|netcat|socat|telnet|curl|wget|http|xh)\s|\/dev\/(?:tcp|udp)\/|(?:^|[\s|;&(])(?:node|deno|bun)\s+(?:-e|--eval|-p)\s|(?:^|[\s|;&(])python3?\s+-c\s|(?:^|[\s|;&(])(?:ruby|perl)\s+-e\s/i;

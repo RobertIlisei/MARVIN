@@ -501,6 +501,8 @@ extension SupervisorInboxItem {
         case "scope": return "scope"
         case "new-tab": return "plus.rectangle.on.rectangle"
         case "guardrail": return "exclamationmark.triangle.fill"
+        // ADR-0133 — an unknown kind from a newer sidecar still draws (the default below); this one is a list.
+        case "queue": return "list.number"
         default: return "hand.raised"
         }
     }

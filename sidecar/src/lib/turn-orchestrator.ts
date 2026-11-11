@@ -42,7 +42,8 @@ import {
   rememberSdkSessionId,
 } from "@marvin/runtime/session";
 import { clearActivity, noteActivityEvent, setActivity } from "@marvin/runtime/session-activity";
-import { nextFailedTurnsInARow, nextScopeMetAt, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
+import { attentionPatchForTurn } from "@marvin/runtime/session-attention";
+import { nextAttention, nextFailedTurnsInARow, nextScopeMetAt, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
 import { classifyTurnFailure } from "@marvin/runtime/session-recovery";
 import { ledgerDroppedSend, supervisorFireRefusal } from "@marvin/runtime/supervisor-send";
 import { noteSupervisorTabSpend } from "@marvin/runtime/supervisor-state";
@@ -389,6 +390,9 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   // new scope; a machine turn (job completion, wakeup, resume) does not.
   const scopeStart = nextScopeMetAt({ phase: "start", kind: liveTurn.kind, ...(liveTurn.author ? { author: liveTurn.author } : {}) });
   if (scopeStart) updateSessionMeta(projectId, marvinSessionId, scopeStart);
+  // ADR-0130 — any turn start clears the session's attention item.
+  const attentionStart = nextAttention({ phase: "start", kind: liveTurn.kind, ...(liveTurn.author ? { author: liveTurn.author } : {}) });
+  if (attentionStart) updateSessionMeta(projectId, marvinSessionId, attentionStart);
 
   const result = await runAgent({
     message,
@@ -540,6 +544,8 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: "completed" },
     failedTurnsInARow: undefined,
     ...(nextScopeMetAt({ phase: "end", scopeMet: !!result.scopeMet }) ?? {}),
+    // ADR-0130 — a closing question or a chain-cap refusal reaches the user.
+    ...(attentionPatchForTurn({ marvinSessionId, turnId, result }) ?? {}),
   });
   // ADR-0111 — the first turn that leaves a commit on the tab's branch names
   // the branch after that commit; the chip follows through `session.tree`.

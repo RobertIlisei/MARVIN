@@ -75,6 +75,14 @@ export interface WorktreeSetupConfig {
   sparseExclude: string[];
   /** Free-space floor in GB for creating a worktree (ADR-0122); undefined = MARVIN's default. */
   minFreeGb?: number | undefined;
+  /**
+   * Headings in the project's plan document under which an id means "deferred
+   * to a later release" (ADR-0133). A queued entry whose `scopeRef` id is found
+   * under one of these is held at open time. Only ever COMPARED against text —
+   * never executed, never a path — and still validated here, because the file
+   * is inside a repository somebody else may have written.
+   */
+  deferredHeadings?: string[] | undefined;
 }
 
 export interface WorktreeSetupReport {
@@ -200,6 +208,7 @@ export function readWorktreeSetupConfig(workDir: string): WorktreeSetupConfig {
       env: readEnvMap(raw.env),
       sparseExclude: readSparseExclude(raw.sparseExclude),
       minFreeGb: readMinFreeGb(raw.minFreeGb),
+      ...readDeferredHeadings(raw.deferredHeadings),
     };
   } catch {
     return { ...DEFAULT_SETUP };
@@ -295,6 +304,29 @@ function readSparseExclude(raw: unknown): string[] {
     if (out.length >= MAX_SPARSE_ENTRIES) break;
   }
   return out;
+}
+
+/**
+ * `deferredHeadings` (ADR-0133): plain heading TEXT, compared against a plan
+ * document and nothing else. Strings only, one line, capped in count and
+ * length; leading `#`s are dropped so `"## Deferred"` and `"Deferred"` mean
+ * the same. Anything else is dropped, never fatal. Spread into the config, so
+ * an absent or empty list adds no key.
+ */
+const MAX_DEFERRED_HEADINGS = 32;
+const MAX_HEADING_LENGTH = 200;
+
+function readDeferredHeadings(raw: unknown): { deferredHeadings?: string[] } {
+  if (!Array.isArray(raw)) return {};
+  const out: string[] = [];
+  for (const e of raw) {
+    if (typeof e !== "string") continue;
+    const text = e.replace(/^\s*#+\s*/, "").trim();
+    if (!text || text.length > MAX_HEADING_LENGTH || [...text].some((c) => c.charCodeAt(0) < 32) || out.includes(text)) continue;
+    out.push(text);
+    if (out.length >= MAX_DEFERRED_HEADINGS) break;
+  }
+  return out.length ? { deferredHeadings: out } : {};
 }
 
 function readMinFreeGb(raw: unknown): number | undefined {

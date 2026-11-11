@@ -82,15 +82,17 @@ import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createMemoryMcpServer } from "./memory-mcp";
 import { ensureProviderModelId, latestForTier } from "./models";
 import { makeNestedInstructionsPostToolUse, resetNestedInstructions } from "./nested-instructions";
+import { noticesReminder } from "./notices";
 import { createObsidianMcpServer } from "./obsidian-mcp";
 import { makeOutputGovernorPostToolUse } from "./output-governor";
 import { foldTurnGraphUsage, registerLiveGraphUsage } from "./graph-usage";
-import { seededOpenSteps, seededSpineReminder, seedTurnSpine } from "./plan-seed";
+import { seededOpenSteps, seededSpineReminder, seededStepCount, seedTurnSpine } from "./plan-seed";
 import { applyTodosToSpine, stepsClosedByBatch } from "./plan-spine";
 import { readPlanState, writePlanState } from "./plan-state";
 import { loadEnabledPlugins, userPluginsOff } from "./plugin-loader";
 import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
+import type { ChainCapRefusal } from "./session-attention";
 import { readSessionMeta, type SessionTree } from "./session-meta";
 import { saveSlashCommands } from "./slash-commands";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
@@ -502,6 +504,12 @@ export interface RunAgentResult {
   permissionDenials?: number;
   /** ADR-0127 milestone 4 — the turn closed its scope with the scope-met marker (the orchestrator records `scopeMetAt`). */
   scopeMet?: boolean;
+  /** ADR-0130 — the turn's final assistant text, for the turn-end attention check. */
+  finalText?: string;
+  /** ADR-0130 — the turn called `AskUserQuestion` (tracked once, for the go-ahead rule too). */
+  askedUserQuestion?: boolean;
+  /** ADR-0130 — the chain cap refused a background job or wakeup this turn. */
+  chainCap?: ChainCapRefusal;
 }
 
 /**
@@ -1243,6 +1251,19 @@ export function classifyToolCall(
     };
   }
 
+  // NOTICE OWNERSHIP (ADR-0131). `.marvin/notices.json` is read into every
+  // tab's reminder suffix, so a tab that could write it could speak to its
+  // siblings with the project's own voice. Its writers are the user (the
+  // notices route) and the supervisor's `post_notice` — both server-side.
+  if (mutatesProtectedPath(name, input, (p) => p.includes(".marvin/notices.json"))) {
+    return {
+      decision: "deny",
+      reason:
+        `${name} targets .marvin/notices.json — the project's notices are posted by the user ` +
+        `or by the supervisor under its policy (ADR-0131), never by a tab. Read it if you need it.`,
+    };
+  }
+
   // SUPERVISOR MODEL / EFFORT OWNERSHIP (ADR-0127). Raising either widens the
   // supervisor's posture, so both are the user's click in the Supervisor
   // settings. They live in app-wide data-dir files that a plain Write is
@@ -1357,11 +1378,13 @@ export function turnReminders(args: {
   sessionContext?: string | undefined;
   planContext?: string | undefined;
   spineContext?: string | null | undefined;
+  /** ADR-0131 — the rendered project notices; per-turn text, so never in the system prompt. */
+  noticesContext?: string | null | undefined;
 }): string[] {
   const mode =
     modeGuidance(args.mode).trim() ||
     "## Mode: AGENT\nEdits are allowed this turn; any earlier mode reminder no longer applies.";
-  return [args.orientation, mode, args.sessionContext, args.planContext, args.spineContext].filter((x): x is string => Boolean(x));
+  return [args.orientation, mode, args.sessionContext, args.planContext, args.spineContext, args.noticesContext].filter((x): x is string => Boolean(x));
 }
 
 /** Mode-specific stanza (ADR-0036), sent in the turn's reminder suffix since
@@ -2342,6 +2365,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     turnId,
     designCtx,
   });
+  let askedUserQuestion = false;
   const turnCloseStopHook = makeTurnCloseStopHook({
     turnId,
     facts: () => ({
@@ -2370,6 +2394,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
             return seededOpenSteps(state);
           })()
         : [],
+      // ADR-0132 — the go-ahead rule's two extra facts and the join frame.
+      mode: input.mode ?? "agent",
+      askedUserQuestion,
+      seededStepCount: spineSession
+        ? (() => {
+            const ps = readPlanState(spineSession.projectId, spineSession.sessionId);
+            return ps.ok && ps.state ? seededStepCount(ps.state) : 0;
+          })()
+        : 0,
     }),
     onFired: () => {
       /* telemetry lives in the hook; nothing else to record per turn */
@@ -2458,6 +2491,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // wired when we know which session to resume — a wakeup turn must be able
   // to re-enter THIS marvinSession. Captures the turn's config so the fired
   // turn inherits the same model / permission posture (no elevation).
+  let chainCapRefusal: ChainCapRefusal | undefined;
   const wakeupCtx: WakeupToolContext | null =
     input.marvinSessionId && input.projectId
       ? {
@@ -2473,6 +2507,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           thinkingMode: input.thinkingMode ?? "high",
           advisorThinkingMode: input.advisorThinkingMode,
           depth: input.wakeupDepth ?? 0,
+          onChainCap: (r) => {
+            chainCapRefusal ??= r;
+          },
         }
       : null;
   const wakeupMcp = wakeupCtx ? createWakeupMcpServer(wakeupCtx) : null;
@@ -2808,6 +2845,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       sessionContext: input.sessionContext,
       planContext: input.planContext,
       spineContext,
+      noticesContext: noticesReminder(workDir),
     });
     const turnPrompt =
       reminders.length > 0
@@ -2973,6 +3011,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
               if (b.name === "TodoWrite" && input && "todos" in input) {
                 lastTodoPayload = input.todos;
               }
+              if (b.name === ASK_USER_TOOL) askedUserQuestion = true;
               if (
                 (b.name === "Edit" || b.name === "Write" || b.name === "NotebookEdit") &&
                 input
@@ -3507,5 +3546,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     authMode: classifyAuthMode(authAtStart, await settledAccount()),
     permissionDenials,
     ...(reportsScopeMet(finalAssistantText, scopeClaimRejected) ? { scopeMet: true } : {}),
+    finalText: finalAssistantText,
+    askedUserQuestion,
+    ...(chainCapRefusal ? { chainCap: chainCapRefusal } : {}),
   };
 }

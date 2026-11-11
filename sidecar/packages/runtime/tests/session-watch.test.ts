@@ -53,6 +53,42 @@ describe("deriveSessionState", () => {
   });
 });
 
+// ADR-0130 decision 5 — the precedence, one case per rung.
+describe("deriveSessionState: waiting and done", () => {
+  const quiet = { live: false, pending: 0 };
+  it("waiting on its own job or wakeup reads waiting", () => {
+    expect(deriveSessionState({ ...quiet, waitingOn: "job" })).toBe("waiting");
+    expect(deriveSessionState({ ...quiet, waitingOn: "wakeup" })).toBe("waiting");
+  });
+  it("a scope-met close with nothing pending reads done; waiting outranks it", () => {
+    expect(deriveSessionState({ ...quiet, scopeMet: true })).toBe("done");
+    expect(deriveSessionState({ ...quiet, lastOutcome: "completed", scopeMet: true })).toBe("done");
+    expect(deriveSessionState({ ...quiet, waitingOn: "job", scopeMet: true })).toBe("waiting");
+  });
+  it("attention reads awaiting-you when not live, and outranks interrupted, failed, waiting and done", () => {
+    expect(deriveSessionState({ ...quiet, attention: true })).toBe("awaiting-you");
+    expect(deriveSessionState({ ...quiet, attention: 1, lastOutcome: "interrupted" })).toBe("awaiting-you");
+    expect(deriveSessionState({ ...quiet, attention: true, lastOutcome: "error", waitingOn: "job", scopeMet: true })).toBe("awaiting-you");
+  });
+  it("a live turn outranks attention, waiting and done", () => {
+    expect(deriveSessionState({ live: true, pending: 0, attention: true, waitingOn: "job", scopeMet: true })).toBe("working");
+    expect(deriveSessionState({ live: true, pending: 1, attention: true })).toBe("awaiting-you");
+  });
+  it("failed and a recent interruption outrank waiting and done", () => {
+    expect(deriveSessionState({ ...quiet, lastOutcome: "error", waitingOn: "job" })).toBe("failed");
+    expect(deriveSessionState({ ...quiet, lastOutcome: "error", scopeMet: true })).toBe("failed");
+    expect(deriveSessionState({ ...quiet, lastOutcome: "interrupted", waitingOn: "wakeup" })).toBe("interrupted");
+  });
+  it("a stale interruption falls through to waiting, then done, then idle", () => {
+    const now = Date.parse("2026-11-11T12:00:00Z");
+    const stale = "2026-10-01T12:00:00Z";
+    const base = { ...quiet, lastOutcome: "interrupted" as const, lastStartedAt: stale, now };
+    expect(deriveSessionState({ ...base, waitingOn: "job" })).toBe("waiting");
+    expect(deriveSessionState({ ...base, scopeMet: true })).toBe("done");
+    expect(deriveSessionState(base)).toBe("idle");
+  });
+});
+
 describe("buildSessionWatch", () => {
   let dataDir: string;
   let repo: string;

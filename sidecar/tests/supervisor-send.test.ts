@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 type RunInput = Record<string, unknown>;
 let captured: RunInput[];
 let onRun: ((input: RunInput) => void) | null;
+let runResult: Record<string, unknown> | null;
 let dataDir: string;
 let workDir: string;
 const prev = process.env.MARVIN_DATA_DIR;
@@ -27,6 +28,7 @@ beforeEach(() => {
   process.env.MARVIN_DATA_DIR = dataDir;
   captured = [];
   onRun = null;
+  runResult = null;
   vi.doMock("@marvin/runtime/sdk-runner", async (importOriginal) => {
     const orig = await importOriginal<typeof import("@marvin/runtime/sdk-runner")>();
     return {
@@ -34,7 +36,7 @@ beforeEach(() => {
       runAgent: async (input: RunInput) => {
         captured.push(input);
         onRun?.(input);
-        return { ok: true, costUsd: 0.25 };
+        return runResult ?? { ok: true, costUsd: 0.25 };
       },
     };
   });
@@ -82,6 +84,37 @@ describe("sendAsSupervisor — an idle tab", () => {
     const turns = loadSession("proj", "tab-s")?.turns ?? [];
     expect(turns.find((t) => t.type === "turn.user")).toMatchObject({ author: "supervisor", supervisor: { kind: "nudge", ledgerId: "L-7", grounds: GROUNDS } });
     expect(turns.find((t) => t.type === "turn.started")).toMatchObject({ author: "supervisor", mode: "agent" });
+  });
+
+  // ADR-0130 decision 4 — answering a chain-cap item is sending a message; the
+  // turn it starts is a fresh chain, so the refused job can start.
+  it("the turn it starts runs at chain depth 0 (input.wakeupDepth ?? 0 in sdk-runner)", async () => {
+    const { send } = await setup();
+    await send.sendAsSupervisor(message);
+    expect(captured[0]?.wakeupDepth ?? 0).toBe(0);
+  });
+
+  it("a turn start clears the tab's attention item; a supervisor-started turn does not stamp lastUserTurnAt", async () => {
+    const { send, meta } = await setup();
+    meta.updateSessionMeta("proj", "tab-s", { attention: { kind: "chain-cap", excerpt: "x", since: "2026-11-11T10:00:00Z", turnId: "t0" }, lastUserTurnAt: "2026-11-11T09:00:00Z" });
+    await send.sendAsSupervisor(message);
+    const m = meta.readSessionMeta("proj", "tab-s");
+    expect(m?.attention).toBeUndefined();
+    expect(m?.lastUserTurnAt).toBe("2026-11-11T09:00:00Z");
+  });
+
+  it("a turn that ends on a closing question writes an attention item", async () => {
+    const { send, meta } = await setup();
+    runResult = { ok: true, finalText: "Done with the edit.\n\nShall I go ahead with step 2?", askedUserQuestion: false };
+    await send.sendAsSupervisor(message);
+    expect(meta.readSessionMeta("proj", "tab-s")?.attention).toMatchObject({ kind: "prose-question", excerpt: "Shall I go ahead with step 2?" });
+  });
+
+  it("a chain-cap refusal noted on the turn outranks a closing question from the same turn", async () => {
+    const { send, meta } = await setup();
+    runResult = { ok: true, finalText: "Shall I go ahead with step 3?", chainCap: { what: "job", label: "pnpm test:full" } };
+    await send.sendAsSupervisor(message);
+    expect(meta.readSessionMeta("proj", "tab-s")?.attention).toMatchObject({ kind: "chain-cap" });
   });
 
   it("the turn it starts is supervisor-touched", async () => {

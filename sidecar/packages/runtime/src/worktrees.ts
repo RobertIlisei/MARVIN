@@ -36,6 +36,7 @@ import { finishIntegrationJob, getIntegrationJob, noteIntegrationProgress, start
 import { autoTickSpine } from "./plan-seed";
 import { slugifyWorkDir } from "./projects";
 import { listSessionMetas } from "./session-meta";
+import { branchesHeldForQueue } from "./supervisor-queue-branches";
 
 /**
  * Lifecycle of one worktree. Everything except `running` is DERIVED from git
@@ -1160,6 +1161,7 @@ function sweepReconciled(
 ): SweepOutcome[] {
   const out: SweepOutcome[] = [];
   let openTrees: Set<string> | undefined;
+  let queueBranches: Set<string> | undefined;
   for (const raw of reconciled) {
     // A `session` tree no tab is bound to (a lost binding, adopted by ref name)
     // can be closed by no tab and dropped by no one: `drop` keeps the branch
@@ -1196,7 +1198,9 @@ function sweepReconciled(
     // A content-proven merge (squash, rebase) leaves the branch's own commits in
     // no other ref; `deleteBranchPreserving` pins them before the `-D`.
     const ours = w.branch.startsWith(BRANCH_PREFIX);
-    const deletedBranch = ours && deleteBranchPreserving(workDir, w.branch).deleted;
+    // ADR-0133 — a queued entry that comes after this branch reads its DERIVED `merged` state; keep it until that entry has opened.
+    const heldForQueue = ours && (queueBranches ??= branchesHeldForQueue(slugifyWorkDir(workDir))).has(w.branch);
+    const deletedBranch = ours && !heldForQueue && deleteBranchPreserving(workDir, w.branch).deleted;
     if (deletedBranch || (!ours && (removedCheckout || !w.checkoutPresent))) {
       saveWorktrees(
         workDir,
@@ -1210,7 +1214,11 @@ function sweepReconciled(
       state: w.state,
       removedCheckout,
       deletedBranch,
-      reason: ours ? `reclaimed — ${what}` : `checkout reclaimed — ${what}; branch ${w.branch} kept, MARVIN did not create it`,
+      reason: heldForQueue
+        ? `checkout reclaimed — ${what}; branch ${w.branch} kept until the queued entry that comes after it has opened`
+        : ours
+          ? `reclaimed — ${what}`
+          : `checkout reclaimed — ${what}; branch ${w.branch} kept, MARVIN did not create it`,
     });
   }
   out.push(...sweepLeftoverDirs(workDir, reconciled));

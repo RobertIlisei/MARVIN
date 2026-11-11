@@ -85,10 +85,12 @@ import SwiftUI
                     // its own glyph.
                     needsYouSection
                     section("Working", rows(where: { $0 == .working }), tint: GitDecorationColor.modified)
+                    section("Waiting", rows(where: { $0 == .waiting }), tint: MarvinTheme.textMuted)
                     integrateSection
                     idleSection
                     recentSection
                 }
+                if let projectId = bridge.activeProjectId { ProjectNoticesSection(projectId: projectId) }
                 supervisorFooter
             }
             .layoutOscillationProbe("sessions-stack")
@@ -333,7 +335,7 @@ import SwiftUI
 
     @ViewBuilder
     private var idleSection: some View {
-        let idle = rows(where: { $0 == .idle || $0 == .draft })
+        let idle = rows(where: { $0 == .idle || $0 == .draft || $0 == .done })
         if !idle.isEmpty {
             let partition = SessionIdleCollapse.partition(
                 idle.map { SessionIdleCollapse.Row(id: $0.id, state: $0.state, idleSince: $0.entry.lastTurnAt) },
@@ -612,6 +614,7 @@ import SwiftUI
             if supervisor.isEnabled, let c = head, !covered.contains(c.toolUseId), let p = c.supervisorProposal {
                 SupervisorProposalLine(model: supervisor, proposal: p, revealedOnServer: c.proposalRevealed ?? false)
             }
+            if let a = e.attention { attentionLine(a, sessionId: row.id) }
             escalations(for: row)
         }
         .padding(.horizontal, 14)
@@ -665,9 +668,32 @@ import SwiftUI
             Image(systemName: "arrow.clockwise").font(.system(size: 9, weight: .semibold)).foregroundStyle(.orange).frame(width: 10)
         case .failed:
             Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(GitDecorationColor.deleted).frame(width: 10)
+        case .waiting:
+            Image(systemName: "clock").font(.system(size: 9, weight: .semibold)).foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 10)
+        case .done:
+            Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 10)
         case .idle, .draft:
             Circle().fill(ChatPreviewView.tabTint(state)).frame(width: 6, height: 6).frame(width: 10)
         }
+    }
+
+    /// ADR-0130 — what a stopped tab is waiting on (its closing question, or the
+    /// job the chain cap refused) and a Dismiss that clears it. Answering it is
+    /// sending the tab a message, which clears it too.
+    private func attentionLine(_ a: SessionWatchRowWire.Attention, sessionId: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(a.excerpt)
+                .font(.system(size: 10))
+                .foregroundStyle(MarvinTheme.textMuted)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(a.excerpt)
+            Button("Dismiss") { Task { await registry.dismissAttention(sessionId) } }
+                .rowChip(.neutral)
+                .help("Clear this without answering. Sending the tab a message clears it too.")
+                .accessibilityLabel("Dismiss the waiting note for this tab")
+        }
+        .padding(.leading, 16)
     }
 
     /// The pending tool, its one-line excerpt, and Allow / Deny — the same
@@ -742,7 +768,7 @@ import SwiftUI
             smallAction("Resume", role: .neutral) { Task { await registry.resume(row.id) } }
         case .failed:
             smallAction("Open", role: .neutral) { supervisor.showTab(row.id) }
-        case .idle, .draft:
+        case .waiting, .done, .idle, .draft:
             EmptyView()
         }
     }
@@ -803,6 +829,17 @@ import SwiftUI
         }
         if case .needsYou = state, let first = e.pendingConfirms.values.first {
             parts.append("waiting: \(ToolLabel.plain(first.toolName))")
+        } else if let a = e.attention {
+            parts.append(a.kind == "chain-cap" ? "stopped at the chain cap" : "asked you a question")
+        } else if state == .waiting, let w = e.waitingOn {
+            let what = w.kind == "wakeup" ? "a wakeup" : "a job"
+            if let since = w.since.flatMap(SessionLedger.parseISO) {
+                parts.append("Waiting on \(what) · \(elapsed(since))")
+            } else {
+                parts.append("Waiting on \(what)")
+            }
+        } else if state == .done {
+            parts.append(e.lastTurnAt.map { "Done · \(elapsed($0)) ago" } ?? "Done")
         } else if e.isLive, let since = e.liveSince {
             parts.append("\(e.activityLabel ?? "running") \(elapsed(since))")
         } else if e.isLive, let label = e.activityLabel {
