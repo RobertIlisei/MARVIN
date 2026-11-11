@@ -136,6 +136,7 @@ const fullPerform = (worktrees: InboxPerform["worktrees"], send: InboxPerform["s
   send,
   cancel: () => ({ ok: true }),
   notice: () => ({ ok: true }),
+  queue: () => ({ ok: true }),
   worktrees,
   close: async () => ({ ok: true }),
   openTab: async () => ({ ok: true, marvinSessionId: "new" }),

@@ -28,6 +28,8 @@
     "./supervisor-touch": "./src/supervisor-touch.ts",
     "./supervisor-status": "./src/supervisor-status.ts",
     "./supervisor-inbox": "./src/supervisor-inbox.ts",
+    "./supervisor-queue": "./src/supervisor-queue.ts",
+    "./supervisor-queue-opener": "./src/supervisor-queue-opener.ts",
     "./supervisor-inbox-actions": "./src/supervisor-inbox-actions.ts",
     "./supervisor-inbox-perform": "./src/supervisor-inbox-perform.ts",
     "./supervisor-view": "./src/supervisor-view.ts",

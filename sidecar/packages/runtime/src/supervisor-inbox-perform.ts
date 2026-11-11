@@ -27,6 +27,7 @@ import { openFollow } from "./supervisor-follows";
 import type { NewTabDelegation } from "./supervisor-inbox";
 import type { InboxPerform } from "./supervisor-inbox-actions";
 import type { LedgerGround } from "./supervisor-ledger";
+import { approveEntries, setGuard } from "./supervisor-queue";
 import { sendAsSupervisor } from "./supervisor-send";
 import { applySupervisorAction, getSupervisorState, overBudget } from "./supervisor-state";
 import { announceProjectEvent, cancelLiveTurn, getLiveTurn } from "./turn-registry";
@@ -124,6 +125,15 @@ export function defaultInboxPerform(projectId: string, workDir: string, token: s
     notice: (a) => {
       const r = addNotice(workDir, { text: a.text, author: "supervisor", ttlHours: a.ttlHours });
       return r.ok ? { ok: true, message: "posted to every tab" } : { ok: false, status: r.code === "full" ? 409 : 400, error: r.error };
+    },
+    // ADR-0133 — the user's click: the entries and the command exist from here on, and from nowhere else.
+    queue: (a) => {
+      if (a.what === "guard") {
+        setGuard(projectId, a.command);
+        return { ok: true, message: "the guard command is approved" };
+      }
+      const r = approveEntries(projectId, a.entries);
+      return r.ok ? { ok: true, message: `approved ${r.added} — the runtime opens them as slots free` } : { ok: false, status: 409, error: r.error };
     },
     cancel: (sessionId) => (cancelLiveTurn(sessionId, "user") ? { ok: true } : { ok: false, status: 409, error: "the tab has no turn running" }),
     worktrees: async (a) => {

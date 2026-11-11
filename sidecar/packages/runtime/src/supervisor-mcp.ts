@@ -86,6 +86,7 @@ import {
 } from "./supervisor-policy";
 import { MAX_REPLY_REFS, type MessageRef } from "./supervisor-messages";
 import { wrapUntrusted } from "./supervisor-prompt";
+import { buildProposal, holdEntry, lowerCap, MAX_GUARD_CHARS, MAX_HOLD_REASON_CHARS, MAX_PROPOSAL_ENTRIES, readQueue, restoreCap } from "./supervisor-queue";
 import { MAX_SUPERVISOR_MESSAGE_CHARS } from "./supervisor-send";
 import { categoryMode, delegationRank, getSupervisorState, isSupervisorSessionId, overBudget, type SupervisorMode } from "./supervisor-state";
 import { isUserOnlyConfirm } from "./supervisor-touch";
@@ -103,6 +104,11 @@ export const SUPERVISE_TOOL_NAMES = [
   "close_session",
   "review_scope",
   "new_session",
+  "propose_queue",
+  "propose_guard",
+  "lower_cap",
+  "restore_cap",
+  "hold_queue_entry",
   "reply",
   "follow",
   "unfollow",
@@ -247,6 +253,16 @@ export interface SendArgs {
 export interface NoticeArgs {
   text: string;
   ttlHours?: number;
+}
+
+export interface ProposeQueueArgs {
+  entries: Array<{ id: string; title: string; brief: string; posture?: PosturePatch; after?: string[]; scopeRef?: { path: string; heading: string } }>;
+  recommendation?: string;
+}
+
+export interface CapArgs {
+  to: number;
+  reason: string;
 }
 
 export interface CancelArgs {
@@ -1343,6 +1359,135 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     return note("new_session", null, "escalate", "human-only", "opening a tab is the user's act — the proposal is in their inbox (ADR-0127 §4 item 7)", { id, inboxItemId, argsDigest, grounds, argSummary: rawAct.summary });
   }
 
+  /**
+   * ADR-0133 — propose a queue: a card listing briefs the user may approve as a
+   * list. Nothing is written to the queue and nothing opens: the runtime opens
+   * an entry only after the user's click on this card, and never on the
+   * supervisor's say-so. In every mode the proposal is a card.
+   */
+  async function propose_queue(args: ProposeQueueArgs): Promise<string> {
+    const argsDigest = digestArgs({ entries: args.entries ?? [] });
+    const refuse = (code: string, reason: string) => note("propose_queue", null, "refuse", code, reason, { argsDigest });
+    const st = getSupervisorState(projectId);
+    if (st.mode === "off") return refuse("off", "the supervisor is off");
+    const key = `propose_queue:${argsDigest}`;
+    const gate = ctx.limiter.check(projectId, "", key, ctx.wake.acts);
+    if (!gate.ok) return note("propose_queue", null, "drop", "rate-limit", gate.reason, { argsDigest });
+    ctx.wake.acts += 1;
+    ctx.limiter.record(projectId, "", key);
+    const base = await ctx.deps.newTabBase?.();
+    if (!base) return refuse("no-base", "the project has no posture to start a tab from");
+    const lookup = await ctx.deps.modelLookup();
+    const built = buildProposal(projectId, Array.isArray(args.entries) ? args.entries : [], base.posture, (patch) =>
+      classifyPostureChange(base.posture, patch, lookup)
+        .filter((c) => c.direction === "widen")
+        .map((c) => c.field),
+    );
+    if (!built.ok) return refuse("proposal", built.error);
+    const rawAct = buildRawAct("propose_queue", { entries: built.entries });
+    const id = newLedgerId();
+    const inboxItemId = raise(
+      {
+        sessionId: null,
+        kind: "queue",
+        escalatedBecause: { code: "human-only", label: "Opening tabs from a list is the user's act", rule: "ADR-0133" },
+        rawAct,
+        queue: { kind: "entries", entries: built.entries, warnings: built.warnings },
+        recommendation: { actionId: "approve", text: String(args.recommendation ?? "").slice(0, 500) || "Approve the list; the runtime opens each brief as a slot frees" },
+        grounds: [],
+        act: { type: "queue", what: "entries" },
+        dedupeKey: built.dedupeKey,
+      },
+      st.mode,
+      id,
+    );
+    return note("propose_queue", null, "escalate", "human-only", `${built.entries.length} brief(s) proposed — only the user's click on the card approves them; nothing opens before that (ADR-0133)`, {
+      id,
+      inboxItemId,
+      argsDigest,
+      argSummary: rawAct.summary,
+    });
+  }
+
+  /** ADR-0133 — propose the guard command; the card shows it in full and only the user's click sets it. */
+  async function propose_guard(args: { command: string; reason?: string }): Promise<string> {
+    const command = typeof args.command === "string" ? args.command.trim() : "";
+    const argsDigest = digestArgs({ command });
+    const refuse = (code: string, reason: string) => note("propose_guard", null, "refuse", code, reason, { argsDigest });
+    const st = getSupervisorState(projectId);
+    if (st.mode === "off") return refuse("off", "the supervisor is off");
+    if (!command || command.length > MAX_GUARD_CHARS || command.includes("\0")) return refuse("text", `the guard command is 1–${MAX_GUARD_CHARS} characters`);
+    if (containsSecretShape(command)) return refuse("secret", "the command carries a secret-shaped string (ADR-0127 §6)");
+    const previous = readQueue(projectId).guard?.command ?? null;
+    if (previous === command) return refuse("unchanged", "that command is already the approved guard");
+    const rawAct = buildRawAct("propose_guard", { command });
+    const id = newLedgerId();
+    const inboxItemId = raise(
+      {
+        sessionId: null,
+        kind: "queue",
+        escalatedBecause: { code: "human-only", label: "A command the runtime executes is the user's to set", rule: "ADR-0133 decision 1" },
+        rawAct,
+        queue: { kind: "guard", command, previous },
+        recommendation: { actionId: "approve", text: String(args.reason ?? "").slice(0, 500) || "Approve the command; a non-zero exit holds the queue" },
+        grounds: [],
+        act: { type: "queue", what: "guard" },
+        dedupeKey: `queue-guard:${digestArgs({ command, previous })}`,
+      },
+      st.mode,
+      id,
+    );
+    return note("propose_guard", null, "escalate", "human-only", "the guard command is the user's to set — the card shows it in full (ADR-0133)", { id, inboxItemId, argsDigest, argSummary: rawAct.summary });
+  }
+
+  /**
+   * ADR-0133 — lower the open-tab cap for an alarm. It may never raise it
+   * (refused), and must restore it. Shadow records the proposal; autonomous
+   * performs, like a posture narrowing.
+   */
+  async function lower_cap(args: CapArgs): Promise<string> {
+    const reason = String(args.reason ?? "").trim().slice(0, MAX_HOLD_REASON_CHARS);
+    const argsDigest = digestArgs({ to: args.to, reason });
+    const st = getSupervisorState(projectId);
+    const mode = categoryMode(st, "posture");
+    if (st.mode === "off") return note("lower_cap", null, "refuse", "off", "the supervisor is off", { argsDigest });
+    if (!reason) return note("lower_cap", null, "refuse", "reason", "say what the alarm is — the ledger and the workspace show it", { argsDigest });
+    const q = readQueue(projectId);
+    const cur = q.capLowered ? Math.min(q.cap, q.capLowered.to) : q.cap;
+    if (typeof args.to !== "number" || !Number.isInteger(args.to) || args.to < 0) return note("lower_cap", null, "refuse", "cap", "the cap is a whole number, 0 or more", { argsDigest });
+    if (args.to >= cur) return note("lower_cap", null, "refuse", "raise-refused", `the cap is ${cur}; you may lower it, never raise it`, { argsDigest });
+    if (mode !== "autonomous") return note("lower_cap", null, "propose", "shadow", `would lower the cap from ${cur} to ${args.to}: ${reason}`, { argsDigest });
+    const hold = actHold();
+    if (hold) return note("lower_cap", null, "refuse", hold.reasonCode, hold.reason, { argsDigest });
+    const done = lowerCap(projectId, args.to, reason);
+    if (!done.ok) return note("lower_cap", null, "refuse", "cap", done.error, { argsDigest });
+    return note("lower_cap", null, "act", "allowed", `lowered the cap from ${done.from} to ${done.to}: ${reason} — restore it with restore_cap when the alarm ends`, { argsDigest });
+  }
+
+  /** ADR-0133 — put the cap back to the user's number. */
+  async function restore_cap(_args: Record<string, never> = {}): Promise<string> {
+    const done = restoreCap(projectId);
+    if (!done.ok) return note("restore_cap", null, "refuse", "not-lowered", done.error);
+    return note("restore_cap", null, "act", "allowed", `restored the cap to the user's ${done.cap}`);
+  }
+
+  /** ADR-0133 — hold one approved entry, with a reason. Only the user releases it; the order is never yours to change. */
+  async function hold_queue_entry(args: { id: string; reason: string }): Promise<string> {
+    const id = String(args.id ?? "").trim();
+    const reason = String(args.reason ?? "").trim().slice(0, MAX_HOLD_REASON_CHARS);
+    const argsDigest = digestArgs({ id, reason });
+    const st = getSupervisorState(projectId);
+    const mode = categoryMode(st, "posture");
+    if (st.mode === "off") return note("hold_queue_entry", null, "refuse", "off", "the supervisor is off", { argsDigest });
+    if (!reason) return note("hold_queue_entry", null, "refuse", "reason", "a hold needs a reason — the user reads it in the workspace", { argsDigest });
+    if (mode !== "autonomous") return note("hold_queue_entry", null, "propose", "shadow", `would hold "${id}": ${reason}`, { argsDigest });
+    const hold = actHold();
+    if (hold) return note("hold_queue_entry", null, "refuse", hold.reasonCode, hold.reason, { argsDigest });
+    const done = holdEntry(projectId, id, reason);
+    if (!done.ok) return note("hold_queue_entry", null, "refuse", "no-entry", done.error, { argsDigest });
+    return note("hold_queue_entry", null, "act", "allowed", `held "${id}": ${reason} — the user releases it`, { argsDigest });
+  }
+
   /** ADR-0128 §5 — what a reply links to: the ids the server can resolve, labelled from its own records. */
   function resolveRefs(raw: unknown[]): MessageRef[] {
     const out: MessageRef[] = [];
@@ -1462,7 +1607,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     return `Stopped following tab ${tab}.`;
   }
 
-  return { sessions, read, answer, set_posture, send, cancel, confirm, worktrees, close_session, review_scope, new_session, reply, follow, unfollow, post_notice };
+  return { sessions, read, answer, set_posture, send, cancel, confirm, worktrees, close_session, review_scope, new_session, reply, follow, unfollow, post_notice, propose_queue, propose_guard, lower_cap, restore_cap, hold_queue_entry };
 }
 
 const groundSchema = z.object({
@@ -1630,6 +1775,57 @@ export function supervisorToolDefs(ctx: VerbContext) {
         grounds: z.array(groundSchema).max(10).optional(),
       },
       async (args) => text(await v.new_session(args as NewSessionArgs)),
+    ),
+    tool(
+      "propose_queue",
+      "Propose a queue: a list of briefs the user approves ONCE as a list, which the runtime then opens as slots free (never you). " +
+        "Each entry: `id` (short, e.g. a plan step), `title`, `brief` (the first message the tab gets), optional `posture` (never wider than shown on the card), " +
+        "`after` (ids that must be merged first) and `scopeRef` { path, heading } — a plan document in the project and the heading the id must still sit under. " +
+        "Order is part of what the user approves: you cannot reorder it afterwards, only hold an entry. Nothing opens until the user clicks the card.",
+      {
+        entries: z
+          .array(
+            z.object({
+              id: z.string().min(1).max(40),
+              title: z.string().min(1).max(120),
+              brief: z.string().min(1).max(4_000),
+              posture: z
+                .object({
+                  model: z.string().optional(),
+                  thinkingMode: z.string().optional(),
+                  permissionStrategy: z.enum(["gated", "auto", "full"]).optional(),
+                  mode: z.enum(["ask", "plan", "agent"]).optional(),
+                })
+                .optional(),
+              after: z.array(z.string().min(1).max(40)).max(10).optional(),
+              scopeRef: z.object({ path: z.string().min(1).max(200), heading: z.string().min(1).max(200) }).optional(),
+            }),
+          )
+          .min(1)
+          .max(MAX_PROPOSAL_ENTRIES),
+        recommendation: z.string().max(500).optional(),
+      },
+      async (args) => text(await v.propose_queue(args as ProposeQueueArgs)),
+    ),
+    tool(
+      "propose_guard",
+      "Propose the guard command: a shell command the runtime runs before each queued tab opens; a non-zero exit holds the queue (a remote runner is down, memory is low). " +
+        "It is the user's: the card shows the command in full, only their click sets it, and a changed text needs a new click.",
+      { command: z.string().min(1).max(MAX_GUARD_CHARS), reason: z.string().max(500).optional() },
+      async (args) => text(await v.propose_guard(args as { command: string; reason?: string })),
+    ),
+    tool(
+      "lower_cap",
+      "Lower the project's open-tab cap during a resource alarm, with the reason. You may never raise it, and you must `restore_cap` when the alarm ends. Both are ledgered.",
+      { to: z.number().int().min(0).max(20), reason: z.string().min(1).max(MAX_HOLD_REASON_CHARS) },
+      async (args) => text(await v.lower_cap(args as CapArgs)),
+    ),
+    tool("restore_cap", "Put the open-tab cap back to the user's number after an alarm you lowered it for.", {}, async () => text(await v.restore_cap())),
+    tool(
+      "hold_queue_entry",
+      "Hold one approved queue entry, with a reason the user reads. You cannot release it (the user does), reorder entries, approve, or open one.",
+      { id: z.string().min(1).max(40), reason: z.string().min(1).max(MAX_HOLD_REASON_CHARS) },
+      async (args) => text(await v.hold_queue_entry(args as { id: string; reason: string })),
     ),
     tool(
       "reply",

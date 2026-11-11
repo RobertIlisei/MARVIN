@@ -174,6 +174,10 @@ export type ProjectEvent =
       data: { projectId: string; seq: number; id: string; sessionId: string | null; verb: string; decision: string | null; inboxItemId: string | null };
     }
   | { event: "supervisor.state"; data: { projectId: string; revision: number; mode: string; paused: boolean } }
+  /** ADR-0133 — the approved queue changed (an approval, a cap, a hold, an opening); the app re-reads it through the token-gated GET. */
+  | { event: "supervisor.queue"; data: { projectId: string; change: string } }
+  /** ADR-0133 — a tab was closed: a slot may have freed, so the queue's opener looks again. Ids only. */
+  | { event: "session.closed"; data: { marvinSessionId: string; projectId: string } }
   /** ADR-0128 §6 — a line was added to the conversation; the app re-reads it through the token-gated GET. */
   | { event: "supervisor.message"; data: { projectId: string; id: string; from: "user" | "supervisor" } }
   /** ADR-0128 §5 — a follow opened or ended; the app re-reads the follows through the token-gated GET. */
