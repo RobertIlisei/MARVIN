@@ -54,6 +54,7 @@ import { type FollowUntil, listFollows } from "./supervisor-follows";
 import { addInboxItem, buildRawAct, type MergePreview, resolveInboxForConfirm, supersedeInbox } from "./supervisor-inbox";
 import { appendLedgerEntry, newLedgerId, readLedger, setWakeOrigin } from "./supervisor-ledger";
 import type { VerbContext, VerbDeps, VerbPerform } from "./supervisor-mcp";
+import { ensureMergeRunner } from "./supervisor-merge-pass";
 import { addSupervisorReply, getUserMessage, type MessageRef, type ReplyOrigin, unansweredUserMessages } from "./supervisor-messages";
 import { ActionLimiter } from "./supervisor-policy";
 import type { WakeItem } from "./supervisor-prompt";
@@ -968,6 +969,8 @@ export function ensureSupervisorLoop(): SupervisorLoop {
     G.__marvinSupervisorLoop.start();
     // ADR-0133 — the approved queue's opener listens to the same project event stream.
     ensureQueueOpener();
+    // ADR-0134 — so does the standing merge pass; with no authorisation it does nothing.
+    ensureMergeRunner();
   }
   return G.__marvinSupervisorLoop;
 }

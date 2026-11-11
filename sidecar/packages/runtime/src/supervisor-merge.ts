@@ -97,6 +97,8 @@ export interface BranchRecord {
   report?: string;
   /** The report reached the tab, or was only recorded (a closed tab cannot be messaged). */
   reported?: "sent" | "recorded";
+  /** After a merge: what became of the tab (ADR-0134 decision 5) — closed, already closed, or left open and why. */
+  tab?: string;
 }
 
 export interface MergeRunning {
@@ -203,6 +205,7 @@ function readBranchRecord(v: unknown): BranchRecord | null {
     ...(typeof o.commit === "string" ? { commit: o.commit.slice(0, 64) } : {}),
     ...(typeof o.report === "string" ? { report: o.report.slice(0, MAX_REPORT_CHARS) } : {}),
     ...(o.reported === "sent" || o.reported === "recorded" ? { reported: o.reported } : {}),
+    ...(typeof o.tab === "string" ? { tab: o.tab.slice(0, 300) } : {}),
   };
 }
 

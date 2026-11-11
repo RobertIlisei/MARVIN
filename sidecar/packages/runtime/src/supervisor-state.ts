@@ -31,7 +31,7 @@ import {
   newLedgerId,
   supervisorRoot,
 } from "./supervisor-ledger";
-import { clearStaleQueueLocks } from "./supervisor-queue-lock";
+import { clearStaleMergeLocks, clearStaleQueueLocks } from "./supervisor-queue-lock";
 import { announceProjectEvent } from "./turn-registry";
 
 export { supervisorDir } from "./supervisor-ledger";
@@ -372,6 +372,12 @@ export function bootSupervisor(): { armed: string[] } {
     clearStaleQueueLocks();
   } catch {
     /* a lock that cannot be cleared holds only the queue, and says so */
+  }
+  // ADR-0134 invariant 9 — a merge-pass lock left by a killed pass must not hold the standing merge shut.
+  try {
+    clearStaleMergeLocks();
+  } catch {
+    /* a lock that cannot be cleared holds only the merge pass; its pid being gone, the next pass takes it anyway */
   }
   // Authority that survived a restart is ledgered, so the ledger shows where
   // an act after a boot got its permission from.
