@@ -85,7 +85,7 @@ import { makeNestedInstructionsPostToolUse, resetNestedInstructions } from "./ne
 import { createObsidianMcpServer } from "./obsidian-mcp";
 import { makeOutputGovernorPostToolUse } from "./output-governor";
 import { foldTurnGraphUsage, registerLiveGraphUsage } from "./graph-usage";
-import { seededOpenSteps, seededSpineReminder, seedTurnSpine } from "./plan-seed";
+import { seededOpenSteps, seededSpineReminder, seededStepCount, seedTurnSpine } from "./plan-seed";
 import { applyTodosToSpine, stepsClosedByBatch } from "./plan-spine";
 import { readPlanState, writePlanState } from "./plan-state";
 import { loadEnabledPlugins, userPluginsOff } from "./plugin-loader";
@@ -2270,6 +2270,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     turnId,
     designCtx,
   });
+  let askedUserQuestion = false;
   const turnCloseStopHook = makeTurnCloseStopHook({
     turnId,
     facts: () => ({
@@ -2298,6 +2299,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
             return seededOpenSteps(state);
           })()
         : [],
+      // ADR-0132 — the go-ahead rule's two extra facts and the join frame.
+      mode: input.mode ?? "agent",
+      askedUserQuestion,
+      seededStepCount: spineSession
+        ? (() => {
+            const ps = readPlanState(spineSession.projectId, spineSession.sessionId);
+            return ps.ok && ps.state ? seededStepCount(ps.state) : 0;
+          })()
+        : 0,
     }),
     onFired: () => {
       /* telemetry lives in the hook; nothing else to record per turn */
@@ -2901,6 +2911,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
               if (b.name === "TodoWrite" && input && "todos" in input) {
                 lastTodoPayload = input.todos;
               }
+              if (b.name === ASK_USER_TOOL) askedUserQuestion = true;
               if (
                 (b.name === "Edit" || b.name === "Write" || b.name === "NotebookEdit") &&
                 input

@@ -23,6 +23,7 @@
 
 import type { HookCallback, HookJSONOutput, StopHookInput } from "@anthropic-ai/claude-agent-sdk";
 import { BUILTIN_GATE_MAX_DENIES, readDesignHooksMode } from "./design-hooks";
+import { parsePlanTag } from "./plan-spine";
 import { builtinGate, notePracticeRuleFired } from "./practice";
 import { classifyTurnEnding } from "./practice-extractors";
 import { hasScopeMet, openTodos } from "./workflow-guard";
@@ -43,10 +44,16 @@ export interface TurnCloseFacts {
   /** ADR-0124 D — open `[N]` steps of a plan MARVIN seeded, this turn's
    *  TodoWrite already applied. */
   seededOpenSteps?: string[];
+  /** ADR-0132 — the turn's mode; the go-ahead rule applies in `agent` only. */
+  mode?: "agent" | "plan" | "ask";
+  /** ADR-0132 — did this turn call `AskUserQuestion`? */
+  askedUserQuestion?: boolean;
+  /** ADR-0132 — step count of the seeded spine, the frame a `[N]` tag joins to. */
+  seededStepCount?: number;
 }
 
 export interface TurnCloseDecision {
-  kind: "scope-met-missing" | "plan-steps-open" | "plan-stale" | "seeded-steps-open";
+  kind: "scope-met-missing" | "plan-steps-open" | "plan-stale" | "seeded-steps-open" | "go-ahead";
   reason: string;
 }
 
@@ -69,6 +76,53 @@ export function decideSeededClose(lastText: string, seededOpen: string[] | undef
       "Either finish them, or reconcile the plan honestly: TodoWrite with each `[N]` marked completed (only if it " +
       "is), or superseded with the reason — then close. If the scope is NOT met, say what remains instead of the " +
       `scope-met line. (After ${BUILTIN_GATE_MAX_DENIES} refusals the close is allowed and the bypass logged.)`,
+  };
+}
+
+const GO_AHEAD_QUESTION =
+  /\b(?:shall|should) i (?:go ahead|proceed|start|begin|continue|get started)\b|\bwant me to (?:go ahead|proceed|start|begin|continue|get started)\b|\bready to (?:go ahead|proceed|start|begin)\b/i;
+
+/** True when the text's final paragraph is one go-ahead question offering no choice. */
+function endsOnGoAheadQuestion(lastText: string): boolean {
+  const paras = lastText.trim().split(/\n\s*\n/);
+  const last = (paras[paras.length - 1] ?? "").trim().replace(/[*_`"')\s]+$/, "");
+  if (!last.endsWith("?") || (last.match(/\?/g) ?? []).length !== 1) return false;
+  // The clause holding the question: after the last sentence break before it.
+  const clause = last.split(/[.!:]\s+|\n/).pop() ?? last;
+  return GO_AHEAD_QUESTION.test(clause) && !/\bor\b/i.test(clause);
+}
+
+/** True when a TodoWrite batch holds an item that does not join the seeded spine. */
+function todosFailJoin(todos: unknown, stepCount: number): boolean {
+  if (!Array.isArray(todos)) return false;
+  return todos.some((t) => {
+    const content = t && typeof t === "object" ? (t as { content?: unknown }).content : undefined;
+    const tag = typeof content === "string" ? parsePlanTag(content) : null;
+    return !tag || tag.hi > stepCount;
+  });
+}
+
+/**
+ * ADR-0132 — a turn in Agent mode that restates a seeded plan and stops on
+ * "Shall I go ahead with step 1?" is asking permission the brief already
+ * granted (ADR-0067). Pure; the caller owns the tier, the once-per-turn
+ * brake and `stop_hook_active`. Unlike `decideTurnClose` it applies to machine
+ * turns too. Exported for tests.
+ */
+export function decideGoAheadClose(lastText: string, facts: TurnCloseFacts): TurnCloseDecision | null {
+  if (facts.mode !== "agent" || facts.askedUserQuestion) return null;
+  const open = facts.seededOpenSteps ?? [];
+  if (open.length === 0) return null;
+  if (!endsOnGoAheadQuestion(lastText)) return null;
+  if (facts.todoWrittenThisTurn && todosFailJoin(facts.lastTodos, facts.seededStepCount ?? 0)) return null;
+  return {
+    kind: "go-ahead",
+    reason:
+      `go-ahead rule (ADR-0132): this turn ends by asking whether to start, but the brief IS the plan — ${open.length} ` +
+      `seeded step${open.length === 1 ? "" : "s"} remain (first: ${open[0]}). ADR-0067: permission the plan already ` +
+      "granted is not asked for. Continue with the first open seeded step in this turn. Steps you said you will " +
+      "leave out stay open on the spine — do not mark them done. Stop only at the plan's end, on a real " +
+      "trade-off, or when genuinely blocked, and then ask with AskUserQuestion. (Once per turn; this will not repeat.)",
   };
 }
 
@@ -129,6 +183,7 @@ export function makeTurnCloseStopHook(args: {
 }): HookCallback {
   let fired = false;
   let seededBlocks = 0;
+  let goAheadBlocked = false;
   return async (input) => {
     if (input.hook_event_name !== "Stop") return {} as HookJSONOutput;
     const evt = input as StopHookInput;
@@ -163,6 +218,29 @@ export function makeTurnCloseStopHook(args: {
       }
     }
     if (evt.stop_hook_active) return {} as HookJSONOutput;
+    // ADR-0132 — the go-ahead rule: machine turns included, once per turn.
+    const goGate = builtinGate("builtin:go-ahead");
+    const goAhead = goGate.off || goAheadBlocked ? null : decideGoAheadClose(evt.last_assistant_message ?? "", { ...facts, alreadyFired: fired });
+    if (goAhead) {
+      const tel = (kind: string) => {
+        try {
+          console.info("[marvin.telemetry] " + JSON.stringify({ kind, turnId: args.turnId, open: facts.seededOpenSteps?.length ?? 0, at: new Date().toISOString() }));
+        } catch {
+          /* never break a turn on telemetry */
+        }
+      };
+      if (mode === "measure") {
+        tel("plan.goahead.measured");
+      } else if (goGate.tier !== "deny") {
+        tel("plan.goahead.nudge");
+      } else {
+        goAheadBlocked = true;
+        tel("plan.goahead.block");
+        notePracticeRuleFired("builtin:go-ahead", "fired");
+        args.onFired(goAhead);
+        return { decision: "block", reason: goGate.message ?? goAhead.reason } as HookJSONOutput;
+      }
+    }
     const decision = decideTurnClose(evt.last_assistant_message ?? "", { ...facts, alreadyFired: fired });
     if (!decision) return {} as HookJSONOutput;
     fired = true;
