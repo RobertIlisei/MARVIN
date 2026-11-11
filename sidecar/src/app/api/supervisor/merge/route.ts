@@ -12,6 +12,7 @@
  *                                     creates the authorisation — this route never does
  *     action `revoke`                 end it now; the pass stops before its next branch
  *     action `release-hold` { branch } lift the supervisor's hold on a branch
+ *     action `retry`                  look again now (a fast-forward that was waiting)
  *
  * Token-gated like every supervisor route, POST also CSRF-guarded, and under
  * `/api/supervisor` — a control path `supervisorBoundaryDenial` refuses a tab
@@ -24,6 +25,7 @@ import { getProject } from "@marvin/runtime/projects";
 import { addInboxItem, buildRawAct } from "@marvin/runtime/supervisor-inbox";
 import { digestArgs, isSafeProjectId } from "@marvin/runtime/supervisor-ledger";
 import { checkMergeProposal, localTimeZone, mergeView, readMerge, releaseHoldAsUser, revokeMerge } from "@marvin/runtime/supervisor-merge";
+import { ensureMergeRunner } from "@marvin/runtime/supervisor-merge-pass";
 import { getSupervisorState, SUPERVISOR_TOKEN_HEADER, verifySupervisorToken } from "@marvin/runtime/supervisor-state";
 import { noteSidecarPort } from "@marvin/tools/policy";
 import { type NextRequest, NextResponse } from "next/server";
@@ -70,6 +72,8 @@ export async function POST(req: NextRequest) {
   if (!isSafeProjectId(projectId)) return NextResponse.json({ error: "invalid projectId" }, { status: 400 });
   const project = getProject(projectId);
   if (!project) return NextResponse.json({ error: "unknown project" }, { status: 404 });
+  // The pass hears an approval (from the inbox route) and the changes below on the project event stream.
+  const runner = ensureMergeRunner();
   switch (body.action) {
     case "propose": {
       const checked = checkMergeProposal({
@@ -102,14 +106,20 @@ export async function POST(req: NextRequest) {
     }
     case "revoke":
       if (!revokeMerge(projectId)) return NextResponse.json({ error: "there is no authorisation to revoke" }, { status: 409 });
+      // Stops the running pass now: an in-flight gate run is killed and its scratch tree removed.
+      runner.stopProject(projectId);
       break;
     case "release-hold": {
       const branch = typeof body.branch === "string" ? body.branch.trim() : "";
       if (!branch || !releaseHoldAsUser(projectId, branch)) return NextResponse.json({ error: `no hold on "${branch}"` }, { status: 404 });
       break;
     }
+    case "retry":
+      // A fast-forward that was waiting for the user's checkout looks again; with no authorisation the pass does nothing.
+      void runner.kick(projectId);
+      break;
     default:
-      return NextResponse.json({ error: "action must be propose, revoke or release-hold" }, { status: 400 });
+      return NextResponse.json({ error: "action must be propose, revoke, release-hold or retry" }, { status: 400 });
   }
   return NextResponse.json({ ok: true, merge: mergeView(projectId) });
 }

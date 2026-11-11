@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -7,9 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { readLedger } from "../src/supervisor-ledger";
 import { approveMerge, GATE_DEFAULT_TIMEOUT_MS, type MergeProposal, readMerge, revokeMerge } from "../src/supervisor-merge";
-import { argvViolation, defaultPassDeps, MergePass, type PassDeps, type PassResult } from "../src/supervisor-merge-pass";
-import { acquireMergeLock, mergeLockPath } from "../src/supervisor-queue-lock";
+import { argvViolation, defaultPassDeps, MergePass, MergeRunner, type PassDeps, type PassResult } from "../src/supervisor-merge-pass";
+import { acquireMergeLock, clearStaleMergeLocks, mergeLockPath } from "../src/supervisor-queue-lock";
 import { bootSupervisor, resetSupervisorStateForTests } from "../src/supervisor-state";
+import type { ProjectEvent } from "../src/turn-registry";
 import { createSessionWorktree, markSessionWorktreeClosed, mergeAllWorktrees, reconcileWorktrees } from "../src/worktrees";
 
 // ADR-0134 invariants 1, 3–8 — the pass, on REAL git in temporary repositories.
@@ -655,6 +656,184 @@ describe("the lock — one pass at a time (invariant 9)", () => {
     writeFileSync(mergeLockPath(PROJECT), `${JSON.stringify({ pid: 2_147_483_000, at: new Date().toISOString() })}\n`);
     const h = harness({ isAlive: () => false });
     expect((await h.run()).merged).toHaveLength(1);
+    expect(existsSync(mergeLockPath(PROJECT))).toBe(false);
+  });
+});
+
+describe("revoking or expiring stops the pass before the next branch (invariant 9)", () => {
+  it("a revoke between two branches leaves the second unmerged, and says why", async () => {
+    const a = makeTab("a", { "a.txt": "a\n" });
+    const b = makeTab("b", { "b.txt": "b\n" });
+    // Their tabs are still open as far as the session record goes, so the pass closes `a`'s tab after its merge — and the user revokes right then.
+    for (const t of [a, b]) {
+      const m = metas.get(t.sessionId);
+      if (m) m.closedAt = undefined;
+    }
+    authorise();
+    const h = harness({
+      closeTab: async (_p, _w, sessionId) => {
+        revokeMerge(PROJECT);
+        return { ok: true, message: `closed ${sessionId}` };
+      },
+    });
+    const r = await h.run();
+    expect(r.merged).toHaveLength(1);
+    expect(r.stopped).toBe("revoked");
+    expect(h.gateRuns).toHaveLength(1);
+    expect(git(workDir, "rev-list", "--merges", "--count", "integration")).toBe("1");
+    expect(readLedger(PROJECT).some((l) => l.verb === "merge.revoked")).toBe(true);
+    expect(existsSync(mergeLockPath(PROJECT))).toBe(false);
+  });
+
+  it("a revoke DURING the gate kills the gate run, removes its scratch tree and moves nothing (the runner hears it on the event stream)", async () => {
+    makeTab("a", { "a.txt": "a\n" });
+    authorise({ gate: "sleep 60" });
+    const h = harness();
+    const listeners: Array<(e: ProjectEvent) => void> = [];
+    const runner = new MergeRunner(h.pass);
+    runner.start(
+      (l) => {
+        listeners.push(l);
+        return () => undefined;
+      },
+      () => [],
+    );
+    const before = ref("integration");
+    const t0 = Date.now();
+    const done = runner.kick(PROJECT);
+    for (let i = 0; i < 200 && readMerge(PROJECT).running?.stage !== "gate"; i++) await new Promise((r) => setTimeout(r, 50));
+    expect(readMerge(PROJECT).running?.stage).toBe("gate");
+    expect(scratchTrees()).toHaveLength(1);
+    expect(revokeMerge(PROJECT)).toBe(true);
+    // revokeMerge announced on the real stream; here the test is the stream.
+    for (const l of listeners) l({ event: "supervisor.merge", data: { projectId: PROJECT, change: "revoked" } });
+    const r = await done;
+    expect(Date.now() - t0).toBeLessThan(20_000);
+    expect(r?.merged).toEqual([]);
+    expect(r?.stopped).toBe("revoked");
+    expect(ref("integration")).toBe(before);
+    expect(scratchTrees()).toEqual([]);
+    expect(worktreePaths().some((p) => p.includes("merge-scratch"))).toBe(false);
+    expect(readMerge(PROJECT).running).toBeNull();
+    expectSafeArgv(h);
+  });
+
+  it("an authorisation already past its expiry merges nothing; the end is recorded and ledgered once", async () => {
+    makeTab("a", { "a.txt": "a\n" });
+    approveMerge(PROJECT, proposal({ validForHours: 1 }), new Date(0));
+    const h = harness();
+    const before = ref("integration");
+    const r = await h.run();
+    expect(r.merged).toEqual([]);
+    expect(h.gateRuns).toEqual([]);
+    expect(ref("integration")).toBe(before);
+    expect(readMerge(PROJECT).ended).toMatchObject({ why: "expired", target: "integration" });
+    expect(readLedger(PROJECT).filter((l) => l.verb === "merge.expired")).toHaveLength(1);
+    await h.run();
+    expect(readLedger(PROJECT).filter((l) => l.verb === "merge.expired")).toHaveLength(1);
+  });
+
+  it("an expiry DURING the gate stops it: the gate is bounded by what is left, nothing moves, the scratch tree is removed", async () => {
+    makeTab("a", { "a.txt": "a\n" });
+    authorise({ gate: "sleep 60", validForHours: 1 });
+    const expiresAt = Date.parse(readMerge(PROJECT).authorisation?.expiresAt as string);
+    const t0 = Date.now();
+    // The clock the pass reads: 3 s before the expiry now, running at real speed.
+    const h = harness({ now: () => expiresAt - 3000 + (Date.now() - t0) });
+    const before = ref("integration");
+    const r = await h.run();
+    expect(Date.now() - t0).toBeLessThan(30_000);
+    expect(r.merged).toEqual([]);
+    expect(r.stopped).toBe("expired");
+    expect(ref("integration")).toBe(before);
+    expect(scratchTrees()).toEqual([]);
+    expect(readMerge(PROJECT).branches[0]).toMatchObject({ code: "authorisation-ended" });
+  });
+});
+
+describe("the runner is event-driven, one pass at a time", () => {
+  const bus = () => {
+    const listeners: Array<(e: ProjectEvent) => void> = [];
+    return {
+      subscribe: (l: (e: ProjectEvent) => void) => {
+        listeners.push(l);
+        return () => undefined;
+      },
+      emit: (e: ProjectEvent) => {
+        for (const l of listeners) l(e);
+      },
+    };
+  };
+
+  it("a tab closing starts a pass; the pass's own bookkeeping does not", async () => {
+    let passes = 0;
+    const runner = new MergeRunner({
+      run: async () => {
+        passes++;
+        return { merged: [], skipped: [], lock: "none" as const };
+      },
+    } as unknown as MergePass);
+    const b = bus();
+    runner.start(b.subscribe, () => []);
+    expect(passes).toBe(0);
+    for (const change of ["branch", "running", "held"]) b.emit({ event: "supervisor.merge", data: { projectId: PROJECT, change } });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(passes).toBe(0);
+    b.emit({ event: "session.closed", data: { marvinSessionId: "s", projectId: PROJECT } });
+    for (let i = 0; i < 100 && passes < 1; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(passes).toBe(1);
+    b.emit({ event: "supervisor.merge", data: { projectId: PROJECT, change: "approved" } });
+    for (let i = 0; i < 100 && passes < 2; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(passes).toBe(2);
+    runner.stop();
+  });
+
+  it("a kick during a pass is coalesced into exactly one more pass; two kicks never run two passes at once", async () => {
+    let active = 0;
+    let maxActive = 0;
+    let passes = 0;
+    const runner = new MergeRunner({
+      run: async () => {
+        passes++;
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((r) => setTimeout(r, 60));
+        active--;
+        return { merged: [], skipped: [], lock: "ours" as const };
+      },
+    } as unknown as MergePass);
+    const first = runner.kick(PROJECT);
+    expect(await runner.kick(PROJECT)).toBeNull();
+    expect(await runner.kick(PROJECT)).toBeNull();
+    await first;
+    expect(passes).toBe(2);
+    expect(maxActive).toBe(1);
+  });
+
+  it("a paused or off supervisor merges nothing", async () => {
+    makeTab("a", { "a.txt": "a\n" });
+    authorise();
+    const h = harness({ supervisorRefusal: () => "the supervisor is paused" });
+    const r = await h.run();
+    expect(r).toMatchObject({ merged: [], stopped: "paused" });
+    expect(h.calls).toEqual([]);
+  });
+});
+
+describe("the lock is cleared at boot when its pid is gone", () => {
+  it("clearStaleMergeLocks removes a dead pid's lock and leaves a live one's; boot runs it", () => {
+    mkdirSync(path.dirname(mergeLockPath(PROJECT)), { recursive: true });
+    writeFileSync(mergeLockPath(PROJECT), `${JSON.stringify({ pid: 2_147_483_000, at: new Date().toISOString() })}\n`);
+    expect(clearStaleMergeLocks((pid) => pid === process.ppid)).toEqual([PROJECT]);
+    expect(existsSync(mergeLockPath(PROJECT))).toBe(false);
+    writeFileSync(mergeLockPath(PROJECT), `${JSON.stringify({ pid: process.ppid, at: new Date().toISOString() })}\n`);
+    expect(clearStaleMergeLocks()).toEqual([]);
+    expect(existsSync(mergeLockPath(PROJECT))).toBe(true);
+    unlinkSync(mergeLockPath(PROJECT));
+    // bootSupervisor clears a dead pid's lock too.
+    writeFileSync(mergeLockPath(PROJECT), `${JSON.stringify({ pid: 2_147_483_000, at: new Date().toISOString() })}\n`);
+    resetSupervisorStateForTests();
+    bootSupervisor();
     expect(existsSync(mergeLockPath(PROJECT))).toBe(false);
   });
 });

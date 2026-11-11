@@ -101,6 +101,12 @@ describe("/api/supervisor/merge", () => {
     expect((await post({ action: "release-hold", branch: "marvin/tab/a" })).status).toBe(404);
   });
 
+  it("retry looks again and, with no authorisation, does nothing at all", async () => {
+    expect((await post({ action: "retry" })).status).toBe(200);
+    expect(readMerge(P).authorisation).toBeNull();
+    expect(listInbox(P)).toEqual([]);
+  });
+
   it("has no way to approve: only the inbox click does", async () => {
     expect((await post({ ...PROPOSE, action: "approve" })).status).toBe(400);
     expect((await post({ action: "set", authorisation: { approvedBy: "user" } })).status).toBe(400);
