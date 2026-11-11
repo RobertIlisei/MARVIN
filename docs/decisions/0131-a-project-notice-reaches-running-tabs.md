@@ -1,6 +1,6 @@
 # ADR-0131 — A project notice reaches running tabs without a message to each
 
-- **Status:** Proposed (2026-11-11)
+- **Status:** Accepted (2026-11-11), with the amendments under "Decisions" below; build plan in [`docs/plans/supervision-improvements.md`](../plans/supervision-improvements.md)
 - **Related:** [ADR-0118](./0118-one-prompt-per-session-and-settings-isolation.md) (per-turn values ride the reminder suffix), [ADR-0110](./0110-worktrees-isolate-the-filesystem-not-the-machine.md) (tabs share a machine), [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md) (`send_message`)
 - **Evidence:** [`docs/reviews/2026-11-11-supervising-marvin-field-notes.md`](../reviews/2026-11-11-supervising-marvin-field-notes.md)
 
@@ -36,6 +36,14 @@ The instruction files (ADR-0119) are the wrong place: they are the system prompt
 1. May the supervisor post without the user's click? **Yes, under `answer-questions`**: it is the same authority as telling one tab, made cheaper.
 2. Should a notice wake waiting tabs? **No.**
 3. Expiry required? **Yes**: an unexpired stale fact is worse than none.
+
+## Decisions (2026-11-11, by the owner's delegation, after checking the text against the code)
+
+The three open questions are answered as recommended. Three amendments:
+
+1. **A supervisor notice that matches the word list becomes a card, and that is accepted.** The list is `questionHeuristic` (`supervisor-policy.ts`), the one the `send` verb uses. It matches "release", "merge", "production", "CI" and "token", so one of the field notes' own notices ("append-only release files are now union-merged") would not post on the supervisor's authority. A notice reaches every tab, which is wider than one message, so the list is not narrowed: the match raises an inbox card and the user's click posts it. The user's own notices are not checked against the list.
+2. **`post_notice` is project-wide, so its delegation test is project-wide.** It is allowed when the supervisor is on and at least one open tab is delegated at `answer-questions` or above, and it follows the `nudges` autonomy category: in shadow it proposes a card.
+3. **The gate deny covers shell writes too.** `.marvin/notices.json` joins the protected-path block that already covers `.marvin/memory.md` and `.marvin/plans/` (Edit, Write and a mutating Bash command that names the path), and the notices route joins the control routes a tab cannot reach.
 
 ## Scope of Done
 

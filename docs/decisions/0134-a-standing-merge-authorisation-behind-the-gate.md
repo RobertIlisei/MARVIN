@@ -1,6 +1,6 @@
 # ADR-0134 — A standing merge authorisation: finished tab branches merge behind the project's gate, without a click each
 
-- **Status:** Proposed (2026-11-11)
+- **Status:** Accepted (2026-11-11), with the amendments under "Decisions" below; build plan in [`docs/plans/supervision-improvements.md`](../plans/supervision-improvements.md)
 - **Amends:** [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md) §6 (merging is human-only) and [ADR-0109](./0109-batch-integration-and-metered-ci.md) (who starts `mergeAllWorktrees`)
 - **Related:** [ADR-0103](./0103-implementer-branch-lifecycle.md) (derived worktree state), [ADR-0104](./0104-ship-review-gate.md), [ADR-0123](./0123-parallel-tabs-share-a-machine-and-a-numbering.md)
 - **Evidence:** [`docs/reviews/2026-11-11-supervising-marvin-field-notes.md`](../reviews/2026-11-11-supervising-marvin-field-notes.md)
@@ -46,6 +46,14 @@ On a real project about forty-five branches merged in two days under a standing 
 1. Expiry of the authorisation? **Required, at most 14 days**, renewed by a click.
 2. May several branches merge as one octopus under one gate run? **Not in the first version**: one branch, one gate run, one culprit. The external scripts did batch, and a failed batch cost a second run each time.
 3. Does a gate run that falls back to a slower machine count? **Yes; but the pass waits while the machine's load is above a project-set number** (the same `openGuard` idea as ADR-0133): two merges failed on timeouts alone when gates ran locally.
+
+## Decisions (2026-11-11, by the owner's delegation, after checking the text against the code)
+
+The three open questions are answered as recommended. Three amendments:
+
+1. **The pass merges and runs the gate in a scratch worktree, never in the main checkout.** §3 as written merges without committing in the checkout that has `target` checked out and runs the gate there. With gates of 25–55 minutes that leaves the user's main checkout, and every shared-checkout tab (ADR-0102), in a half-merged state for that long. Instead: a scratch worktree is cut detached at `target`'s tip, set up like a tab's worktree (`worktree-setup.ts`), the branch is merged and committed there, and the gate runs there. On exit 0 `target` is fast-forwarded to that commit; on anything else the scratch tree is discarded and `target` never moved. The fast-forward waits, and says so, while the main checkout has `target` checked out with uncommitted changes or a live turn in a shared checkout.
+2. **If `target` moved while the gate ran, the result is discarded and the branch is retried**, because the commit that was tested is no longer the one that would land.
+3. **The load wait in open question 3 uses the guard command of ADR-0133** (user-approved, stored in the supervisor dir), not a second mechanism. Hold windows are read in the machine's local time zone, and the card says which.
 
 ## Scope of Done
 

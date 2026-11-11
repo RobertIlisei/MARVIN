@@ -8,6 +8,77 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-11-11 — v1.1.0: a tab says what it is waiting on, a notice reaches every tab, an approved queue and a standing merge (ADR-0130 to ADR-0134); Agent SDK 0.3.301.**
+
+  *Where it came from.* Over 2026-11-09 to 11 about 45 branches were merged on a
+  real project with up to six tabs open, supervised by scripts outside MARVIN.
+  The field notes
+  ([`docs/reviews/2026-11-11-supervising-marvin-field-notes.md`](../reviews/2026-11-11-supervising-marvin-field-notes.md))
+  became five ADR proposals. Each was checked against the code before building;
+  the check found six gaps, and each ADR's "Decisions (2026-11-11)" section
+  records what changed. Build plan:
+  [`docs/plans/supervision-improvements.md`](../plans/supervision-improvements.md).
+  Built by implementers on isolated worktrees (ADR-0081), each diff reviewed
+  before merging; merged as `ef3e6764`.
+
+  *A session says what it is waiting on* (ADR-0130, `34c0f088`, `8c3ef2af`).
+  `idle` meant three things. The watch row now derives `waiting` (on its own
+  background job or wakeup, with `waitingOn {kind,label,since}`) and `done`
+  (closed scope-met). A turn that ends on a question in prose
+  (`builtin:prose-question`) and a job refused by the chain cap (`code:
+  "chain-depth"`) each set `SessionMeta.attention`, and the row reads
+  `awaiting-you`; the item is dismissed from the Sessions pane or cleared by the
+  next user turn. A supervisor may restart a chain-capped tab once per item, at
+  `answer-confirms`.
+
+  *A project notice* (ADR-0131, `dff0434f`, `6ac2f9f7`). Up to eight dated
+  notices in `<workDir>/.marvin/notices.json` ride every turn's reminder suffix;
+  the system prompt is untouched. The user posts from the Sessions pane; the
+  supervisor through `post_notice`, which becomes a card when the text matches
+  the human-only word list. A tab cannot write the store (gate deny, shell
+  writes included) or reach the route. Review fix: the reminder block does not
+  attribute an author, because the field is repository-controlled.
+
+  *The brief is the plan* (ADR-0132 in part, `215e3b40`). `builtin:go-ahead`
+  blocks a close once when an Agent-mode tab with a seeded spine ends on a
+  go-ahead question that offers no alternative. It ships at `nudge`: logged,
+  nothing blocked, until promoted in the Practice pane. The `continue_plan`
+  verb is deferred until the rule has been measured for one release.
+
+  *An approved queue* (ADR-0133, seven commits ending `b3931ff4`). The
+  supervisor proposes entries; only the user's click approves them. The runtime
+  opens the next entry when open tabs are under the cap, every `after` branch
+  is merged (derived state), the disk floor holds and the guard passes. The
+  guard command is the user's, set on a card and stored in the supervisor dir,
+  not read from the repository. The supervisor may lower the cap during an
+  alarm and must restore it; it can never raise it. One opener per project.
+
+  *A standing merge* (ADR-0134, six commits ending `91e69da9`). An expiring
+  authorisation `{target, gate, holds, expiresAt}`. Each `ready` branch is
+  predicted with `git merge-tree`, merged and gated in a scratch worktree, and
+  `target` is fast-forwarded on exit 0. If `target` moved while the gate ran,
+  the result is discarded and retried. The git argv is allowlisted: no push, no
+  tag. Holds by path and window; `hold_merge` only narrows.
+
+  *Agent SDK 0.3.286 to 0.3.301* (`79c7133d`). 2.1.286 refuses
+  `claude-fable-5-2`. Built-ins outside `KNOWN_TOOL_NAMES` were auto-allowed by
+  name; they are now classified, and a test fails when the SDK adds a built-in
+  no set covers.
+
+  *Graph seed as an APFS clone* (`d3158275`). Nine tabs held about 13.5 GB of
+  identical extraction cache; `seedWorktreeGraph` now uses `/bin/cp -c`.
+
+  *Verification.* `pnpm typecheck --force` clean across all eight packages;
+  `pnpm test`: 186 files, 2,956 tests passed, 1 skipped; `bin/marvin install-macos-app --bundled` built and the
+  installed app answered `/api/health`.
+
+  *Not verified.* The new panes, cards and dots were not exercised in the
+  running interface, and the queue and the standing merge have not run on a
+  real project. Open: whether an open scope-met tab may be merged by the
+  standing merge (today only closed tabs' branches are); the `env` map's
+  reserved names do not block `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n`
+  (pre-existing).
+
 - **2026-10-31 — v1.0.0: MARVIN's first 1.0 — talk to the supervisor, cost and plan accounting corrected, interface and gate faults fixed (ADR-0127, ADR-0128).**
 
   Robert chose to call this release 1.0 rather than v0.1.120. The functional

@@ -1,6 +1,6 @@
 # ADR-0133 — An approved queue: the user approves a list of briefs once, and the supervisor opens them as slots free
 
-- **Status:** Proposed (2026-11-11)
+- **Status:** Accepted (2026-11-11), with the amendments under "Decisions" below; build plan in [`docs/plans/supervision-improvements.md`](../plans/supervision-improvements.md)
 - **Amends:** [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md) §7 (one request, one tab; never on its own initiative)
 - **Related:** [ADR-0122](./0122-a-tab-gets-its-worktree-or-is-refused.md) (atomic tab creation), [ADR-0108](./0108-per-session-posture.md), [ADR-0110](./0110-worktrees-isolate-the-filesystem-not-the-machine.md) (shared machine), [ADR-0128](./0128-the-user-talks-to-the-supervisor.md) (cards are the consent)
 - **Evidence:** [`docs/reviews/2026-11-11-supervising-marvin-field-notes.md`](../reviews/2026-11-11-supervising-marvin-field-notes.md)
@@ -43,6 +43,14 @@ Three things went wrong there that a design should prevent:
 1. May the supervisor reorder approved entries? **No**: order is part of what was approved; it may only hold one, with the reason.
 2. Does an entry expire? **Yes, after 7 days unopened**: a brief written against an older tree is stale.
 3. Is `scopeRef` required? **No, but a queue of more than five entries without one shows a warning on the card.**
+
+## Decisions (2026-11-11, by the owner's delegation, after checking the text against the code)
+
+The three open questions are answered as recommended. Three amendments:
+
+1. **The guard command is the user's, not the repository's.** §4 puts `openGuard` in `.marvin/worktree.json`. That file is written by whoever wrote the repository, and a command the runtime executes cannot be made safe by validating it: cloning a hostile repository would run its code (the project-controlled-config rule in `REVIEW.md`). The guard is stored with the queue in the supervisor dir, set on a card that shows the command in full, and the user's click approves it. Any change to the text needs a new click. It runs with the `env` map's rules (ADR-0110) and a timeout. `deferredHeadings` stays in `worktree.json`: it is only compared against text, never executed, and is validated where read.
+2. **The cap counts every open tab in the project** that is not the supervisor's own session, whoever opened it. A tab the user opens by hand takes a slot; the queue never closes a tab to make room.
+3. **"Merged" for `after` is the derived worktree state** (`reconcileWorktrees`, ADR-0103), not a recorded one, so a branch the user merged in a terminal releases its successors.
 
 ## Scope of Done
 

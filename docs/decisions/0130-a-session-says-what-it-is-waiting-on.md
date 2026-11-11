@@ -1,6 +1,6 @@
 # ADR-0130 — A session says what it is waiting on: `idle` stops meaning three things
 
-- **Status:** Proposed (2026-11-11)
+- **Status:** Accepted (2026-11-11), with the amendments under "Decisions" below; build plan in [`docs/plans/supervision-improvements.md`](../plans/supervision-improvements.md)
 - **Related:** [ADR-0107](./0107-one-worktree-per-tab-and-a-multi-session-watch.md) (the watch feed), [ADR-0055](./0055-checkback-promise-auto-arm-guard.md) (wakeups), [ADR-0067](./0067-gate-on-scope-not-turn-boundaries.md) (stalls), [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md) §4 (what wakes the supervisor)
 - **Evidence:** [`docs/reviews/2026-11-11-supervising-marvin-field-notes.md`](../reviews/2026-11-11-supervising-marvin-field-notes.md)
 
@@ -45,6 +45,16 @@ The owner asked twice why "no session is working" while four gates ran. The exte
 1. `done` as a state, or `idle` plus the marker? **A state**: the dot is what the owner reads.
 2. Does a `prose-question` item block a supervisor from sending a message? **No**: it is advisory; answering it is just a message.
 3. Should `waiting` expire into `idle` after N hours? **No**: the job ledger and its six-hour recovery window already bound it.
+
+## Decisions (2026-11-11, by the owner's delegation, after checking the text against the code)
+
+The three open questions are answered as recommended. Five amendments, where the text above and the code disagree; where they conflict, this section wins.
+
+1. **The two silent stops are a session `attention` record, not entries in `pending`.** The row's `pending` array holds the live turn's confirms only (`listPendingConfirms(turn.turnId)`), each answerable through `/api/confirm` by `toolUseId`. A prose question and a chain-cap refusal belong to a turn that has ended and are answered by a message. They are stored as `SessionMeta.attention: { kind: "prose-question" | "chain-cap", excerpt, since, turnId }`, set when the turn ends and cleared when the session's next turn starts or the user dismisses it. The row carries `attention`, and a row that is not live with `attention` set reads **`awaiting-you`**. This works with the supervisor off, which the supervisor inbox would not.
+2. **The detector is the one that exists.** `classifyTurnEnding` (`practice-extractors.ts`) already returns `asked` and `blocked-on-human`, and the Stop hook already uses it. No new heuristic is written. No item is raised when the turn called `AskUserQuestion`, closed scope-met, or the session is waiting on its own job or wakeup.
+3. **`lastTurn.marker` is `"scope-met" | null`.** There is no plan sentinel in the runtime to read a `"plan"` value from. The marker is derived from `scopeMetAt`, which the session meta already records.
+4. **Answering a chain-cap item is sending a message; no new reset is built.** A turn started by a message runs at chain depth 0 already (`depth: input.wakeupDepth ?? 0`). The bound that keeps the cap meaningful: a supervisor at `answer-confirms` may restart **once** per chain-cap item; a second cap on the same session before any user turn is the user's. The refusal text the model sees says the user has been told, so the model stops instead of inventing an instruction. The wakeup cap is enforced in `scheduleWakeup`; `enqueueWakeup` is the boot-recovery path and has no cap by design.
+5. **State precedence**, pinned by tests: live with a confirm → `awaiting-you`; live → `working`; `attention` → `awaiting-you`; a recent interruption → `interrupted`; error → `failed`; waiting on its own job or wakeup → `waiting`; `scopeMetAt` set → `done`; otherwise `idle`. A call to action outranks a wait. `supervisor.waitingOnOwn` stays in the row for existing consumers.
 
 ## Scope of Done
 

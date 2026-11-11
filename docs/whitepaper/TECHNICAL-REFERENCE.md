@@ -2,8 +2,8 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v1.0.0
-(2026-10-31). Where this document and the repository disagree, the
+code. Written for contributors and deep evaluators. Covers v1.1.0
+(2026-11-11). Where this document and the repository disagree, the
 repository wins.*
 
 > **Since v0.1.55.** Subsystems added after this document's original scope,
@@ -72,6 +72,29 @@ repository wins.*
 > and a Helpers section in the Models dialog. **Claude's server-side advisor**
 > (ADR-0125) is a role too: off by default, `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`
 > when off, `settings.advisorModel` when on.
+> v1.1.0 (2026-11-11): **supervision improvements** (ADR-0130 to ADR-0134).
+> *Session state* — `SessionWatchState` gains `waiting` and `done`;
+> `deriveSessionState` reads `attention`, `waitingOn {kind,label,since}` and
+> `scopeMet`; `SessionMeta.attention` is set by `decideAttention`
+> (`runtime/src/session-attention.ts`) for a prose question
+> (`builtin:prose-question`) and a chain-cap refusal (`code: "chain-depth"`),
+> dismissed over `/api/sessions/attention`. *Notices* —
+> `runtime/src/notices.ts` (`<workDir>/.marvin/notices.json`, ≤8 live, ≤400
+> chars, expiring), delivered by `turnReminders`, written over
+> `/api/notices` (a control route a tab cannot reach) or the supervisor's
+> `post_notice`; the store joins the protected-path gate deny. *Go-ahead* —
+> `builtin:go-ahead` (`practice.ts`, native `nudge`), decided by
+> `decideGoAheadClose` in `turn-close-hook.ts`. *Queue* —
+> `supervisor-queue.ts`, `-opener.ts`, `-lock.ts`, `-guard.ts`, `-scope.ts`,
+> `-branches.ts`; verbs `propose_queue`, `propose_guard`, `lower_cap`,
+> `restore_cap`, `hold_queue_entry`; `/api/supervisor/queue`;
+> `deferredHeadings` in `.marvin/worktree.json`. *Standing merge* —
+> `supervisor-merge.ts`, `supervisor-merge-pass.ts` (an argv allowlist: no
+> push, no tag), `supervisor-merge-gate.ts`; scratch worktrees under
+> `<MARVIN_DATA_DIR>/merge-scratch/<projectId>/`; verbs `hold_merge` /
+> `release_merge`; `/api/supervisor/merge`. **Agent SDK 0.3.301** (§10):
+> built-ins outside `KNOWN_TOOL_NAMES` are classified, not allowed by name.
+> **Graph seed** — `seedWorktreeGraph` clones with `/bin/cp -c` on macOS.
 > v1.0.0 (2026-10-31): **cost and plan accounting** — the tracker
 > (`runtime` cost tracker, `CostService.swift`) records each turn's *increase*
 > against the previous entry of the same SDK session (the SDK's
@@ -1111,7 +1134,7 @@ whole pane.
   Honeycomb account — off unless the user configures it; keys redacted
   from all logs.
 - **Agent SDK contract** ([ADR-0073](../decisions/0073-agent-sdk-0-3-upgrade.md)) —
-  `@anthropic-ai/claude-agent-sdk` **0.3.286**. Pins in `sdk-runner.ts`:
+  `@anthropic-ai/claude-agent-sdk` **0.3.301**. Pins in `sdk-runner.ts`:
   `TodoWrite` opted back in (`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`,
   `CLAUDE_CODE_ENABLE_TASKS=0`) or the plan spine freezes; `alwaysLoad` on
   `marvin-graph` and `marvin-control` only; `snapshot: true` with one prompt
@@ -1254,5 +1277,5 @@ repo:
 ---
 
 *Compiled against the 2026-07-02 full feature inventory (51 ADRs,
-v0.1.55) and brought forward to v1.0.0 (128 ADRs, 2026-10-31). Corrections welcome — the ADRs are the authoritative record,
+v0.1.55) and brought forward to v1.1.0 (134 ADRs, 2026-11-11). Corrections welcome — the ADRs are the authoritative record,
 and this document cites them everywhere it can.*

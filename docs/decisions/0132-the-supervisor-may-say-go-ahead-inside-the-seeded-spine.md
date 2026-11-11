@@ -1,6 +1,6 @@
 # ADR-0132 — The supervisor may say "go ahead" to a plan that stays inside the seeded spine
 
-- **Status:** Proposed (2026-11-11)
+- **Status:** Accepted in part (2026-11-11): the Stop-hook rule under "Decisions" is built first; the `continue_plan` verb is **deferred** until that rule has been measured for one release. Build plan in [`docs/plans/supervision-improvements.md`](../plans/supervision-improvements.md)
 - **Amends:** [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md) §6 (scope is human-only), by drawing its edge; it does not move it
 - **Related:** [ADR-0124](./0124-shell-reads-worktree-graphs-and-a-seeded-plan-spine.md) (the seeded spine), [ADR-0067](./0067-gate-on-scope-not-turn-boundaries.md) (permission the plan already granted), [ADR-0036](./0036-ask-agent-plan-modes.md), [ADR-0130](./0130-a-session-says-what-it-is-waiting-on.md) (the `prose-question` item)
 - **Evidence:** [`docs/reviews/2026-11-11-supervising-marvin-field-notes.md`](../reviews/2026-11-11-supervising-marvin-field-notes.md)
@@ -43,6 +43,16 @@ A built-in supervisor under ADR-0127 has no clear answer. Its policy refuses tex
 1. Ship in shadow first? **Yes**: propose only, for one release, and report how many proposals the user would have accepted.
 2. May `continue_plan` answer when the tab lists steps it will *leave out*? **Yes**: leaving out narrows scope; the left-out steps stay open on the spine and block the scope-met close as today.
 3. Does a go-ahead count as the user's consent to anything later in the turn? **No** (ADR-0127: a supervisor message is never the user's consent).
+
+## Decisions (2026-11-11, by the owner's delegation, after checking the text against the code)
+
+1. **The third alternative above is built first, as a built-in rule, and widens nobody's authority.** The Stop hook (`turn-close-hook.ts`) already blocks a turn that stops with plan steps open, and lets an `asked` ending through. A new rule, `builtin:go-ahead`, blocks the close once when all of these hold: the tab is in Agent mode; the session has a seeded spine with open steps; the turn made no `AskUserQuestion` call; the final text is a go-ahead question ("Shall I go ahead with step 1?") and offers no alternative; and this turn's `TodoWrite`, if any, added no step that fails the `[N]` join to the seeded spine. The model then continues in the same request with the reason in front of it (ADR-0067: the brief is the plan). It ships at `nudge` (logged, not blocked), as ADR-0124's graph-pointer rule did, and is promoted to `deny` per project in the Practice pane. The objection recorded above, that it changes behaviour for users with no supervisor, is met by the tier: nothing changes until a user promotes it.
+2. **`continue_plan` is deferred, not rejected.** After one release with the rule promoted on a real project, count the `prose-question` attention items (ADR-0130) raised on seeded tabs. If the stall is still common, build the verb with these two corrections to the text above:
+   - "Every step the tab proposes" means that turn's `TodoWrite` batch. The sidecar's deterministic join (`applyTodosToSpine`) reads `TodoWrite`, and there is no prose plan parser on the sidecar. A turn with no `TodoWrite` escalates.
+   - The verb gets its own autonomy category (`plan-continue`), so it can sit in shadow while the other categories are autonomous. The existing categories are `questions`, `nudges`, `posture` and `confirms`.
+3. The three open questions keep their recommended answers for when the verb is built.
+
+The Scope of Done below is the deferred verb's. The rule's Scope of Done is milestone 4 of the build plan.
 
 ## Scope of Done
 

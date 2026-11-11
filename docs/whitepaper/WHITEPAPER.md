@@ -2,7 +2,7 @@
 
 ## One assistant, enforced discipline: a design for AI pair-programming that survives real projects
 
-**Robert Ilisei** · October 2026 · v1.0.0 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
+**Robert Ilisei** · November 2026 · v1.1.0 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 
 *M.A.R.V.I.N. — Moderately Advanced Robotic Virtual Intelligence Network. A
 pair-programming AI IDE for macOS.*
@@ -148,6 +148,21 @@ those acts ask the user even in full auto. It opens a tab only on the user's
 request, in a fresh worktree; one request is one tab. Its append-only ledger
 is reviewed by the session auditor, whose report goes to the user and never
 to the supervisor.
+
+**Two days of supervising from outside set the next limits.** About 45
+branches were merged on a real project by scripts outside MARVIN, and what
+those scripts had to do became five decisions (ADR-0130 to ADR-0134, v1.1).
+A session now says what it is waiting on: `waiting` on its own job or wakeup,
+`done` when it closed its scope, and an attention item when a turn ends on a
+question in prose. A dated project notice rides every turn's reminder, so one
+write replaces a message per tab. And two acts the user used to repeat become
+acts the user approves once: a **queue** of briefs the runtime opens as slots
+free, under a cap only the user can raise, and a **standing merge** that
+folds finished tab branches into one named local branch behind a gate command
+the user named. The merge and the gate run in a scratch worktree and the
+target is only fast-forwarded; a conflict goes back to its tab, and nothing
+is pushed. The supervisor's part in both is to propose and to hold, never to
+force: the model gained no merge verb and no way to raise the cap.
 
 Two things fall out of that which are worth stating plainly, because both were
 learned by being wrong about them.
@@ -780,8 +795,10 @@ Honest positioning, category by category:
   project (1.0 as of 2026-10-31 after the v0.1.x line; macOS/Apple Silicon
   only, ad-hoc signed, releases frequent). The 1.0 label marks the stability
   of the core loop and its gates, not a finished roadmap; it includes the
-  supervisor conversation (ADR-0128), where no text is ever consent. The
-  128 ADRs are public; so are the audits that found real flaws — including
+  supervisor conversation (ADR-0128), where no text is ever consent. 1.1
+  adds the approved queue and the standing merge (ADR-0133, ADR-0134),
+  tested but not yet run on a real project. The
+  134 ADRs are public; so are the audits that found real flaws — including
   the ones MARVIN's own tooling caught in its own repository.
 
 The through-line: where the field bets on *more autonomy*, MARVIN bets on
@@ -923,4 +940,4 @@ Anthropic Console key, or an OpenRouter key.
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v1.0.0; the repository is the authoritative, current reference.*
+v1.1.0; the repository is the authoritative, current reference.*
