@@ -29,6 +29,7 @@ import { listSessionMetas, readSessionMeta } from "./session-meta";
 import { digestArgs, appendLedgerEntry, type LedgerEntryInput } from "./supervisor-ledger";
 import { openSupervisorTab } from "./supervisor-inbox-perform";
 import { type QueueBlock, type QueueEntry, type QueueFile, effectiveCap, readQueue, updateQueue } from "./supervisor-queue";
+import { runGuardCommand } from "./supervisor-queue-guard";
 import { acquireQueueLock, isPidAlive } from "./supervisor-queue-lock";
 import { currentSupervisorToken, getSupervisorState, isSupervisorSessionId, listEnabledSupervisors } from "./supervisor-state";
 import { getLiveTurn, type ProjectEvent, subscribeProjectEvents } from "./turn-registry";
@@ -97,6 +98,8 @@ export function defaultOpenerDeps(): OpenerDeps {
         return null; // an unreadable volume is git's to report, with a real error
       }
     },
+    // ADR-0133 decision 1 — the command comes from the queue (the user approved it on a card), never from a file in the project.
+    runGuard: (_projectId, workDir, command) => runGuardCommand(workDir, command),
     open: async (projectId, workDir, entry, ledgerId) => {
       const r = await openSupervisorTab(
         projectId,
