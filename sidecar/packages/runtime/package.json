@@ -60,6 +60,7 @@
     "./context-baseline": "./src/context-baseline.ts",
     "./cost-tracker": "./src/cost-tracker.ts",
     "./turn-registry": "./src/turn-registry.ts",
+    "./wait-stretch": "./src/wait-stretch.ts",
     "./pending-input": "./src/pending-input.ts",
     "./turn-input": "./src/turn-input.ts",
     "./backlog": "./src/backlog.ts",

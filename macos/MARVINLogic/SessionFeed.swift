@@ -275,9 +275,19 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
     public struct WaitingOn: Decodable, Equatable, Sendable {
         public let kind: String
         public let label: String?
+        /// This wait's own start. Restarts whenever the tab re-arms a job or wakeup.
         public let since: String?
-        public init(kind: String, label: String? = nil, since: String? = nil) {
+        /// ADR-0130 addendum — the start of the UNBROKEN stretch the tab has been waiting in (never later
+        /// than `since`). nil from an older sidecar: fall back to `since`.
+        public let waitingSince: String?
+        /// ADR-0130 addendum — how many background jobs plus own wakeups the tab waits on now. nil from an older sidecar.
+        public let jobs: Int?
+        /// ADR-0130 addendum — a structural reason for the wait; today only `restart` (boot recovery re-queued it). nil otherwise.
+        public let cause: String?
+        public init(kind: String, label: String? = nil, since: String? = nil,
+                    waitingSince: String? = nil, jobs: Int? = nil, cause: String? = nil) {
             self.kind = kind; self.label = label; self.since = since
+            self.waitingSince = waitingSince; self.jobs = jobs; self.cause = cause
         }
     }
     /// ADR-0130 — why a stopped session needs the user: its last turn ended on a
@@ -360,5 +370,12 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
     public static func decodeSnapshot(_ data: Data) -> [SessionWatchRowWire]? {
         struct Envelope: Decodable { let rows: [SessionWatchRowWire] }
         return (try? JSONDecoder().decode(Envelope.self, from: data))?.rows
+    }
+
+    /// ADR-0130 addendum — when the sidecar process that answered started (ISO), so the app can say
+    /// "since the restart at HH:MM". nil from an older sidecar.
+    public static func decodeSidecarStartedAt(_ data: Data) -> String? {
+        struct Envelope: Decodable { let sidecarStartedAt: String? }
+        return (try? JSONDecoder().decode(Envelope.self, from: data))?.sidecarStartedAt
     }
 }

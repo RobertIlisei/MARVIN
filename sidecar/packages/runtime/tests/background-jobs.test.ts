@@ -13,6 +13,8 @@ import {
   recoverInterruptedJobs,
   startBackgroundJob,
 } from "../src/background-jobs";
+import { readSessionMeta, updateSessionMeta, upsertSessionMeta } from "../src/session-meta";
+import { readWaitStretch } from "../src/wait-stretch";
 import {
   __resetSchedulerForTests,
   cancelWakeup,
@@ -203,6 +205,34 @@ describe("background-job ledger and recovery", () => {
     cancelWakeup("lost-1", "proj");
     if (prevDataDir === undefined) delete process.env.MARVIN_DATA_DIR;
     else process.env.MARVIN_DATA_DIR = prevDataDir;
+  });
+
+  // ADR-0130 addendum (2026-11-24) — the re-created wakeup carries a structural
+  // mark, and the session's wait stretch survives and is marked, so nothing
+  // downstream has to read the free-text reason.
+  it("a recovered job's wakeup carries cause 'restart' and marks the session's wait stretch", () => {
+    const prevDataDir = process.env.MARVIN_DATA_DIR;
+    const dataDir = mkdtempSync(join(tmpdir(), "marvin-data-"));
+    process.env.MARVIN_DATA_DIR = dataDir;
+    try {
+      upsertSessionMeta("proj", "sess", {
+        workDir: dataDir,
+        tree: { mode: "shared" },
+        posture: { model: "m", advisorModel: null, personality: "marvin", permissionStrategy: "auto", thinkingMode: "high" },
+      });
+      const early = new Date(Date.now() - 30 * 60_000).toISOString();
+      updateSessionMeta("proj", "sess", { waitStretch: { since: early } });
+      const startedAt = new Date(Date.now() - 10 * 60_000).toISOString();
+      writeFileSync(ledgerPath, JSON.stringify({ jobs: [{ id: "lost-2", command: "make fast", reason: "fast band", pid: 999999, startedAt, ctx }] }));
+      expect(recoverInterruptedJobs()).toEqual({ reported: 1, dropped: 0 });
+      const queued = listWakeups({ marvinSessionId: "sess" }).find((w) => w.id === "lost-2");
+      expect(queued?.cause).toBe("restart");
+      expect(readWaitStretch(readSessionMeta("proj", "sess"))).toEqual({ since: early, cause: "restart" });
+      cancelWakeup("lost-2", "proj");
+    } finally {
+      if (prevDataDir === undefined) delete process.env.MARVIN_DATA_DIR;
+      else process.env.MARVIN_DATA_DIR = prevDataDir;
+    }
   });
 
   it("a job older than the report window is dropped, not reported", () => {

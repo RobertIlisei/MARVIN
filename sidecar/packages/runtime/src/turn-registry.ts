@@ -66,6 +66,13 @@ export interface LiveTurn {
    */
   mutated: boolean;
   /**
+   * ADR-0130 addendum — true once this turn was allowed a file-edit tool
+   * (Edit / Write / NotebookEdit / MultiEdit). `mutated` is too coarse for the
+   * wait clock: nearly every Bash command counts as mutating there. See
+   * `wait-stretch.ts`.
+   */
+  filesEdited: boolean;
+  /**
    * ADR-0076 — deliver a user message INTO this running turn (Claude Code's
    * mid-turn steering). Set by the orchestrator when the turn runs with a
    * streaming input channel; absent for turns started without one. Returns
@@ -269,6 +276,7 @@ export function registerLiveTurn(input: {
     ended: false,
     kind: input.kind ?? "human",
     mutated: false,
+    filesEdited: false,
     ...(input.author ? { author: input.author } : {}),
   };
   live.set(input.marvinSessionId, turn);
@@ -436,6 +444,12 @@ export function cancelLiveTurn(
 export function markTurnMutated(marvinSessionId: string): void {
   const turn = live.get(marvinSessionId);
   if (turn && !turn.ended) turn.mutated = true;
+}
+
+/** ADR-0130 addendum — the live turn was allowed a file-edit tool; breaks the session's wait stretch. */
+export function markTurnFilesEdited(marvinSessionId: string): void {
+  const turn = live.get(marvinSessionId);
+  if (turn && !turn.ended) turn.filesEdited = true;
 }
 
 /**

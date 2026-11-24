@@ -192,6 +192,15 @@ Milestone 5 (ADR-0127 §7, ADR-0059 amended). CSRF-guarded and token-gated. **Bo
 
 **The watch row (`GET /api/sessions/watch`) — milestone 3 fields.** Each row carries `supervisor: { delegation, sharedCheckout, touchedTurn: { turnId, at, by: "message" | "answer" } | null, waitingOnOwn: "job" | "wakeup" | null, stoppedByUser }` (design brief §10.4); a live `turn` carries `author: "supervisor"` when a supervisor message started it; each `pending[]` confirm carries `userOnly` — only the user may answer it (a containment, money or touched-turn confirm in a supervisor-touched turn). The transcript gains `turn.supervisor-touched` lines, and `confirm.decision` carries `grounds` and `ledgerId` when the supervisor answered. The session meta keeps `supervisorTouched`, so a resume after a restart inherits the touch.
 
+**The watch row — the honest wait clock and the restart mark (ADR-0130 addendum, 2026-11-24).** `GET /api/sessions/watch` answers `{ projectId, rows, generatedAt, sidecarStartedAt }`; `sidecarStartedAt` is the ISO start of the sidecar process that answered (absent from an older sidecar). A row's `waitingOn` is `{ kind: "job" | "wakeup", label, since, waitingSince?, jobs?, cause? }`:
+
+- `since` — this wait's own start (the job's start, or the wakeup's creation). It restarts whenever the tab re-arms.
+- `waitingSince` — the start of the **unbroken stretch** in which the session has been waiting; never later than `since`, equal to it when no stretch was recorded. It survives a re-arm and a sidecar restart (kept on the session meta as `waitStretch`). **Rule (`wait-stretch.ts`):** the stretch ends when a turn finishes with nothing pending, when a turn **edits files** (a call to `Edit`, `Write`, `NotebookEdit` or `MultiEdit` — a Bash command never counts, because reading and writing cannot be told apart there, and wake turns routinely `tail`/`grep` before re-arming), and when a person's or the supervisor's turn starts on a tab with nothing pending. Reading, searching, graph calls, `TodoWrite` and re-arming a job or wakeup leave it running.
+- `jobs` — how many background jobs plus own (non-supervisor) wakeups the session waits on now; at least 1 on this row.
+- `cause` — `"restart"` when boot recovery re-queued the wait (`recoverInterruptedJobs`); it stays on the stretch, so a job the model starts after that wakeup carries it too, until the stretch restarts. Clients switch on this field and never on the `reason` text. More causes may be added; ignore unknown values.
+
+All four are optional: a client treats a missing `waitingSince` as `since`.
+
 ## Backlog
 
 The project backlog (ADR-0044) — actionable deferred work parked under `<workDir>/.marvin/backlog/`. All verbs delegate to the shared `backlog.ts` store, the same code the `marvin-backlog` MCP tool writes through. Mutating verbs are CSRF-guarded and validate `workDir` against the registered-project set.

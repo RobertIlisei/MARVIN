@@ -63,7 +63,8 @@ describe("the watch row's `supervisor` object (brief §10.4)", () => {
     updateSessionMeta("proj", "tab-w", { lastTurn: { turnId: "turn-1", startedAt: new Date().toISOString(), outcome: "completed" } });
     const r = await row();
     expect(r?.state).toBe("waiting");
-    expect(r?.waitingOn).toEqual({ kind: "wakeup", label: "build", since: res.record.createdAt });
+    // ADR-0130 addendum: no recorded stretch, so waitingSince is this wait's own start.
+    expect(r?.waitingOn).toEqual({ kind: "wakeup", label: "build", since: res.record.createdAt, waitingSince: res.record.createdAt, jobs: 1 });
     expect(r?.lastTurn?.marker).toBeNull();
   });
 

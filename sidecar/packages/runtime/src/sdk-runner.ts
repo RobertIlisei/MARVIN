@@ -100,7 +100,8 @@ import { saveSlashCommands } from "./slash-commands";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
 import { backlogCloseCandidates, makeTurnCloseStopHook } from "./turn-close-hook";
 import { TurnInputChannel } from "./turn-input";
-import { listLiveTurns, markTurnMutated } from "./turn-registry";
+import { listLiveTurns, markTurnFilesEdited, markTurnMutated } from "./turn-registry";
+import { isFileEditToolCall } from "./wait-stretch";
 import { scheduleWakeup } from "./wakeup-scheduler";
 import { createWakeupMcpServer, type WakeupToolContext } from "./wakeup-tools";
 import {
@@ -1995,6 +1996,8 @@ export function makeAutoModeLogger(args: {
       if (checkpoint && isMutatingToolCall(toolName, safeInput)) {
         markTurnMutated(checkpoint.marvinSessionId);
       }
+      // ADR-0130 addendum — a file edit breaks the session's wait stretch.
+      if (checkpoint && isFileEditToolCall(toolName)) markTurnFilesEdited(checkpoint.marvinSessionId);
     }
     if (cls.decision === "deny") {
       return {

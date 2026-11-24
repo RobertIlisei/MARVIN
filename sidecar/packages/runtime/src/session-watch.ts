@@ -34,6 +34,9 @@ import {
   type SessionMeta,
   type SessionPosture,
   type SessionTree,
+  WAIT_CAUSES,
+  type WaitCause,
+  type WaitStretch,
 } from "./session-meta";
 import { openEscalationCounts } from "./supervisor-inbox";
 import { isSafeProjectId, readLedger } from "./supervisor-ledger";
@@ -41,6 +44,7 @@ import { type Delegation, getSupervisorState } from "./supervisor-state";
 import { lastActAtByTab, type ProposalView, proposalView } from "./supervisor-status";
 import { isUserOnlyConfirm, type TouchedTurn, touchedTurnFor } from "./supervisor-touch";
 import { listLiveTurns } from "./turn-registry";
+import { readWaitStretch, waitingSinceOf } from "./wait-stretch";
 import { listWakeups, type WakeupRecord } from "./wakeup-scheduler";
 import { type ReconciledWorktree, reconcileSessionWorktreeAsync, reconcileWorktreesAsync } from "./worktrees";
 
@@ -50,7 +54,20 @@ export type SessionWatchState = "working" | "idle" | "awaiting-you" | "failed" |
 export interface SessionWatchWaitingOn {
   kind: "job" | "wakeup";
   label: string;
+  /** This wait's own start. Restarts whenever the tab re-arms (a new job, a new wakeup). */
   since: string;
+  /**
+   * ADR-0130 addendum (2026-11-24) — the start of the UNBROKEN stretch in which
+   * the session has been waiting, never later than `since`. It survives a re-arm
+   * and a sidecar restart; it resets when a turn edits files or the session
+   * stops waiting (`wait-stretch.ts` states the rule). Equal to `since` for a
+   * session whose stretch was never recorded. Absent from an older sidecar.
+   */
+  waitingSince?: string;
+  /** How many background jobs plus own wakeups the session waits on right now (at least 1 on this row). Absent from an older sidecar. */
+  jobs?: number;
+  /** Why the wait exists, as a field to switch on: `restart` = boot recovery re-queued it (the stretch's cause carries to later waits). Absent when there is no special cause. */
+  cause?: WaitCause;
 }
 
 /** ADR-0130 decision 3 — the last turn as the row reports it; `marker` is derived from `scopeMetAt`, never persisted. */
@@ -374,6 +391,50 @@ function skillProgress(
 const RECENT_WINDOW_MS = 7 * 24 * 3600 * 1000;
 const MAX_ROWS = 50;
 
+/**
+ * The row's `waitingOn` (ADR-0130 + its 2026-11-24 addendum). The job is shown
+ * before a wakeup; `jobs` counts both; `cause` is the wakeup's own structural
+ * mark, else the stretch's (a job the model started after a restart's wakeup).
+ */
+export function watchWaitingOn(input: {
+  job?: { reason: string; command: string; startedAt: string } | undefined;
+  wakeup?: Pick<WakeupRecord, "reason" | "createdAt" | "cause"> | undefined;
+  count: number;
+  stretch: WaitStretch | undefined;
+}): SessionWatchWaitingOn | null {
+  const { job, wakeup, stretch } = input;
+  const head = job
+    ? { kind: "job" as const, label: job.reason || job.command.slice(0, 60), since: job.startedAt }
+    : wakeup
+      ? { kind: "wakeup" as const, label: wakeup.reason, since: wakeup.createdAt }
+      : null;
+  if (!head) return null;
+  const own = wakeup?.cause;
+  const cause: WaitCause | undefined = own && (WAIT_CAUSES as readonly string[]).includes(own) ? own : stretch?.cause;
+  return { ...head, waitingSince: waitingSinceOf(stretch, head.since), jobs: Math.max(1, input.count), ...(cause ? { cause } : {}) };
+}
+
+/** The session's own pending waits right now: how many, and the earliest start. For the stretch at a turn boundary. */
+export function ownWaitsOf(projectId: string, sessionId: string): { count: number; since: string | null } {
+  try {
+    const starts = [
+      ...listBackgroundJobs(sessionId).map((j) => j.startedAt),
+      ...listWakeups({ projectId, marvinSessionId: sessionId }).filter((w) => w.author !== "supervisor").map((w) => w.createdAt),
+    ].filter((t) => Number.isFinite(Date.parse(t)));
+    starts.sort((a, b) => Date.parse(a) - Date.parse(b));
+    return { count: starts.length, since: starts[0] ?? null };
+  } catch {
+    return { count: 0, since: null }; // bookkeeping; a turn never fails on the clock
+  }
+}
+
+let sidecarStart: string | null = null;
+/** When this sidecar process started (ISO); the app says "since the restart at HH:MM" from it. Stable between calls. */
+export function sidecarStartedAt(): string {
+  sidecarStart ??= new Date(Date.now() - process.uptime() * 1000).toISOString();
+  return sidecarStart;
+}
+
 export interface BuildSessionWatchInput {
   projectId: string;
   /** The project root — the tree a pre-0107 session (no meta) runs in. */
@@ -429,9 +490,12 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
   // Milestone 5 — open inbox items per tab. Items outlive a supervisor switched off, so they are read regardless.
   const escalations = isSafeProjectId(projectId) ? openEscalationCounts(projectId).byTab : new Map<string, number>();
   // One read of the wakeup store per build, not per row: this route is polled.
-  const ownWakeups = new Map<string, WakeupRecord>();
+  const ownWakeups = new Map<string, WakeupRecord[]>();
   for (const w of listWakeups({ projectId })) {
-    if (w.author !== "supervisor" && !ownWakeups.has(w.marvinSessionId)) ownWakeups.set(w.marvinSessionId, w);
+    if (w.author === "supervisor") continue;
+    const list = ownWakeups.get(w.marvinSessionId);
+    if (list) list.push(w);
+    else ownWakeups.set(w.marvinSessionId, [w]);
   }
   // Rows resolve concurrently: each one's git facts are independent.
   return Promise.all(ids.slice(0, MAX_ROWS).map(async (id) => {
@@ -445,13 +509,9 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
     const base = tree.mode === "worktree" ? tree.base : null;
     const summary = summaries.get(id);
     const cost = costs.get(id) ?? { turns: 0, costUsd: 0 };
-    const job = listBackgroundJobs(id)[0];
-    const wakeup = ownWakeups.get(id);
-    const waitingOn: SessionWatchWaitingOn | null = job
-      ? { kind: "job", label: job.reason || job.command.slice(0, 60), since: job.startedAt }
-      : wakeup
-        ? { kind: "wakeup", label: wakeup.reason, since: wakeup.createdAt }
-        : null;
+    const jobs = listBackgroundJobs(id);
+    const wakeups = ownWakeups.get(id) ?? [];
+    const waitingOn = watchWaitingOn({ job: jobs[0], wakeup: wakeups[0], count: jobs.length + wakeups.length, stretch: readWaitStretch(meta) });
     return {
       marvinSessionId: id,
       projectId,

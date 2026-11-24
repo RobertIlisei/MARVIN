@@ -93,6 +93,43 @@ private final class TestRunner {
 
 private let runner = TestRunner()
 
+// MARK: - watch feed: the honest wait clock and the restart mark (ADR-0130 addendum, 2026-11-24)
+//
+// `waitingOn` gains `waitingSince` (the unbroken stretch), `jobs` (how many waits)
+// and `cause` (`restart`); the snapshot gains `sidecarStartedAt`. All optional:
+// a row or a response from an older sidecar still decodes, and nothing is guessed.
+
+runner.suite("watch-feed-wait-clock") {
+    runner.test("a waitingOn with the new fields decodes them") {
+        let json = #"{"rows":[{"marvinSessionId":"w","state":"waiting","waitingOn":{"kind":"wakeup","label":"gated commit rerun after restart: baseline","since":"2026-11-24T20:37:07.000Z","waitingSince":"2026-11-24T20:27:54.000Z","jobs":3,"cause":"restart"}}],"sidecarStartedAt":"2026-11-24T19:49:00.000Z"}"#
+        let w = SessionWatchRowWire.decodeSnapshot(Data(json.utf8))?.first?.waitingOn
+        runner.expect(w?.waitingSince, equals: "2026-11-24T20:27:54.000Z", "the stretch's start")
+        runner.expect(w?.jobs, equals: 3, "how many waits")
+        runner.expect(w?.cause, equals: "restart", "the structural cause")
+        runner.expect(w?.since, equals: "2026-11-24T20:37:07.000Z", "this wait's own start is kept")
+        runner.expect(SessionWatchRowWire.decodeSidecarStartedAt(Data(json.utf8)), equals: "2026-11-24T19:49:00.000Z", "the sidecar's start")
+    }
+
+    runner.test("a waitingOn from an older sidecar, and a response without sidecarStartedAt, still decode") {
+        let json = #"{"rows":[{"marvinSessionId":"w","state":"waiting","waitingOn":{"kind":"job","label":"build","since":"2026-11-11T10:00:00.000Z"}}]}"#
+        let w = SessionWatchRowWire.decodeSnapshot(Data(json.utf8))?.first?.waitingOn
+        runner.expect(w?.kind, equals: "job", "kind")
+        runner.expect(w?.since, equals: "2026-11-11T10:00:00.000Z", "since")
+        runner.expect(w?.waitingSince == nil, "no waitingSince")
+        runner.expect(w?.jobs == nil, "no jobs")
+        runner.expect(w?.cause == nil, "no cause")
+        runner.expect(SessionWatchRowWire.decodeSidecarStartedAt(Data(json.utf8)) == nil, "no start time")
+    }
+
+    runner.test("the new fields reach the ledger entry the pane reads") {
+        var l = SessionLedger()
+        let json = #"{"rows":[{"marvinSessionId":"w","state":"waiting","waitingOn":{"kind":"job","since":"2026-11-24T20:37:07.000Z","waitingSince":"2026-11-24T20:27:54.000Z","jobs":2}}]}"#
+        l.apply(snapshot: SessionWatchRowWire.decodeSnapshot(Data(json.utf8))!, now: Date())
+        runner.expect(l["w"]?.waitingOn?.waitingSince, equals: "2026-11-24T20:27:54.000Z", "kept on the entry")
+        runner.expect(l["w"]?.waitingOn?.jobs, equals: 2, "kept on the entry")
+    }
+}
+
 // MARK: - context-tokens (ADR-0022 §2)
 //
 // Pin the cli.event JSON parser. The load-bearing decision is the

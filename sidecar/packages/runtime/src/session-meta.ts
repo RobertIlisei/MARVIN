@@ -154,6 +154,23 @@ export interface SessionMeta {
   attention?: SessionAttention;
   /** ADR-0130 — when a turn the user started last began (not a machine or supervisor turn). */
   lastUserTurnAt?: string;
+  /**
+   * ADR-0130 addendum (2026-11-24) — where the session's current unbroken wait
+   * began. Written by `wait-stretch.ts` at turn boundaries and by restart
+   * recovery; read through `readWaitStretch`, which validates it.
+   */
+  waitStretch?: WaitStretch;
+}
+
+/** Why a wait exists, as a field a client can switch on (never the free-text reason). Room for more causes. */
+export type WaitCause = "restart";
+export const WAIT_CAUSES: readonly WaitCause[] = ["restart"];
+
+export interface WaitStretch {
+  /** ISO time: the start of the unbroken stretch in which the session has been waiting. */
+  since: string;
+  /** Set when restart recovery re-queued the wait; dropped when the stretch restarts. */
+  cause?: WaitCause;
 }
 
 export interface SessionAttention {
