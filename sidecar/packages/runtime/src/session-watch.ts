@@ -107,6 +107,8 @@ export interface SessionWatchRow {
   plan: SessionPlanProgress | null;
   /** ADR-0124 — graph calls vs source reads (Read/Grep/Glob and Bash), whole session. */
   graphUsage: SessionGraphUsage | null;
+  /** ADR-0138 — the skills the brief named, which ran, which did not; null when the brief named none. */
+  skills: { required: string[]; used: string[]; missing: string[] } | null;
   lastTurn: SessionWatchLastTurn | null;
   /** ADR-0130 — the session's own pending job or wakeup; `supervisor.waitingOnOwn` keeps the kind alone. */
   waitingOn: SessionWatchWaitingOn | null;
@@ -358,6 +360,11 @@ export function planProgress(projectId: string, sessionId: string): SessionPlanP
   return { done, total: steps.length, open: steps.length - done - superseded, lastTodoAt, seeded: !!plan.seeded };
 }
 
+function skillProgress(required: string[], run: string[]): { required: string[]; used: string[]; missing: string[] } {
+  const ran = new Set(run);
+  return { required, used: required.filter((n) => ran.has(n)), missing: required.filter((n) => !ran.has(n)) };
+}
+
 // ── the snapshot ──────────────────────────────────────────────────────────
 
 const RECENT_WINDOW_MS = 7 * 24 * 3600 * 1000;
@@ -471,6 +478,7 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
       diff: cwdInfo.present ? await sessionDiff(cwdInfo.cwd, base, now) : null,
       plan: planProgress(projectId, id),
       graphUsage: sessionGraphUsage(projectId, id),
+      skills: meta?.skills?.required?.length ? skillProgress(meta.skills.required, meta.skillsRun ?? []) : null,
       lastTurn: meta?.lastTurn ? { ...meta.lastTurn, marker: meta.scopeMetAt ? "scope-met" : null } : null,
       waitingOn,
       attention: meta?.attention ? { kind: meta.attention.kind, excerpt: meta.attention.excerpt, since: meta.attention.since } : null,

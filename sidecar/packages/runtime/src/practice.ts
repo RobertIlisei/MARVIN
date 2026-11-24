@@ -137,6 +137,7 @@ export const RELIABILITY: Record<FingerprintKind, number> = {
   "command.adapted": 1,
   "plan.horizontal": 0.8, // a lexical match against the project's own area vocabulary
   "plan.vertical": 0.8,
+  "skill.named.unused": 1, // a brief's `Skills:` line against the Skill calls: both exact
 };
 
 // ---------------------------------------------------------------------------
@@ -315,6 +316,9 @@ export const RULE_TEMPLATES: Record<FingerprintKind, RuleTemplate | null> = {
       "verification — then widen each area in the later milestones.",
   },
   "plan.vertical": null,
+  // ADR-0138: the fix is the sidecar's own gate (`builtin:skills-named`), not a rule a finding
+  // can template. The kind exists to measure whether that gate holds ("Mark fixed" in the pane).
+  "skill.named.unused": null,
 };
 
 export const TIER_ORDER: RuleTier[] = ["prompt", "nudge", "deny"];
@@ -332,6 +336,7 @@ export const BUILTIN_RULE_IDS = [
   "builtin:plan-spine",
   "builtin:go-ahead",
   "builtin:prose-question",
+  "builtin:skills-named",
 ] as const;
 export type BuiltinRuleId = (typeof BUILTIN_RULE_IDS)[number];
 
@@ -393,6 +398,14 @@ const BUILTIN_SEEDS: Record<BuiltinRuleId, { title: string; fingerprint: string;
       "In an Agent-mode tab whose plan MARVIN seeded from the brief, a turn that ends on \"Shall I go ahead with step " +
       "1?\" (one go-ahead question, no alternative offered, no AskUserQuestion) is blocked once and continues in the " +
       "same request (ADR-0132, ADR-0067). Ships at nudge; promote to deny here.",
+  },
+  "builtin:skills-named": {
+    title: "Run the skills the brief names",
+    fingerprint: "skill.named.unused",
+    message:
+      "A scope-met close in a tab whose brief carried a `Skills:` line is refused while a named skill never ran this " +
+      "session, unless the final message says `Skill not used: <name> — <reason>` or the skill is not installed " +
+      "(ADR-0138). Two refusals, then the close is allowed and the bypass logged.",
   },
   "builtin:prose-question": {
     title: "A closing question reaches the user",

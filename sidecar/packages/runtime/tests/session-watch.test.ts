@@ -212,6 +212,22 @@ describe("buildSessionWatch", () => {
     expect(row.plan).toEqual({ done: 1, total: 4, open: 2, lastTodoAt: "2026-09-30T08:00:00.000Z", seeded: true });
   });
 
+  it("a row's skills carry what the brief named, what ran and what is missing (ADR-0138); null without a list", async () => {
+    upsertSessionMeta(projectId, "skills-sess", { workDir: repo, tree: { mode: "shared" }, posture });
+    updateSessionMeta(projectId, "skills-sess", {
+      skills: { required: ["ponytail", "pr-review", "ponytail-review"], seededAt: "2026-11-24T08:00:00.000Z" },
+      skillsRun: ["pr-review", "ux-review"],
+    });
+    upsertSessionMeta(projectId, "no-skills-sess", { workDir: repo, tree: { mode: "shared" }, posture });
+    const rows = await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["skills-sess", "no-skills-sess"] });
+    expect(rows.find((r) => r.marvinSessionId === "skills-sess")!.skills).toEqual({
+      required: ["ponytail", "pr-review", "ponytail-review"],
+      used: ["pr-review"],
+      missing: ["ponytail", "ponytail-review"],
+    });
+    expect(rows.find((r) => r.marvinSessionId === "no-skills-sess")!.skills).toBeNull();
+  });
+
   it("a worktree session's badge is measured against its base, a shared one against HEAD", async () => {
     const wt = createWorktree(repo, "watch tab");
     upsertSessionMeta(projectId, "wt-sess", {

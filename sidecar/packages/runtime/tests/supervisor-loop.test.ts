@@ -57,6 +57,7 @@ function row(id: string): SessionWatchRow {
     diff: null,
     plan: { done: 0, total: 3, open: 3, lastTodoAt: null, seeded: true },
     graphUsage: null,
+    skills: null,
     lastTurn: null,
     waitingOn: null,
     attention: null,

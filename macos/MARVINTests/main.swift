@@ -3292,6 +3292,15 @@ runner.suite("session-ledger") {
         l.setPlan("s", done: 3, total: 5)
         runner.expect(l["s"]?.plan?.lastTodoAt == "2026-09-30T08:00:00.000Z" && l["s"]?.plan?.open == 2, "a local tick keeps the watermark")
     }
+    runner.test("ADR-0138 — a snapshot carries the skills the brief named; a row without them clears the field") {
+        var l = SessionLedger()
+        let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"idle","skills":{"required":["ponytail","pr-review"],"used":["pr-review"],"missing":["ponytail"]}}]}"#.utf8))!
+        l.apply(snapshot: rows, now: t0, graceSeconds: 5)
+        runner.expect(l["s"]?.skills, equals: SessionSkills(required: ["ponytail", "pr-review"], used: ["pr-review"], missing: ["ponytail"]), "skills land")
+        let again = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"idle"}]}"#.utf8))!
+        l.apply(snapshot: again, now: t0, graceSeconds: 5)
+        runner.expect(l["s"]?.skills == nil, "an older sidecar's row clears it")
+    }
     runner.test("a snapshot carries activity for the live turn") {
         var l = SessionLedger()
         let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"working","turn":{"turnId":"t"},"activity":{"state":"tool","tool":"Read","turnId":"t"}}]}"#.utf8))!

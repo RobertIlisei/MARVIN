@@ -13,10 +13,10 @@
  * no skill names: the list is whatever the brief says.
  */
 
-import { readSlashCommands, buildFilesystemCatalog } from "./slash-commands";
 import { marvinPaths } from "./paths";
 import { scanSessionSummary } from "./session";
 import { readSessionMeta, updateSessionMeta } from "./session-meta";
+import { buildFilesystemCatalog, readSlashCommands } from "./slash-commands";
 
 /** Names kept per brief, and per session's run list. */
 export const SKILLS_MAX = 20;

@@ -42,6 +42,8 @@ public struct SessionEntry: Equatable, Identifiable, Sendable {
     public var plan: SessionPlanProgress?
     /// ADR-0124 — graph calls vs source reads, from the last snapshot.
     public var graphUsage: SessionGraphUsage?
+    /// ADR-0138 — the skills the brief named and which ran, from the last snapshot.
+    public var skills: SessionSkills?
     public var costUsd: Double?
     /// Minted in this process, no turn yet.
     public var isDraft: Bool = false
@@ -211,6 +213,7 @@ public struct SessionLedger: Equatable, Sendable {
             if let diff = row.diff { e.diff = diff }
             if let plan = row.plan { e.plan = plan }
             if let usage = row.graphUsage { e.graphUsage = usage }
+            e.skills = row.skills
             if let cost = row.cost { e.costUsd = cost.costUsd }
             if let title = row.title, !title.isEmpty { e.title = title }
             if let last = row.lastTurn {

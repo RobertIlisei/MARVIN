@@ -27,6 +27,7 @@ import { BUILTIN_GATE_MAX_DENIES, readDesignHooksMode } from "./design-hooks";
 import { parsePlanTag } from "./plan-spine";
 import { builtinGate, notePracticeRuleFired } from "./practice";
 import { classifyTurnEnding } from "./practice-extractors";
+import { parseSkillWaivers, type SkillCloseFacts } from "./skill-brief";
 import { hasScopeMet, openTodos } from "./workflow-guard";
 
 export interface TurnCloseFacts {
@@ -61,7 +62,8 @@ export interface TurnCloseDecision {
     | "seeded-steps-open"
     | "go-ahead"
     | "backlog-claimed-open"
-    | "backlog-related";
+    | "backlog-related"
+    | "skills-unused";
   reason: string;
 }
 
@@ -159,6 +161,50 @@ export function decideSeededClose(lastText: string, seededOpen: string[] | undef
       "Either finish them, or reconcile the plan honestly: TodoWrite with each `[N]` marked completed (only if it " +
       "is), or superseded with the reason — then close. If the scope is NOT met, say what remains instead of the " +
       `scope-met line. (After ${BUILTIN_GATE_MAX_DENIES} refusals the close is allowed and the bypass logged.)`,
+  };
+}
+
+export interface SkillCloseResult {
+  block: TurnCloseDecision | null;
+  /** Missing skills the final message waived with a `Skill not used:` line. */
+  waived: string[];
+  /** Missing skills this session cannot invoke at all. */
+  unavailable: string[];
+}
+
+/**
+ * ADR-0138 — a scope-met close while a skill the brief named never ran. A gate
+ * like `decideSeededClose`: ADR-0104's brake (two blocks, then through), no
+ * once-per-turn limit. Two ways out that need no skill: a `Skill not used:
+ * <name> — <reason>` line in the final message, and the skill being one the
+ * project cannot invoke. Pure; the caller owns the tier, the counter and the
+ * machine-turn exclusion. Exported for tests.
+ */
+export function decideSkillClose(lastText: string, facts: SkillCloseFacts): SkillCloseResult {
+  const none: SkillCloseResult = { block: null, waived: [], unavailable: [] };
+  if (!hasScopeMet(lastText)) return none;
+  const used = new Set(facts.used);
+  const missing = facts.required.filter((n) => !used.has(n));
+  if (missing.length === 0) return none;
+  const unavailable = missing.filter((n) => facts.unavailable.includes(n));
+  const waivers = parseSkillWaivers(lastText);
+  const waived = missing.filter((n) => !unavailable.includes(n) && waivers.has(n));
+  const needed = missing.filter((n) => !unavailable.includes(n) && !waivers.has(n));
+  if (needed.length === 0) return { block: null, waived, unavailable };
+  const list = needed.map((n) => `\`${n}\``).join(", ");
+  return {
+    block: {
+      kind: "skills-unused",
+      reason:
+        `skills gate (ADR-0138): this turn claims scope met, but the brief named ${needed.length === 1 ? "a skill" : "skills"} that never ran in this session: ${list}. ` +
+        `Run ${needed.map((n) => `\`Skill { skill: "${n}" }\``).join(" and ")} and act on what ${needed.length === 1 ? "it says" : "they say"}, then close. ` +
+        "If one genuinely does not apply, say so in your final message, one line per skill: " +
+        "`Skill not used: <name> — <reason>`. That is accepted, and it is logged. " +
+        "If the scope is NOT met, say what remains instead of the scope-met line. " +
+        `(After ${BUILTIN_GATE_MAX_DENIES} refusals the close is allowed and the bypass logged.)`,
+    },
+    waived,
+    unavailable,
   };
 }
 
@@ -264,9 +310,15 @@ export function makeTurnCloseStopHook(args: {
   facts: () => Omit<TurnCloseFacts, "alreadyFired">;
   /** ADR-0137 — read lazily, and only when the turn claims scope met. */
   backlog?: () => Promise<BacklogCloseFacts>;
+  /** ADR-0138 — the skills the brief named and what ran; null = no list. Read
+   *  lazily, and only when a non-machine turn claims scope met. */
+  skills?: () => SkillCloseFacts | null;
+  /** ADR-0138 — count one refused close on the session, so the brake survives a restart. */
+  onSkillBlock?: () => void;
   onFired: (decision: TurnCloseDecision) => void;
 }): HookCallback {
   let fired = false;
+  let skillBlocks = 0;
   let seededBlocks = 0;
   let goAheadBlocked = false;
   let backlogBlocks = 0;
@@ -338,6 +390,61 @@ export function makeTurnCloseStopHook(args: {
         tel("backlog.close.suggest");
         args.onFired(d);
         return { decision: "block", reason: d.reason } as HookJSONOutput;
+      }
+    }
+    // ADR-0138 — the skills the brief named. A gate (two blocks, then through),
+    // so it is checked before the loop guard; never on a machine turn; a read
+    // failure never blocks.
+    const skillGate = builtinGate("builtin:skills-named");
+    if (args.skills && !skillGate.off && !facts.machineTurn && hasScopeMet(evt.last_assistant_message ?? "")) {
+      let sk: SkillCloseFacts | null = null;
+      try {
+        sk = args.skills();
+      } catch {
+        /* the skill record must never break a close */
+      }
+      if (sk) {
+        const r = decideSkillClose(evt.last_assistant_message ?? "", sk);
+        const tel = (kind: string) => {
+          try {
+            console.info(
+              "[marvin.telemetry] " +
+                JSON.stringify({
+                  kind,
+                  turnId: args.turnId,
+                  required: sk.required.length,
+                  missing: r.block ? 1 : 0,
+                  waived: r.waived.length,
+                  unavailable: r.unavailable.length,
+                  at: new Date().toISOString(),
+                }),
+            );
+          } catch {
+            /* never break a turn on telemetry */
+          }
+        };
+        if (r.waived.length > 0 && !r.block) tel("skills.close.waived");
+        if (r.block && mode === "measure") {
+          tel("skills.close.measured");
+        } else if (r.block && skillGate.tier !== "deny") {
+          tel("skills.close.nudge");
+        } else if (r.block) {
+          if (Math.max(skillBlocks, sk.blocks) >= BUILTIN_GATE_MAX_DENIES) {
+            tel("skills.close.bypass");
+            notePracticeRuleFired("builtin:skills-named", "bypass");
+          } else {
+            skillBlocks += 1;
+            try {
+              args.onSkillBlock?.();
+            } catch {
+              /* the count is best-effort; skillBlocks above is the local brake */
+            }
+            tel("skills.close.block");
+            notePracticeRuleFired("builtin:skills-named", "fired");
+            args.onFired(r.block);
+            return { decision: "block", reason: skillGate.message ?? r.block.reason } as HookJSONOutput;
+          }
+        }
       }
     }
     if (evt.stop_hook_active) return {} as HookJSONOutput;
