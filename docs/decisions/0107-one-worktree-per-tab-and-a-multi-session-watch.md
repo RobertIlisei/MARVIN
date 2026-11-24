@@ -201,3 +201,7 @@ The first-message path caught any error from `git worktree add` and ran the tab 
 ## Amendment (2026-10-30, [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md)) — the Sessions pane gains the supervisor surface
 
 The project-wide feed this ADR built — `buildSessionWatch`, the announce channel, `subscribeProjectEvents` — is what the supervisor's wake loop reads; the loop adds the background-job and wakeup lookups a watch row does not carry. When the native toolchain allows (ADR-0127 milestone 6), the Sessions pane gains a **Supervisor strip**: the escalation inbox with one-click accept or override on the raw act, the ledger, a per-tab delegation chip, a budget meter, Pause and Kill. Watch rows gain the current turn's `author`, `supervisorTouched` and the posture revision. The supervisor's own session is shown in the strip, not as an ordinary tab, and the pane-describes-every-session / brain-describes-the-selected-one split is unchanged.
+
+## Amendment (2026-11-24, [ADR-0130](./0130-a-session-says-what-it-is-waiting-on.md) addendum) — the watch row's wait clock
+
+`waitingOn` gains `waitingSince` (the unbroken stretch), `jobs` and a structural `cause`, and `GET /api/sessions/watch` gains `sidecarStartedAt`, all optional. The rule, the meta field and the reasoning are in the ADR-0130 addendum of the same date.

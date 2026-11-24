@@ -63,3 +63,28 @@ The three open questions are answered as recommended. Five amendments, where the
 - [ ] A chain-cap refusal raises a `chain-cap` pending item; answering it lets exactly one job start (test).
 - [ ] `lastTurn.marker` is in the row.
 - [ ] The Sessions pane and the tab dot show `waiting` (with what and since when) and `done`.
+
+## Addendum (2026-11-24) — an honest wait clock, and a structural mark for a restart
+
+**Why.** The 2026-11-24 UX review ([`docs/reviews/2026-11-24-ux-review/ROUND2.md`](../reviews/2026-11-24-ux-review/ROUND2.md), R2-04, R2-10; README W-05, R-01) measured a tab 13 minutes on the commit gate whose row said "3 min": `waitingOn.since` is one wait's start, and a tab that waits job after job re-arms a new wait after every result, so `since` restarts and the amber threshold (15 min) never fires for the worst case. `since` can also be older than the tab's later activity. And a restart that re-queues a job left only the free-text reason "background job interrupted: …", so nothing could mark the tab without matching on prose. (This addendum lives here, not in ADR-0107's text, because ADR-0130 is the ADR that introduced `waitingOn`; ADR-0107 carries a one-line pointer.)
+
+**Decision.** `waitingOn` keeps `since` and gains three optional fields, and the response gains one:
+
+1. `waitingSince` — the start of the **unbroken stretch** in which the session has been waiting, never later than `since`. Recorded on the session meta (`waitStretch: { since, cause? }`) at turn boundaries by `wait-stretch.ts`, so a sidecar restart does not reset it, and validated where read (`readWaitStretch`: a bad time is no stretch, an unknown cause is dropped).
+2. **The "real work" rule.** A stretch ends when (a) a turn finishes with nothing pending, (b) a turn **edits files** (`Edit`, `Write`, `NotebookEdit`, `MultiEdit`, flagged on the live turn at the permission gate), or (c) a person's or the supervisor's turn starts on a tab with nothing pending (a stale record, e.g. a job cancelled from the app). Anything else leaves it running. **Why not "any tool other than re-arming":** in measured gate-lane sessions almost every wake turn runs `tail`, `sed`, `grep` or a graph call before re-arming, so that rule would break the stretch on every turn and fix nothing. **Why Bash is never an edit:** reading and writing cannot be told apart from a command line (`isMutatingToolCall` already calls `cd … && sed` mutating). The cost of the narrow rule: a turn that edits a file by script (`python3 - <<EOF`) does not end a stretch, so the clock errs long, never short.
+3. `jobs` — background jobs plus own wakeups pending now (a supervisor's wakeup is not the tab's wait).
+4. `cause: "restart"` — set structurally: `recoverInterruptedJobs` stamps the wakeup it re-creates (`WakeupRecord.cause`) and marks the session's stretch, continuing an existing one or starting it at the interrupted job's start. The stretch's cause carries to a wait the model arms afterwards (the "gated commit rerun after restart" case), until the stretch ends. Nothing matches on `reason`. The type leaves room for more causes; clients ignore unknown ones.
+5. `GET /api/sessions/watch` answers `sidecarStartedAt` (ISO, from `process.uptime()`), so the app can say "since the restart at HH:MM".
+
+All new fields are optional; the Swift feed decoder reads them as optionals and a row or response without them decodes as before. Shape and rule are in [`docs/reference/api.md`](../reference/api.md).
+
+**Sessions already waiting when this lands.** The sidecar restart that ships it is itself a restart: tabs with a job in the ledger get the `restart` cause. A tab already waiting on a wakeup has no recorded stretch, so its `waitingSince` equals `since` until its next turn ends waiting (that turn starts the stretch from the earliest pending wait). The clock is never made longer than the sidecar can prove.
+
+**Known limit.** A wait that ends with no turn after it (a job cancelled from the app, a wakeup dropped as stale) leaves its stretch on the meta until the next turn's start or end clears it.
+
+**Scope of Done (addendum).**
+- [x] `waitingOn.waitingSince`, `jobs` and `cause` are in the watch row; `since` is unchanged; `sidecarStartedAt` is in the response (`session-watch-wait.test.ts`).
+- [x] The stretch survives a re-arm and a read from disk; it ends on the three conditions and not on a Bash command or a re-arm (`wait-stretch.test.ts`).
+- [x] Restart recovery marks the wakeup and the stretch with `cause: "restart"` and no code reads the reason text (`background-jobs.test.ts`).
+- [x] The Swift decoder reads all four as optionals and decodes rows and responses without them (`watch-feed-wait-clock` suite).
+- [ ] Not in this change: the pane's row text, the amber threshold taken from `waitingSince`, and the restart banner that names the re-queued tabs (the macOS UI, another change).

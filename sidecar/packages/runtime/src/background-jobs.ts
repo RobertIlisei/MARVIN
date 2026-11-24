@@ -24,6 +24,7 @@ import { dirname, resolve } from "node:path";
 import { stepDownEffort } from "./effort";
 import { marvinPaths } from "./paths";
 import { autoTickSpine } from "./plan-seed";
+import { markRestartRearmed } from "./wait-stretch";
 import { enqueueWakeup, fireNow, MAX_CHAIN_DEPTH, type WakeupRecord } from "./wakeup-scheduler";
 import { readWorktreeSetupConfig } from "./worktree-setup";
 
@@ -415,6 +416,8 @@ export function recoverInterruptedJobs(now: number = Date.now()): { reported: nu
   const jobs = readLedger().filter((j) => !state.jobs.has(j.id));
   let reported = 0;
   let dropped = 0;
+  // ADR-0130 addendum — per session, the earliest interrupted start: the stretch's floor.
+  const rearmed = new Map<string, { projectId: string; since: string }>();
   for (const j of jobs) {
     const age = now - Date.parse(j.startedAt);
     if (!Number.isFinite(age) || age > INTERRUPTED_JOB_REPORT_WINDOW_MS) {
@@ -428,9 +431,13 @@ export function recoverInterruptedJobs(now: number = Date.now()): { reported: nu
       "Its result is unknown: it may have finished, failed, or been killed (it may even still be running as an orphan). " +
       "Check what it was meant to produce (git log, test reports, build output), re-run it if the result isn't there, " +
       "then continue your plan.";
-    enqueueWakeup({ ...wakeupFor(j, prompt, `background job interrupted: ${j.reason || j.command.slice(0, 40)}`), fireAt: now + 15_000 });
+    // `cause` is the structural mark; nothing downstream matches the reason text.
+    enqueueWakeup({ ...wakeupFor(j, prompt, `background job interrupted: ${j.reason || j.command.slice(0, 40)}`), fireAt: now + 15_000, cause: "restart" });
+    const seen = rearmed.get(j.ctx.marvinSessionId);
+    if (!seen || Date.parse(j.startedAt) < Date.parse(seen.since)) rearmed.set(j.ctx.marvinSessionId, { projectId: j.ctx.projectId, since: j.startedAt });
     reported += 1;
   }
+  for (const [sessionId, r] of rearmed) markRestartRearmed(r.projectId, sessionId, r.since);
   writeLedger(readLedger().filter((j) => state.jobs.has(j.id)));
   return { reported, dropped };
 }

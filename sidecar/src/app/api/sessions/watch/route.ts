@@ -1,5 +1,5 @@
 /**
- * GET /api/sessions/watch?projectId=…&ids=a,b,c → { projectId, rows, generatedAt }
+ * GET /api/sessions/watch?projectId=…&ids=a,b,c → { projectId, rows, generatedAt, sidecarStartedAt }
  *
  * ADR-0107 — the cold-start snapshot for the multi-session watch UI: one row
  * per session with its live state, pending confirms, tree, diff badge, plan
@@ -8,7 +8,7 @@
  */
 
 import { getProject } from "@marvin/runtime/projects";
-import { buildSessionWatch } from "@marvin/runtime/session-watch";
+import { buildSessionWatch, sidecarStartedAt } from "@marvin/runtime/session-watch";
 import { ensureSupervisorLoop } from "@marvin/runtime/supervisor-loop";
 import { noteSidecarPort } from "@marvin/tools/policy";
 import { type NextRequest, NextResponse } from "next/server";
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
   const fresh = params.get("fresh") === "1";
   const rows = await buildSessionWatch({ projectId, workDir: project.workDir, sessionIds: ids, fresh });
   return NextResponse.json(
-    { projectId, rows, generatedAt: new Date().toISOString() },
+    { projectId, rows, generatedAt: new Date().toISOString(), sidecarStartedAt: sidecarStartedAt() },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

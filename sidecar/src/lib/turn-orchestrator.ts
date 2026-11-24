@@ -43,6 +43,8 @@ import {
 } from "@marvin/runtime/session";
 import { clearActivity, noteActivityEvent, setActivity } from "@marvin/runtime/session-activity";
 import { attentionPatchForTurn } from "@marvin/runtime/session-attention";
+import { ownWaitsOf } from "@marvin/runtime/session-watch";
+import { settleWaitStretchAtTurnEnd, settleWaitStretchAtTurnStart } from "@marvin/runtime/wait-stretch";
 import { nextAttention, nextFailedTurnsInARow, nextScopeMetAt, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
 import { classifyTurnFailure } from "@marvin/runtime/session-recovery";
 import { ledgerDroppedSend, supervisorFireRefusal } from "@marvin/runtime/supervisor-send";
@@ -393,6 +395,14 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   // ADR-0130 — any turn start clears the session's attention item.
   const attentionStart = nextAttention({ phase: "start", kind: liveTurn.kind, ...(liveTurn.author ? { author: liveTurn.author } : {}) });
   if (attentionStart) updateSessionMeta(projectId, marvinSessionId, attentionStart);
+  // ADR-0130 addendum — a person's turn on a tab that waits on nothing ends any stale wait stretch.
+  settleWaitStretchAtTurnStart(projectId, marvinSessionId, {
+    kind: liveTurn.kind,
+    ...(liveTurn.author ? { author: liveTurn.author } : {}),
+    pending: ownWaitsOf(projectId, marvinSessionId).count > 0,
+  });
+  const settleWaitStretchAtEnd = () =>
+    settleWaitStretchAtTurnEnd(projectId, marvinSessionId, { filesEdited: liveTurn.filesEdited, waitStart: ownWaitsOf(projectId, marvinSessionId).since });
 
   const result = await runAgent({
     message,
@@ -495,6 +505,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     // so ADR-0031's rails (pending cap, depth caps, same permission posture)
     // apply unchanged.
     const outcome = failure.cancelled ? "stopped" : failure.interrupted ? "interrupted" : "error";
+    settleWaitStretchAtEnd();
     updateSessionMeta(projectId, marvinSessionId, {
       lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome, ...(bySupervisor ? { stoppedBy: "supervisor" as const } : {}), error: payload.error.slice(0, 200) },
       failedTurnsInARow: nextFailedTurnsInARow(readSessionMeta(projectId, marvinSessionId)?.failedTurnsInARow, outcome),
@@ -540,6 +551,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   if (result.sessionId) {
     rememberSdkSessionId(projectId, marvinSessionId, result.sessionId);
   }
+  settleWaitStretchAtEnd();
   updateSessionMeta(projectId, marvinSessionId, {
     lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: "completed" },
     failedTurnsInARow: undefined,
