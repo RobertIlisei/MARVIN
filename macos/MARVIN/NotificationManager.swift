@@ -1,38 +1,50 @@
 // NotificationManager — macOS-native alerts for MARVIN events.
-// Phase 1d.14.
+// Phase 1d.14; reworked for UX review N-01.
 //
-// Currently watches the pending-confirm count parsed out of the
-// bridge's webTitle (`(N) MARVIN`) and posts a system notification
-// on 0 → N transitions. Resolving one of N doesn't re-notify; the
-// dock-tile badge handles the still-pending count visually.
+// It used to post one thing: "N confirms pending" on a 0 → N change of the
+// confirm count, naming no tab and jumping to none. A tab that finished,
+// failed or was cut off by a restart made no sound at all.
 //
-// Permission is requested lazily — only when we actually have a
-// reason to send something — so a fresh user opening MARVIN-Swift
-// for the first time doesn't immediately get a permissions modal.
+// Now it posts what `TabNotificationPlanner` (MARVINLogic) decides, one
+// notification per kind of event, titled with the tab and carrying its id.
+// Clicking one brings the app forward and selects that tab. A confirm or a
+// question waiting on the user is one of those events, so the old count-based
+// banner is gone, not duplicated.
 //
-// macOS by default suppresses banner notifications when the
-// originating app is foregrounded, so the user doesn't see a
-// banner for confirms they're already looking at. We rely on that
-// default rather than implementing UNUserNotificationCenterDelegate.
+// Permission is requested lazily — only when we actually have something to
+// say — so a fresh user opening MARVIN for the first time doesn't get a
+// permissions modal.
 //
-// Disabling: macOS' System Settings → Notifications → MARVIN-Swift.
+// Because clicks need a delegate, the delegate also decides presentation. Left
+// to macOS' default, an app in front shows no banner at all; here the planner
+// has already left out the one tab the user is looking at in the front app, so
+// any other tab's event is shown even while MARVIN is in front.
+//
+// Disabling: macOS' System Settings → Notifications → MARVIN. There is no
+// in-app switch, and none was added.
 
 import AppKit
 import Foundation
+import MARVINLogic
 import UserNotifications
 
 @MainActor
 final class NotificationManager {
     static let shared = NotificationManager()
 
-    /// Stable identifier — re-adding the request replaces the
-    /// existing alert with the new content (so 1 → 2 → 3 transitions
-    /// don't stack three banners). Re-using the identifier matches
-    /// the dock-badge behavior of "current count, not history."
-    private let confirmRequestID = "marvin.confirm-pending"
-
     private var hasRequestedAuth = false
-    private var lastConfirmCount = 0
+    private let delegate = Delegate()
+
+    /// Whether this process can talk to the notification center at all. A bare
+    /// SPM binary (the surface-snapshot harness) has no bundle, and
+    /// UNUserNotificationCenter raises an uncatchable exception without one.
+    private var available: Bool { Bundle.main.bundleIdentifier != nil }
+
+    /// Take the delegate. Call at launch, so a click that launched the app is delivered.
+    func install() {
+        guard available else { return }
+        UNUserNotificationCenter.current().delegate = delegate
+    }
 
     /// Lazy authorization request. Idempotent — subsequent calls
     /// return immediately. The OS caches the user's answer.
@@ -50,39 +62,47 @@ final class NotificationManager {
         }
     }
 
-    /// Update the pending-confirm count. Posts a notification only
-    /// on 0 → N transitions, so resolving one of three pending
-    /// doesn't re-fire. The defer ensures `lastConfirmCount` is
-    /// always updated regardless of whether we post.
-    func updateConfirmCount(_ count: Int) {
-        defer { lastConfirmCount = count }
-        guard lastConfirmCount == 0, count > 0 else { return }
-        Task { await postConfirmNotification(count: count) }
+    func post(_ n: TabNotification) {
+        guard available else { return }
+        Task {
+            await requestAuthorizationIfNeeded()
+            let content = UNMutableNotificationContent()
+            content.title = n.title
+            content.body = n.body
+            content.sound = .default
+            content.threadIdentifier = "marvin.tabs"
+            if let first = n.tabIds.first { content.userInfo = [Delegate.tabIdKey: first] }
+            let request = UNNotificationRequest(identifier: n.identifier, content: content, trigger: nil)
+            do {
+                try await UNUserNotificationCenter.current().add(request)
+            } catch {
+                // Silent — see requestAuthorizationIfNeeded() comment.
+            }
+        }
     }
 
-    private func postConfirmNotification(count: Int) async {
-        // A bare SPM binary (the surface-snapshot harness) has no bundle, and
-        // UNUserNotificationCenter raises an uncatchable exception without one.
-        // The shipped app always has a bundle identifier, so this is a no-op there.
-        guard Bundle.main.bundleIdentifier != nil else { return }
-        await requestAuthorizationIfNeeded()
+    /// A click: the app comes forward, the tab it was about is selected.
+    fileprivate func open(tabId: String) {
+        MainWindowFocus.bringForward()
+        ChatPreviewModel.shared.selectSession(tabId, fallbackProjectId: MarvinBridge.shared.activeProjectId)
+    }
 
-        let content = UNMutableNotificationContent()
-        content.title = "MARVIN"
-        content.body = count == 1
-            ? "1 confirm pending"
-            : "\(count) confirms pending"
-        content.sound = .default
+    fileprivate final class Delegate: NSObject, UNUserNotificationCenterDelegate {
+        static let tabIdKey = "marvinTabId"
 
-        let request = UNNotificationRequest(
-            identifier: confirmRequestID,
-            content: content,
-            trigger: nil // immediate
-        )
-        do {
-            try await UNUserNotificationCenter.current().add(request)
-        } catch {
-            // Silent — see requestAuthorizationIfNeeded() comment.
+        func userNotificationCenter(
+            _ center: UNUserNotificationCenter,
+            willPresent notification: UNNotification
+        ) async -> UNNotificationPresentationOptions {
+            [.banner, .sound]
+        }
+
+        func userNotificationCenter(
+            _ center: UNUserNotificationCenter,
+            didReceive response: UNNotificationResponse
+        ) async {
+            guard let id = response.notification.request.content.userInfo[Self.tabIdKey] as? String else { return }
+            await MainActor.run { NotificationManager.shared.open(tabId: id) }
         }
     }
 }

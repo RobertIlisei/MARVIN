@@ -40,6 +40,8 @@ import SwiftUI
 
 @MainActor struct ConfirmSheet: View {
     let request: ConfirmRequest
+    /// N-02 — "Tab “…” · branch", so the sheet says which worktree it will act in.
+    var askedBy: String? = nil
     let onAllow: () -> Void
     let onDeny: (String?) -> Void
 
@@ -86,6 +88,13 @@ import SwiftUI
                      : (request.title ?? request.displayName ?? ToolLabel.plain(request.toolName)))
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                if let askedBy {
+                    Text(askedBy)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
             Spacer()
         }
@@ -184,11 +193,13 @@ import SwiftUI
                 dismiss()
             }
             .keyboardShortcut(.cancelAction)
+            // ⌘⏎, not bare Return — the same rule as `ConfirmCard` (audit C8,
+            // UX review N-02): a stray Return must never approve a tool call.
             Button(isPlanApproval ? "Approve & execute" : "Allow") {
                 onAllow()
                 dismiss()
             }
-            .keyboardShortcut(.defaultAction)
+            .keyboardShortcut(.return, modifiers: .command)
             .buttonStyle(.borderedProminent)
         }
     }
@@ -391,6 +402,8 @@ private func prettyJSON(_ value: ChatJSON) -> String {
 /// (ADR-0040) stays a sheet, because it is a form.
 @MainActor struct ConfirmCard: View {
     let request: ConfirmRequest
+    /// N-02 — "Tab “…” · branch", so the card says which worktree it will act in.
+    var askedBy: String? = nil
     let onAllow: () -> Void
     let onDeny: (String?) -> Void
     @State private var denyOpen = false
@@ -435,6 +448,13 @@ private func prettyJSON(_ value: ChatJSON) -> String {
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.return, modifiers: .command)
                     .help(isPlanApproval ? "Approve & execute (⌘⏎)" : "Allow (⌘⏎)")
+            }
+            if let askedBy {
+                Text(askedBy)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
             if let input = request.input, !isPlanApproval {
                 ConfirmToolInput(name: request.toolName, input: input)

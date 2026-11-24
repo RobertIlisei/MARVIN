@@ -177,9 +177,9 @@ final class HealthMonitor {
             let reason: String =
                 switch urlError.code {
                 case .cannotConnectToHost:
-                    "Sidecar isn't running. Start it with `bin/marvin start` in the MARVIN repo, or open the menu bar and pick Reconnect."
+                    "Nothing is answering on port \(ServerConfig.port)."
                 case .timedOut:
-                    "Sidecar didn't respond within 5 s. Check `bin/marvin status` to see what state it's in."
+                    "The sidecar did not respond within 5 s."
                 case .networkConnectionLost:
                     "Connection to the sidecar dropped. Auto-retrying."
                 default:
