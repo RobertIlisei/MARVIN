@@ -256,7 +256,7 @@ describe("backlog store — provisional capture (ADR-0047)", () => {
     expect(r.ok && r.item.status === "open").toBe(true);
   });
 
-  // Explicit timeout: this fills the rail with MAX_OPEN_ITEMS (200) sequential
+  // Explicit timeout: this fills the rail with MAX_OPEN_ITEMS (500 since v1.1.1) sequential
   // adds, each a real file write + index rebuild — ~400 filesystem ops. It runs
   // in ~1.3 s on a local SSD but exceeded vitest's 5 s default on GitHub's
   // slower runners, which is why the `test` workflow went red from v0.1.56 (the
@@ -275,7 +275,7 @@ describe("backlog store — provisional capture (ADR-0047)", () => {
     expect(prov.ok).toBe(true);
     if (!prov.ok) return;
     expect(prov.item.status).toBe("provisional");
-  }, 30_000);
+  }, 180_000);
 });
 
 describe("backlog store — caps", () => {
@@ -296,7 +296,7 @@ describe("backlog store — caps", () => {
     }
     const over = await addBacklogItem(workDir, { title: "one too many" });
     expect(over.ok).toBe(false);
-  }, 30_000);
+  }, 180_000);
 });
 
 describe("backlog content-class classifier (MCP write boundary)", () => {
