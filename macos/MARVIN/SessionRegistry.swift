@@ -73,6 +73,7 @@ final class SessionRegistry {
         reviewedAt = [:]
         dismissedCutOffs = []
         firstMessages = [:]
+        snapshotSeen = []
         ledger = SessionLedger()
     }
 
@@ -145,6 +146,8 @@ final class SessionRegistry {
     /// names a tab from this, so the pane, the overflow list, notifications and
     /// the restart banner do too.
     private(set) var firstMessages: [String: String] = [:]
+    /// Sessions some snapshot has listed (see `refreshStates`).
+    private var snapshotSeen: Set<String> = []
 
     /// The name every surface prints for a session. `fallbackTitle` is for a
     /// session this registry has no title for (the supervisor inbox keeps one).
@@ -284,10 +287,15 @@ final class SessionRegistry {
             self.ledger.apply(snapshot: rows, now: Date())
             // A session closed from another client no longer comes back in the
             // snapshot; without this its last known wait would stay on screen.
-            for id in SessionFleet.vanished(entries: Array(self.ledger.entries.values), openTabs: Set(self.openTabs),
-                                            inSnapshot: Set(rows.map(\.marvinSessionId))) {
+            // Only a session an earlier snapshot DID list can vanish: one the
+            // feed introduced a moment ago (an `ended` for a session this
+            // snapshot was built before) is not gone, merely not listed yet.
+            let listed = Set(rows.map(\.marvinSessionId))
+            let known = self.ledger.entries.values.filter { self.snapshotSeen.contains($0.id) }
+            for id in SessionFleet.vanished(entries: Array(known), openTabs: Set(self.openTabs), inSnapshot: listed) {
                 self.ledger.markClosed(id)
             }
+            self.snapshotSeen.formUnion(listed)
             self.dismissedCutOffs = SessionRestartTrace.stillAcknowledged(self.dismissedCutOffs, interrupted: self.interruptedTabIds)
             // ADR-0108 — a tab restored from disk has no local posture, but
             // the sidecar recorded one on its last turn. Seed from that so a
