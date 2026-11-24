@@ -159,6 +159,10 @@ describe("the status says what was chosen, not only what it resolved to", () => 
   it("choice is null on the default and the stored id once picked", async () => {
     expect(await supervisorModelInfo()).toMatchObject({ resolved: expect.stringMatching(/^claude-sonnet-5/), choice: null });
     writeRoleModels({ supervisor: "claude-opus-5-5" });
-    expect(await supervisorModelInfo()).toMatchObject({ resolved: "claude-opus-5-5", label: expect.stringContaining("Opus 5.5"), choice: "claude-opus-5-5" });
+    // The label is the catalogue's display name, or the id when the cached
+    // catalogue does not list the model. Which one depends on what an earlier
+    // test file left in that cache (isolate: false), so accept both: this test
+    // is about `choice`. CI failed v1.1.1's release gate on the stricter form.
+    expect(await supervisorModelInfo()).toMatchObject({ resolved: "claude-opus-5-5", label: expect.stringMatching(/Opus 5\.5|^claude-opus-5-5$/), choice: "claude-opus-5-5" });
   });
 });
