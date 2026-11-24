@@ -697,17 +697,22 @@ enum SupervisorCardSheet: Identifiable {
                 // reads as a control (§13.6).
                 Label(level.title, systemImage: level.glyph)
             } else {
+                // R2-11 — a glyph alone read as an unchecked radio button on every
+                // row. It keeps its place in the row, gets a 24 x 20 target, and
+                // says what it is on hover and to VoiceOver.
                 Image(systemName: level.glyph)
-                    .font(.system(size: 10, weight: level == .answerConfirms ? .semibold : .regular))
+                    .font(.system(size: 11, weight: level == .answerConfirms ? .semibold : .regular))
                     .foregroundStyle(level == .answerConfirms ? MarvinTheme.textPrimary : MarvinTheme.textMuted)
-                    .frame(width: 18, height: 16)
+                    .frame(width: 24, height: 20)
                     .contentShape(Rectangle())
             }
         }
         .modifier(DelegationMenuStyle(labelled: showsLabel))
-        .help("Supervisor delegation: \(level.spoken)" + (lastActAt.map { " · last act \($0.prefix(16).replacingOccurrences(of: "T", with: " "))" } ?? ""))
-        .accessibilityLabel("Delegation for \(tabTitle)")
+        .help("Supervisor delegation for \(tabTitle): \(level.title). \(level.consequence). Click to change."
+              + (lastActAt.map { " Last act \($0.prefix(16).replacingOccurrences(of: "T", with: " "))." } ?? ""))
+        .accessibilityLabel("Supervisor delegation for \(tabTitle)")
         .accessibilityValue(level.spoken)
+        .accessibilityHint("Opens a menu to change how far the supervisor may act on this tab")
     }
 }
 

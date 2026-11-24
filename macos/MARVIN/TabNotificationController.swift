@@ -73,7 +73,7 @@ final class TabNotificationController {
             guard let e = registry.entry(id) else { return nil }
             return TabObservation(
                 id: id,
-                title: TabNotificationTitle.make(entryTitle: e.title, isDraft: e.isDraft, id: id),
+                title: registry.displayName(id),
                 state: registry.rowState(id),
                 outcome: e.lastOutcome
             )

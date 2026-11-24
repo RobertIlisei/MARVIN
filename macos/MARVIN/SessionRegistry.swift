@@ -72,6 +72,7 @@ final class SessionRegistry {
         draftIds.removeAll()
         reviewedAt = [:]
         dismissedCutOffs = []
+        firstMessages = [:]
         ledger = SessionLedger()
     }
 
@@ -119,18 +120,44 @@ final class SessionRegistry {
     /// Confirms and questions waiting on the user, across every session.
     var needsYouCount: Int { ledger.needsYouCount }
 
-    /// Open tabs plus anything live that is not a tab — the sessions the
-    /// Sessions pane lists and the status bar counts (W-06).
+    /// Open tabs plus every other session the feed reports as working, waiting,
+    /// needing the person, failed, cut off or finished and not yet looked at —
+    /// the sessions the Sessions pane lists, the status bar counts, the rail
+    /// badge counts and "next tab that needs me" walks (W-06, R2-01). This was
+    /// "open tabs plus a running turn", so a session started elsewhere dropped
+    /// out of all four the moment it began to wait.
     var fleetSessionIds: [String] {
-        var ids = openTabs
-        for (id, e) in ledger.entries where e.isLive && !ids.contains(id) && e.closedAt == nil {
-            ids.append(id)
-        }
-        return ids
+        SessionFleet.memberIds(openTabs: openTabs, entries: Array(ledger.entries.values), state: { rowState($0.id) })
     }
 
-    /// Working / waiting / needs-you / total over `fleetSessionIds`.
-    var fleet: FleetCounts { SessionFleet.counts(fleetSessionIds.map { rowState($0) }) }
+    /// Working / waiting / needs-you / long waits / finished-unreviewed over `fleetSessionIds`.
+    var fleet: FleetCounts {
+        SessionFleet.counts(fleetSessionIds.map { FleetItem(state: rowState($0), waitingSince: ledger[$0]?.waitSince) }, now: now)
+    }
+
+    /// Whether the session is a tab in the strip. A fleet member that is not
+    /// one is opened by selecting it (`openTab` runs on the select request).
+    func isOpenTab(_ id: String) -> Bool { openTabs.contains(id) }
+
+    // MARK: - One name per session (R2-02)
+
+    /// What each session was opened with, from the session list. The tab strip
+    /// names a tab from this, so the pane, the overflow list, notifications and
+    /// the restart banner do too.
+    private(set) var firstMessages: [String: String] = [:]
+
+    /// The name every surface prints for a session. `fallbackTitle` is for a
+    /// session this registry has no title for (the supervisor inbox keeps one).
+    func displayName(_ id: String, fallbackTitle: String? = nil) -> String {
+        let e = ledger[id]
+        return SessionDisplayName.make(
+            id: id,
+            isDraft: e?.isDraft ?? draftIds.contains(id),
+            firstMessage: firstMessages[id],
+            title: e?.title ?? fallbackTitle,
+            branch: e?.worktree?.branch ?? e?.tree?.branch
+        )
+    }
 
     // MARK: - A restart leaves a trace (R-01)
 
@@ -149,10 +176,11 @@ final class SessionRegistry {
 
     // MARK: - The next tab that needs the person (M-02)
 
-    /// The open tab one press of "Next Tab That Needs Me" lands on, nil when
-    /// there is none to go to (which also disables the command).
+    /// The session one press of "Next Tab That Needs Me" lands on, nil when
+    /// there is none to go to (which also disables the command). A fleet member
+    /// that is not a tab is opened by the select request (R2-01).
     var nextTabNeedingMe: String? {
-        let tabs = openTabs.map { id -> AttentionCandidate in
+        let tabs = fleetSessionIds.map { id -> AttentionCandidate in
             let e = ledger[id]
             return AttentionCandidate(id: id, state: rowState(id), waitingSince: e?.waitSince, endedAt: e?.lastTurnAt)
         }
@@ -215,6 +243,13 @@ final class SessionRegistry {
                 ledger.setTitle(s.sessionId, title: first)
             }
         }
+        // R2-02 — every session's first message, tab or not: a fleet row for a
+        // session with no tab is named the way the strip would name it.
+        var names: [String: String] = [:]
+        for s in summaries {
+            if let first = s.firstUserMessage, !first.isEmpty { names[s.sessionId] = first }
+        }
+        if names != firstMessages { firstMessages = names }
     }
 
     // MARK: - Feed + snapshot
@@ -240,11 +275,19 @@ final class SessionRegistry {
     /// repeated when a turn ends and on a slow clock (S-01).
     func refreshStates() {
         guard let pid = projectId else { return }
-        let ids = openTabs
+        // R2-01 — the fleet, not only the tabs: a session with no tab is read
+        // too (the sidecar adds every live and recent one regardless).
+        let ids = fleetSessionIds
         Task { @MainActor in
             guard let rows = await ChatService.shared.fetchSessionWatch(projectId: pid, ids: ids),
                   self.projectId == pid else { return }
             self.ledger.apply(snapshot: rows, now: Date())
+            // A session closed from another client no longer comes back in the
+            // snapshot; without this its last known wait would stay on screen.
+            for id in SessionFleet.vanished(entries: Array(self.ledger.entries.values), openTabs: Set(self.openTabs),
+                                            inSnapshot: Set(rows.map(\.marvinSessionId))) {
+                self.ledger.markClosed(id)
+            }
             self.dismissedCutOffs = SessionRestartTrace.stillAcknowledged(self.dismissedCutOffs, interrupted: self.interruptedTabIds)
             // ADR-0108 — a tab restored from disk has no local posture, but
             // the sidecar recorded one on its last turn. Seed from that so a
