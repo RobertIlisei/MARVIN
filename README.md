@@ -57,7 +57,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v1.1.1**). `main` and `development` are fast-forwarded together at each
+> **v1.1.2**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -387,6 +387,8 @@ docs/
 ---
 
 ## Status
+
+**v1.1.2 — a tab's commit is judged on the tab's own work, and graphify 0.9.118.** The review gate read the project's main folder instead of the tab's checkout, so a one-file docs commit was refused for 50 files a merge had staged elsewhere; it now reads the session's own checkout, and reviews are kept per checkout. MARVIN works with graphify 0.9.118 (an update after 20 changed files takes 51 s where it took 244 s, and 14 s when nothing changed) and limits the map builder to half the cores, at most six.
 
 **v1.1.1 — the gates hold where the model had learned to wait them out.** A night of supervising a real project found four things: a merge refused because MARVIN's own `git status` held the checkout's lock; a review gate that 134 commits had simply waited out; a Practice pane that called every fix older than 45 days "regressed"; and claimed backlog items left `doing` after the work was done. Git reads no longer take the lock, the ship-review gate does not lift by repetition on a security-boundary path ([ADR-0135](./docs/decisions/0135-the-ship-review-gate-does-not-lift-on-a-boundary-path.md)), a fix keeps the rate it was measured against and Practice is opt-in ([ADR-0136](./docs/decisions/0136-practice-is-opt-in-and-a-fix-keeps-its-baseline.md)), and the backlog is checked when a tab closes its scope ([ADR-0137](./docs/decisions/0137-the-backlog-is-checked-when-a-tab-closes-its-scope.md)).
 

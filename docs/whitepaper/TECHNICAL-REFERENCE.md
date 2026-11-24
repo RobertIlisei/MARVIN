@@ -2,7 +2,7 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v1.1.1
+code. Written for contributors and deep evaluators. Covers v1.1.2
 (2026-11-11). Where this document and the repository disagree, the
 repository wins.*
 
@@ -72,6 +72,14 @@ repository wins.*
 > and a Helpers section in the Models dialog. **Claude's server-side advisor**
 > (ADR-0125) is a role too: off by default, `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`
 > when off, `settings.advisorModel` when on.
+> v1.1.2 (2026-11-24): **the gate's directory, and graphify 0.9.118.** `checkShipReview`,
+> `checkShipImpactRequired`, the practice facts and `shipReviewTreeState` use
+> `ctx.sessionCwd` (the tab's worktree; the project root for a shared tab), not
+> `ctx.cwd`. `graphifyEnv` sets `GRAPHIFY_MAX_WORKERS` to half the cores within
+> 2..6 unless the environment already has one; `graphifyExtrasHint` names the
+> `mcp` extra when `query`/`explain`/`path`/`affected` die on its absence;
+> `graph_query` keeps the candidate ids of an ambiguous name (exit 3); the
+> call index strips the `$graphify-root$_` prefix of cached caller ids.
 > v1.1.1 (2026-11-24): **gates and measurement** (ADR-0135 to ADR-0137).
 > *Git* — `git-env.ts` sets `GIT_OPTIONAL_LOCKS=0` on the sidecar's environment at
 > boot (`instrumentation.ts`), so no git read holds a checkout's `index.lock`.
@@ -1288,5 +1296,5 @@ repo:
 ---
 
 *Compiled against the 2026-07-02 full feature inventory (51 ADRs,
-v0.1.55) and brought forward to v1.1.1 (137 ADRs, 2026-11-24). Corrections welcome — the ADRs are the authoritative record,
+v0.1.55) and brought forward to v1.1.2 (137 ADRs, 2026-11-24). Corrections welcome — the ADRs are the authoritative record,
 and this document cites them everywhere it can.*

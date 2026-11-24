@@ -144,6 +144,8 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
+**v1.1.2** (2026-11-24) — two fixes from the first day on a faster machine. The ship-review gate, the impact gate and the practice facts read the session's own checkout (`sessionCwd`), not the project root: a worktree tab's commit had been judged on whatever was staged in the main checkout, and one tab's review covered every tab's commit. graphify 0.9.118 is supported (missing-`mcp`-extra hint, ambiguous-name candidates kept, `$graphify-root$_` cache ids resolved) and `graphifyEnv` caps `GRAPHIFY_MAX_WORKERS` at half the cores, between 2 and 6.
+
 **v1.1.1** (2026-11-24) — four fixes from one night of supervising a real project. The sidecar's git reads never hold a checkout's index lock (`GIT_OPTIONAL_LOCKS=0`; a merge had been refused with "Unable to write index" three times in a month). The ship-review gate does not lift by repetition on a security-boundary path (ADR-0135; 134 commits had waited it out). A fix or rule keeps the rate it was accepted at, the Practice pane shows "was X %, now Y %", and the nightly loop is opt-in (ADR-0136). At a scope-met close the backlog is checked: claimed items gate the close, open items naming an edited file are suggested (ADR-0137). The open-items rail is 500. Not built: ADR-0137 part 3, an item resolved from an unmerged branch shown as "done, waiting to merge".
 
 **v1.1.0** (2026-11-11) — supervision improvements from two days of supervising real tabs (ADR-0130 to ADR-0134, six milestones). Sessions rows read `waiting` and `done`, and a prose question or a chain-cap refusal raises an attention item; a project notice rides every turn's reminder; `builtin:go-ahead` ships at `nudge`; an approved queue opens briefs as slots free under a user-only cap; a standing merge authorisation merges finished tab branches behind the project's gate in a scratch worktree, fast-forward only, never pushing. Agent SDK 0.3.301 with every built-in classified at the gate; a tab's graph is seeded as an APFS clone.
@@ -307,6 +309,10 @@ switch has no known cause, only new telemetry that will name it next time.
 ## Recent milestones
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
+
+### 2026-11-24 — v1.1.2: a tab's commit is judged on the tab's own work; graphify 0.9.118
+
+_Shipped. The ship-review gate reads the session's checkout (`13d95b1`); graphify 0.9.118 support and a worker cap (merge `95a40c2`, measurements in the [ADR-0073 addendum](./decisions/0073-agent-sdk-0-3-upgrade.md)). Detail in the [changelog](./history/CHANGELOG.md)._
 
 ### 2026-11-24 — v1.1.1: the gates hold where the model had learned to wait them out
 

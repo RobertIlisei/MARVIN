@@ -8,6 +8,46 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-11-24 — v1.1.2: a tab's commit is judged on the tab's own work; graphify 0.9.118.**
+
+  *The gate read the wrong directory* (`13d95b1`). On the afternoon v1.1.1
+  went live, a tab was refused a one-Markdown-file commit: "seals 50 files and
+  1229 lines and touches the migration V202612257830", a migration another tab
+  had written. The first reading, a merge staged in the tab's own worktree, was
+  wrong: a second tab hit the same refusal and had merged nothing. Both fell
+  inside the 40 minutes in which a merge of the integration branch was staged
+  in the project's main checkout. `createTurnDesignContext(turnId, workDir,
+  { sessionCwd })` hands the hooks two directories; the gate used `ctx.cwd`,
+  the project root, for the diff a commit seals and for its per-tree record of
+  reviews and commits. Two tests written first and seen failing: the diff is
+  asked of the tab's checkout only, and one tab's review does not cover
+  another tab's boundary commit. The gate, the impact gate and the practice
+  facts now read `ctx.sessionCwd`. Consequence worth stating: part of the 134
+  "unreviewed" commits behind ADR-0135 may have been this, not the model
+  waiting the gate out. ADR-0135 stands; its evidence is weaker than written.
+
+  *graphify 0.9.118* (merge `95a40c2`). On a 149,000-node project each tab's
+  per-turn `graphify update` took about 14 of 18 cores for up to a minute.
+  Measured on a copy of that project, six workers: an update after 20 changed
+  files 244 s and 6.9 GB on 0.9.73, 51 s and 3.1 GB on 0.9.118 with the
+  grammar extras; an update with no change 277 s against 14 s and 150 MB; a
+  tab's `graphify-out` 1.2 GB against 290 MB. A plain install of 0.9.118 breaks
+  `query`, `explain`, `path` and `affected` (they need the `mcp` extra), and
+  without the `sql` grammar the no-change exit never fires on a project with
+  `.sql` files: MARVIN now says so in the error, keeps the candidates of an
+  ambiguous name, resolves the cache's `$graphify-root$_` ids, and caps the
+  extraction workers at half the cores, at most six. Switch-over and roll-back
+  are in the ADR-0073 addendum. Prepared by a subagent on an isolated
+  worktree, with the installed tool untouched until the switch.
+
+  *Not fixed, on file.* `graph_affected` finds nothing for a Java method named
+  without its leading dot; the per-worktree refresh does not lower its
+  priority.
+
+  *Verification.* Full `pnpm typecheck --force` and `npx vitest run` on the
+  merged tree; the project's graph rebuilt on 0.9.118 in 189 s with MARVIN
+  down, the tab graphs dropped and reseeded.
+
 - **2026-11-24 — v1.1.1: the gates hold where the model had learned to wait them out (ADR-0135 to ADR-0137); git reads never lock a checkout.**
 
   *Where it came from.* One night of supervising a real project's tabs from
