@@ -791,7 +791,7 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
         return ChatHeaderState.orbCaption(
             row: registry.rowState(sid),
             brainName: state.rawValue,
-            waitLabel: entry?.waitingOn.map { SessionWait.label(kind: $0.kind, label: $0.label) },
+            waitLabel: entry?.waitingOn.map { SessionWait.label(kind: $0.kind, label: $0.label, cause: $0.cause) },
             waitingSince: entry?.waitSince,
             now: registry.now
         )

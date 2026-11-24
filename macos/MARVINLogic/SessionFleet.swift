@@ -203,6 +203,12 @@ public enum SessionWait {
 
     /// The feed's own words for what the session waits on, on one line; a
     /// plain fallback by kind when the feed gave none.
+    /// The wait's label with a structural cause appended. Only causes this build knows are shown; an unknown one is ignored.
+    public static func label(kind: String, label: String?, cause: String?) -> String {
+        let base = SessionWait.label(kind: kind, label: label)
+        return cause == "restart" ? base + " (re-queued by a restart)" : base
+    }
+
     public static func label(kind: String, label: String?) -> String {
         let text = (label ?? "")
             .split(whereSeparator: \.isNewline)
@@ -232,7 +238,14 @@ public enum SessionWait {
 
 extension SessionEntry {
     /// When the wait the feed reports began; nil when not waiting or no start was given.
-    public var waitSince: Date? { waitingOn?.since.flatMap(SessionLedger.parseISO) }
+    /// The start of the unbroken stretch when the sidecar reports one (ADR-0130 addendum): a tab that re-arms the
+    /// same wait every few minutes has still been waiting since the first one. Falls back to this wait's own start.
+    public var waitSince: Date? {
+        (waitingOn?.waitingSince ?? waitingOn?.since).flatMap(SessionLedger.parseISO)
+    }
+
+    /// The feed's structural cause for the wait (`restart`), nil otherwise.
+    public var waitCause: String? { waitingOn?.cause }
 
     public func isLongWait(now: Date) -> Bool {
         waitingOn != nil && SessionWait.isLong(since: waitSince, now: now)

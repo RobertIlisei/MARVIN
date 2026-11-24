@@ -128,6 +128,23 @@ runner.suite("watch-feed-wait-clock") {
         runner.expect(l["w"]?.waitingOn?.waitingSince, equals: "2026-11-24T20:27:54.000Z", "kept on the entry")
         runner.expect(l["w"]?.waitingOn?.jobs, equals: 2, "kept on the entry")
     }
+
+    runner.test("the wait every surface shows is the unbroken stretch, not the last re-arm (R2-04: 13 minutes read as 3)") {
+        var l = SessionLedger()
+        let json = #"{"rows":[{"marvinSessionId":"w","state":"waiting","waitingOn":{"kind":"job","since":"2026-11-24T20:37:07.000Z","waitingSince":"2026-11-24T20:27:54.000Z"}},{"marvinSessionId":"old","state":"waiting","waitingOn":{"kind":"job","since":"2026-11-24T20:37:07.000Z"}}]}"#
+        l.apply(snapshot: SessionWatchRowWire.decodeSnapshot(Data(json.utf8))!, now: Date())
+        runner.expect(l["w"]?.waitSince, equals: SessionLedger.parseISO("2026-11-24T20:27:54.000Z"), "the stretch's start")
+        runner.expect(l["old"]?.waitSince, equals: SessionLedger.parseISO("2026-11-24T20:37:07.000Z"), "an older sidecar: this wait's start")
+        let now = SessionLedger.parseISO("2026-11-24T20:44:00.000Z")!
+        runner.expect(l["w"]?.isLongWait(now: now), equals: true, "16 minutes unbroken is a long wait though the last re-arm was 7 minutes ago")
+        runner.expect(l["w"]?.waitCause == nil, "no cause given")
+    }
+
+    runner.test("a wait re-queued by a restart says so in its label") {
+        runner.expect(SessionWait.label(kind: "wakeup", label: "gated commit", cause: "restart"), equals: "gated commit (re-queued by a restart)", "structural cause, not the text")
+        runner.expect(SessionWait.label(kind: "job", label: "gated commit", cause: nil), equals: "gated commit", "no cause")
+        runner.expect(SessionWait.label(kind: "job", label: "gated commit", cause: "something-new"), equals: "gated commit", "an unknown cause is ignored")
+    }
 }
 
 // MARK: - context-tokens (ADR-0022 §2)

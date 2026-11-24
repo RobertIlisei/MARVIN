@@ -66,7 +66,7 @@ public enum SessionRowText {
             return "its last turn ended with an error"
         case .waiting:
             guard let w = e.waitingOn else { return nil }
-            return SessionWait.label(kind: w.kind, label: w.label)
+            return SessionWait.label(kind: w.kind, label: w.label, cause: w.cause)
         case .finished, .done:
             if let into = e.worktree?.mergedInto { return "merged into \(into); close the tab to reclaim the branch" }
             return changes(e) ?? planLine(e, now: now, withAge: false) ?? (state == .done ? "scope met" : "its turn completed")

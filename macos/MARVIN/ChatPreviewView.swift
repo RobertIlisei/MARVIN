@@ -3953,7 +3953,7 @@ final class ChatPreviewModel {
     private var jobStatusItem: (line: String, attention: Bool) {
         let registry = SessionRegistry.shared
         if let sid = model.loadedSessionId, let entry = registry.entry(sid), let wait = entry.waitingOn {
-            return (ChatStatusStrip.jobLine(label: SessionWait.label(kind: wait.kind, label: wait.label), since: entry.waitSince, now: registry.now),
+            return (ChatStatusStrip.jobLine(label: SessionWait.label(kind: wait.kind, label: wait.label, cause: wait.cause), since: entry.waitSince, now: registry.now),
                     entry.isLongWait(now: registry.now))
         }
         var name = "a background job"
@@ -4104,7 +4104,7 @@ final class ChatPreviewModel {
     private func stateIndicator(_ sid: String) -> some View {
         let registry = SessionRegistry.shared
         let entry = registry.entry(sid)
-        let waitLabel = entry?.waitingOn.map { SessionWait.label(kind: $0.kind, label: $0.label) }
+        let waitLabel = entry?.waitingOn.map { SessionWait.label(kind: $0.kind, label: $0.label, cause: $0.cause) }
         let indicator = ChatHeaderState.indicator(
             row: registry.rowState(sid),
             waitLabel: waitLabel,
