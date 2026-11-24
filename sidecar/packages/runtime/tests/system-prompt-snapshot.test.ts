@@ -37,4 +37,11 @@ describe("turnReminders", () => {
     expect(r[1]).toContain("Mode: AGENT");
     expect(r[2]).toBe("P");
   });
+
+  it("carries the seeded-skills line after the plan context and drops it when empty (ADR-0138 addendum)", () => {
+    const line = "Skills this brief named and not yet used: `a`.";
+    const r = turnReminders({ mode: "agent", planContext: "P", skillsContext: line, noticesContext: "N" });
+    expect(r.slice(1)).toEqual(["P", line, "N"]);
+    expect(turnReminders({ mode: "agent", skillsContext: null }).join("\n")).not.toContain("Skills this brief");
+  });
 });

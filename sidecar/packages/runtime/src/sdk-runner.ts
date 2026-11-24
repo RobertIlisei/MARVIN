@@ -95,7 +95,7 @@ import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import type { ChainCapRefusal } from "./session-attention";
 import { readSessionMeta, type SessionTree } from "./session-meta";
-import { noteSkillBlock, seedTurnSkills, skillCloseFacts, skillsRunOf } from "./skill-brief";
+import { noteSkillBlock, seedTurnSkills, skillCloseFacts, skillsReminder, skillsRunOf } from "./skill-brief";
 import { saveSlashCommands } from "./slash-commands";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
 import { backlogCloseCandidates, makeTurnCloseStopHook } from "./turn-close-hook";
@@ -1382,11 +1382,13 @@ export function turnReminders(args: {
   spineContext?: string | null | undefined;
   /** ADR-0131 — the rendered project notices; per-turn text, so never in the system prompt. */
   noticesContext?: string | null | undefined;
+  /** ADR-0138 addendum — the seeded skills that have not run; absent when none is missing. */
+  skillsContext?: string | null | undefined;
 }): string[] {
   const mode =
     modeGuidance(args.mode).trim() ||
     "## Mode: AGENT\nEdits are allowed this turn; any earlier mode reminder no longer applies.";
-  return [args.orientation, mode, args.sessionContext, args.planContext, args.spineContext, args.noticesContext].filter((x): x is string => Boolean(x));
+  return [args.orientation, mode, args.sessionContext, args.planContext, args.spineContext, args.skillsContext, args.noticesContext].filter((x): x is string => Boolean(x));
 }
 
 /** Mode-specific stanza (ADR-0036), sent in the turn's reminder suffix since
@@ -2358,7 +2360,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // and what the session already ran (before a restart) is restored, so a rule
   // or the close check never asks again for a skill that ran.
   if (spineSession) {
-    seedTurnSkills({ projectId: spineSession.projectId, sessionId: spineSession.sessionId, message, turnId });
+    seedTurnSkills({ projectId: spineSession.projectId, sessionId: spineSession.sessionId, message, turnId, workDir });
     hydrateSkillRuns(designCtx, skillsRunOf(spineSession.projectId, spineSession.sessionId));
   }
   // ADR-0124 C — the watch feed reads this turn's graph/file counts live.
@@ -2863,6 +2865,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       sessionContext: input.sessionContext,
       planContext: input.planContext,
       spineContext,
+      skillsContext: spineSession ? skillsReminder(spineSession.projectId, spineSession.sessionId, workDir) : null,
       noticesContext: noticesReminder(workDir),
     });
     const turnPrompt =

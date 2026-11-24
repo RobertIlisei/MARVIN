@@ -96,8 +96,12 @@ export interface SessionMeta {
   checklist?: { planId: string; steps: number; seededAt: string };
   /** ADR-0138 — the skills the brief named (a `Skills:` line), recorded by the
    *  sidecar when the first message arrived. `blocks` counts the scope-met
-   *  closes refused for want of them (the ADR-0104 brake: two, then through). */
-  skills?: { required: string[]; seededAt: string; blocks?: number };
+   *  closes refused for want of them (the ADR-0104 brake: two, then through).
+   *  `first` (ADR-0138 addendum) is the subset the brief or the project marked
+   *  as start skills; absent on a meta written before it existed, which means
+   *  none. `firstBlocks` counts the mutations refused for want of them, with
+   *  the same brake. */
+  skills?: { required: string[]; seededAt: string; blocks?: number; first?: string[]; firstBlocks?: number };
   /** ADR-0138 — every skill this session has run, by normalised name. Persisted
    *  so a session resumed after a MARVIN restart does not forget what ran. */
   skillsRun?: string[];

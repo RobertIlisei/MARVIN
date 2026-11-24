@@ -4,18 +4,24 @@ import { join } from "node:path";
 
 process.env.MARVIN_DATA_DIR = mkdtempSync(join(tmpdir(), "marvin-skill-brief-data-"));
 
+import { mkdirSync, writeFileSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { appendSessionTurn } from "../src/session";
-import { readSessionMeta, upsertSessionMeta } from "../src/session-meta";
+import { setEnabledSkills } from "../src/skill-enablement";
+import { readSessionMeta, updateSessionMeta, upsertSessionMeta } from "../src/session-meta";
 import { saveSlashCommands } from "../src/slash-commands";
 import {
   noteSkillRun,
   normaliseSkillName,
+  parseSkillsBrief,
   parseSkillsLine,
   parseSkillWaivers,
+  readProjectFirstSkills,
   seedTurnSkills,
   skillCloseFacts,
+  skillsFirstFacts,
+  skillsReminder,
 } from "../src/skill-brief";
 
 const posture = { model: "m", advisorModel: null, personality: "marvin" as const, permissionStrategy: "auto" as const, thinkingMode: "high" };
@@ -143,5 +149,153 @@ describe("seeding and persistence", () => {
     appendSessionTurn(project, "s7", { type: "turn.user", at: new Date().toISOString(), message: "hello" });
     appendSessionTurn(project, "s7", { type: "turn.user", at: new Date().toISOString(), message: brief });
     expect(seedTurnSkills({ projectId: project, sessionId: "s7", message: brief, turnId: "t" }).seeded).toBe(false);
+  });
+});
+
+describe("start skills: the `first` marker (ADR-0138 addendum)", () => {
+  it("reads a real brief line: only the skill marked first is a start skill", () => {
+    const msg = "Skills: `ponytail` (full, first), `ponytail-review`, `pr-review`, `test-driven-development`.";
+    expect(parseSkillsBrief(msg)).toEqual({
+      required: ["ponytail", "ponytail-review", "pr-review", "test-driven-development"],
+      first: ["ponytail"],
+    });
+    // The list a brief without markers always produced is unchanged.
+    expect(parseSkillsLine(msg)).toEqual(["ponytail", "ponytail-review", "pr-review", "test-driven-development"]);
+  });
+
+  it("accepts the note in either order, with other words, and on a list item", () => {
+    expect(parseSkillsBrief("Skills: `a` (first), `b` (first, full), `c` (full, first), `d` (full)")?.first).toEqual(["a", "b", "c"]);
+    expect(parseSkillsBrief("## Skills\n\n- `a` (full, first)\n- `b`\n")).toEqual({ required: ["a", "b"], first: ["a"] });
+  });
+
+  it("a note that only contains the letters inside another word, or sits on another skill, does not mark", () => {
+    expect(parseSkillsBrief("Skills: `a` (firstly), `b` (first), `d`")?.first).toEqual(["b"]);
+    expect(parseSkillsBrief("Skills: `a` (see `c` first), `d`")?.first).toEqual(["a"]);
+    expect(parseSkillsBrief("Skills: `a`, `b`")?.first).toEqual([]);
+  });
+
+  it("accepts a separate `Skills first:` line, plain or bold, whose names also count as named", () => {
+    expect(parseSkillsBrief("Skills first: `x`, `y`\nSkills: `y`, `z`")).toEqual({ required: ["x", "y", "z"], first: ["x", "y"] });
+    expect(parseSkillsBrief("**Skills first:** `x` (full)")).toEqual({ required: ["x"], first: ["x"] });
+    expect(parseSkillsBrief("- **Skills first**: `q`")).toEqual({ required: ["q"], first: ["q"] });
+  });
+
+  it("normalises, deduplicates and bounds the start list", () => {
+    expect(parseSkillsBrief("Skills: `Ponytail:ponytail` (first), `ponytail` (first)")).toEqual({ required: ["ponytail"], first: ["ponytail"] });
+    const many = Array.from({ length: 60 }, (_, i) => `\`s${i}\` (first)`).join(", ");
+    const r = parseSkillsBrief(`Skills: ${many}`);
+    expect(r?.required).toHaveLength(20);
+    expect(r?.first).toHaveLength(20);
+  });
+
+  it("returns null when the brief names no skill at all", () => {
+    expect(parseSkillsBrief("Skills first: none")).toBeNull();
+    expect(parseSkillsBrief("just a task")).toBeNull();
+  });
+});
+
+describe("start skills on the session meta", () => {
+  const sproject = "p-skill-first";
+  const root = mkdtempSync(join(tmpdir(), "marvin-skill-first-root-"));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+  const brief = "Skills: `ponytail` (first), `pr-review`\n\nDo it.";
+
+  it("stores `first` with the seeded list; an old meta without it keeps working", () => {
+    upsertSessionMeta(sproject, "a1", { workDir: root, tree: { mode: "shared" }, posture });
+    seedTurnSkills({ projectId: sproject, sessionId: "a1", message: brief, turnId: "t", isFirstTurn: () => true, workDir: root });
+    expect(readSessionMeta(sproject, "a1")?.skills?.first).toEqual(["ponytail"]);
+
+    upsertSessionMeta(sproject, "old", { workDir: root, tree: { mode: "shared" }, posture });
+    updateSessionMeta(sproject, "old", { skills: { required: ["ponytail", "pr-review"], seededAt: "2026-11-24T08:00:00.000Z" } });
+    expect(skillCloseFacts(sproject, "old", root)).toMatchObject({ required: ["ponytail", "pr-review"], blocks: 0 });
+    expect(skillsFirstFacts(sproject, "old", root)).toBeNull();
+    expect(skillsReminder(sproject, "old", root)).toContain("`ponytail`");
+    expect(skillsReminder(sproject, "old", root)).not.toContain("before your first change");
+  });
+
+  it("the project's `first` setting marks a skill only when the brief names it", () => {
+    mkdirSync(join(root, ".marvin"), { recursive: true });
+    writeFileSync(join(root, ".marvin", "skills.json"), JSON.stringify({ first: ["pr-review", "Not-Named-In-Brief"] }));
+    upsertSessionMeta(sproject, "a2", { workDir: root, tree: { mode: "shared" }, posture });
+    seedTurnSkills({ projectId: sproject, sessionId: "a2", message: "Skills: `ponytail`, `pr-review`", turnId: "t", isFirstTurn: () => true, workDir: root });
+    const meta = readSessionMeta(sproject, "a2");
+    expect(meta?.skills?.required).toEqual(["ponytail", "pr-review"]);
+    expect(meta?.skills?.first).toEqual(["pr-review"]);
+    // A brief that names nothing the setting lists gets no start skill from it.
+    upsertSessionMeta(sproject, "a3", { workDir: root, tree: { mode: "shared" }, posture });
+    seedTurnSkills({ projectId: sproject, sessionId: "a3", message: "Skills: `ponytail`", turnId: "t", isFirstTurn: () => true, workDir: root });
+    expect(readSessionMeta(sproject, "a3")?.skills?.first).toEqual([]);
+  });
+
+  it("the setting is read at a validating boundary", () => {
+    const w = mkdtempSync(join(tmpdir(), "marvin-skill-first-w-"));
+    try {
+      expect(readProjectFirstSkills(w)).toEqual([]); // no file
+      mkdirSync(join(w, ".marvin"), { recursive: true });
+      writeFileSync(join(w, ".marvin", "skills.json"), "{not json");
+      expect(readProjectFirstSkills(w)).toEqual([]);
+      writeFileSync(join(w, ".marvin", "skills.json"), JSON.stringify({ first: "ponytail" }));
+      expect(readProjectFirstSkills(w)).toEqual([]);
+      const hostile = ["Ponytail:Ponytail", 7, null, "", "a b", "x".repeat(200), "../../etc", "`rm`", ...Array.from({ length: 40 }, (_, i) => `s${i}`)];
+      writeFileSync(join(w, ".marvin", "skills.json"), JSON.stringify({ first: hostile }));
+      const got = readProjectFirstSkills(w);
+      expect(got[0]).toBe("ponytail");
+      expect(got.length).toBeLessThanOrEqual(20);
+      expect(got).not.toContain("a b");
+      expect(got).not.toContain("../../etc");
+      expect(got.every((n) => /^[a-z0-9][a-z0-9._-]{0,79}$/.test(n))).toBe(true);
+    } finally {
+      rmSync(w, { recursive: true, force: true });
+    }
+  });
+
+  it("the Skills pane's own write keeps the `first` key", () => {
+    const w = mkdtempSync(join(tmpdir(), "marvin-skill-first-p-"));
+    try {
+      mkdirSync(join(w, ".marvin"), { recursive: true });
+      writeFileSync(join(w, ".marvin", "skills.json"), JSON.stringify({ enabled: ["a"], first: ["ponytail"] }));
+      setEnabledSkills(w, ["a", "b"]);
+      expect(readProjectFirstSkills(w)).toEqual(["ponytail"]);
+    } finally {
+      rmSync(w, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the per-turn skills reminder line", () => {
+  const rproject = "p-skill-remind";
+  const w = "/w";
+  it("lists only the skills that have not run, marks the start ones, and disappears when none is missing", () => {
+    upsertSessionMeta(rproject, "r1", { workDir: w, tree: { mode: "shared" }, posture });
+    seedTurnSkills({ projectId: rproject, sessionId: "r1", message: "Skills: `ponytail` (first), `pr-review`, `tdd`", turnId: "t", isFirstTurn: () => true, workDir: w });
+    const a = skillsReminder(rproject, "r1", w) ?? "";
+    expect(a).toContain("not yet used");
+    expect(a).toContain("`ponytail`");
+    expect(a).toContain("`pr-review`");
+    expect(a).toContain("`tdd`");
+    expect(a).toMatch(/before your first change: `ponytail`/);
+    expect(a.length).toBeLessThan(260);
+
+    noteSkillRun(rproject, "r1", "ponytail:ponytail");
+    const b = skillsReminder(rproject, "r1", w) ?? "";
+    expect(b).not.toContain("`ponytail`");
+    expect(b).toContain("`pr-review`");
+    expect(b).not.toContain("before your first change");
+
+    noteSkillRun(rproject, "r1", "pr-review");
+    noteSkillRun(rproject, "r1", "tdd");
+    expect(skillsReminder(rproject, "r1", w)).toBeNull();
+  });
+
+  it("is null without a seeded list, and leaves out a skill the project cannot invoke", () => {
+    upsertSessionMeta(rproject, "r2", { workDir: w, tree: { mode: "shared" }, posture });
+    expect(skillsReminder(rproject, "r2", w)).toBeNull();
+    expect(skillsReminder(rproject, "nope", w)).toBeNull();
+    seedTurnSkills({ projectId: rproject, sessionId: "r2", message: "Skills: `zzz-gone` (first), `pr-review`", turnId: "t", isFirstTurn: () => true, workDir: w });
+    saveSlashCommands(rproject, [{ name: "pr-review", description: "", argumentHint: "" }]);
+    const r = skillsReminder(rproject, "r2", w) ?? "";
+    expect(r).not.toContain("zzz-gone");
+    expect(r).toContain("`pr-review`");
+    expect(r).not.toContain("before your first change");
   });
 });

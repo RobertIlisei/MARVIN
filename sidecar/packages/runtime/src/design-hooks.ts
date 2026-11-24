@@ -62,7 +62,7 @@ import { hasSeededPlan, seededOpenSteps } from "./plan-seed";
 import { readPlanState } from "./plan-state";
 import { PROJECT_SKILLS_PLUGIN } from "./project-skills-plugin";
 import { slugifyWorkDir } from "./projects";
-import { normaliseSkillName, noteSkillRun } from "./skill-brief";
+import { normaliseSkillName, noteSkillFirstBlock, noteSkillRun, skillsFirstFacts } from "./skill-brief";
 
 /**
  * Hooks only ever return a deny PermissionResult (or null). We narrow the
@@ -1404,6 +1404,7 @@ export function makeDesignHooksPreToolUse(args: {
       toolName: evt.tool_name,
       toolInput: safeInput,
       mode,
+      ...(agentId ? { agentId } : {}),
     });
     if (designDeny) {
       // Observability (ADR-0060 follow-up). NOTE: `appendAutoAuditEntry` early-
@@ -1521,6 +1522,8 @@ export function runDesignHooks(args: {
   toolName: string;
   toolInput: Record<string, unknown>;
   mode: DesignHooksMode;
+  /** The SDK `agent_id` of a subagent's call; absent for the session's own. */
+  agentId?: string;
 }): DesignHookDeny | null {
   const { ctx, toolName, toolInput, mode } = args;
   if (mode === "off") return null;
@@ -1723,6 +1726,30 @@ export function runDesignHooks(args: {
       logDesignHookEvent({ kind: "plan.spine.deny", turnId: ctx.turnId, tool: toolName });
       const out = applyGate("builtin:plan-spine", spineGate, spineDeny, () => {
         if (spineGate.tier === "deny") ctx.planSpineDenies += 1;
+      });
+      if (out) return out;
+    }
+  }
+
+  // Hook 3d — ADR-0138 addendum: the start skills the brief marked `first` run
+  // before the session's first change. Native `deny`, ADR-0104's brake counted
+  // on the session meta (two refusals a session, across turns and restarts);
+  // a subagent's calls keep their own rules.
+  const firstGate = gateOf("builtin:skills-first");
+  const firstDeny = firstGate.off || firstGate.tier === "prompt" || args.agentId ? null : checkSkillsFirst(ctx, toolName, toolInput);
+  if (firstDeny) {
+    const names = firstDeny.names.join(",");
+    if (mode === "measure") {
+      logDesignHookEvent({ kind: "skills.first.measured", turnId: ctx.turnId, tool: toolName, skills: names });
+    } else if (firstDeny.blocks >= (firstGate.tier === "deny" ? BUILTIN_GATE_MAX_DENIES : 1)) {
+      if (firstGate.tier === "deny") {
+        logDesignHookEvent({ kind: "skills.first.bypass", turnId: ctx.turnId, tool: toolName, skills: names, denies: firstDeny.blocks });
+        notePracticeRuleFired("builtin:skills-first", "bypass");
+      }
+    } else {
+      const out = applyGate("builtin:skills-first", firstGate, firstDeny.deny, () => {
+        if (ctx.spineSession) noteSkillFirstBlock(ctx.spineSession.projectId, ctx.spineSession.sessionId);
+        logDesignHookEvent({ kind: "skills.first.block", turnId: ctx.turnId, tool: toolName, skills: names, tier: firstGate.tier });
       });
       if (out) return out;
     }
@@ -2283,6 +2310,56 @@ export function checkPlanSpine(
       `(MARVIN_DESIGN_HOOKS=measure logs instead of denying; after ${BUILTIN_GATE_MAX_DENIES} refusals in one turn ` +
       "the commit is allowed and the bypass logged.)",
     interrupt: false,
+  };
+}
+
+/**
+ * ADR-0138 addendum — refuse the session's first change while a start skill
+ * (one the brief marked `first`) has not run: an Edit / Write / NotebookEdit
+ * on a file inside the session's checkout, and a `git commit`. Everything that
+ * only looks (reads, searches, graph calls, TodoWrite, Skill itself, memory and
+ * backlog tools) passes. A start skill the project cannot invoke is not asked
+ * for, and a session with no start skill is never touched. Reads the session
+ * meta on a mutating call only. Exported for tests.
+ */
+export function checkSkillsFirst(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): { deny: DesignHookDeny; names: string[]; blocks: number } | null {
+  if (!ctx.spineSession) return null;
+  let what: string;
+  if (toolName === "Edit" || toolName === "Write" || toolName === "NotebookEdit" || toolName === "MultiEdit") {
+    const p = pickPath(toolInput, ["file_path", "notebook_path", "path"]);
+    if (!p || !isInsideCwd(ctx.sessionCwd, p)) return null;
+    what = `${toolName} on ${repoRelativePath(ctx.sessionCwd, p)}`;
+  } else if (toolName === "Bash") {
+    const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+    if (!parseCommitCommand(cmd)) return null;
+    what = "this commit";
+  } else {
+    return null;
+  }
+  let facts: ReturnType<typeof skillsFirstFacts> = null;
+  try {
+    facts = skillsFirstFacts(ctx.spineSession.projectId, ctx.spineSession.sessionId, ctx.cwd);
+  } catch {
+    /* the skill record must never break a tool call */
+  }
+  if (!facts) return null;
+  const list = facts.missing.map((n) => `\`${n}\``).join(" and ");
+  return {
+    names: facts.missing,
+    blocks: facts.blocks,
+    deny: {
+      behavior: "deny",
+      message:
+        `skills-first gate (ADR-0138): the brief marks ${facts.missing.length === 1 ? "a skill" : "skills"} to run before the first change, and ${what} would be that change. ` +
+        `Run ${facts.missing.map((n) => `\`Skill { skill: "${n}" }\``).join(" and ")} now, act on what ${facts.missing.length === 1 ? "it says" : "they say"}, then retry: ${list}. ` +
+        "Reads, searches and the graph are not affected. " +
+        `(MARVIN_DESIGN_HOOKS=measure logs instead of denying; after ${BUILTIN_GATE_MAX_DENIES} refusals in a session the call is allowed and the bypass logged.)`,
+      interrupt: false,
+    },
   };
 }
 

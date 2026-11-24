@@ -215,16 +215,21 @@ describe("buildSessionWatch", () => {
   it("a row's skills carry what the brief named, what ran and what is missing (ADR-0138); null without a list", async () => {
     upsertSessionMeta(projectId, "skills-sess", { workDir: repo, tree: { mode: "shared" }, posture });
     updateSessionMeta(projectId, "skills-sess", {
-      skills: { required: ["ponytail", "pr-review", "ponytail-review"], seededAt: "2026-11-24T08:00:00.000Z" },
+      skills: { required: ["ponytail", "pr-review", "ponytail-review"], first: ["ponytail"], seededAt: "2026-11-24T08:00:00.000Z" },
       skillsRun: ["pr-review", "ux-review"],
     });
+    // A meta seeded before start skills existed has no `first`: the row says none.
+    upsertSessionMeta(projectId, "old-skills-sess", { workDir: repo, tree: { mode: "shared" }, posture });
+    updateSessionMeta(projectId, "old-skills-sess", { skills: { required: ["ponytail"], seededAt: "2026-11-24T08:00:00.000Z" } });
     upsertSessionMeta(projectId, "no-skills-sess", { workDir: repo, tree: { mode: "shared" }, posture });
-    const rows = await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["skills-sess", "no-skills-sess"] });
+    const rows = await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["skills-sess", "no-skills-sess", "old-skills-sess"] });
     expect(rows.find((r) => r.marvinSessionId === "skills-sess")!.skills).toEqual({
       required: ["ponytail", "pr-review", "ponytail-review"],
       used: ["pr-review"],
       missing: ["ponytail", "ponytail-review"],
+      first: ["ponytail"],
     });
+    expect(rows.find((r) => r.marvinSessionId === "old-skills-sess")!.skills?.first).toEqual([]);
     expect(rows.find((r) => r.marvinSessionId === "no-skills-sess")!.skills).toBeNull();
   });
 
