@@ -37,7 +37,8 @@ import SwiftUI
     private var label: String {
         switch mode {
         case .worktree:
-            if let branch = entry?.tree?.branch, !branch.isEmpty { return "own branch · \(SessionTitle.humanised(branch: branch))" }
+            // S-05 — cut at a word with an ellipsis; the full branch is in the tooltip.
+            if let branch = entry?.tree?.branch, !branch.isEmpty { return ChipText.fit("own branch · \(SessionTitle.humanised(branch: branch))", maxLength: 40) }
             return "own branch · pending"
         case .shared:
             let lane = entry?.tree?.lane ?? []
@@ -55,7 +56,7 @@ import SwiftUI
                 Text(label)
                     .font(.system(size: 10.5))
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
             }
             .padding(.horizontal, 7)
             .padding(.vertical, 3)

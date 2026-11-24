@@ -775,8 +775,26 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
     /// rather than the derived state so the label tracks what the
     /// renderer is actually drawing. After the spark settles, it
     /// reads the rawValue of the active state same as before.
+    ///
+    /// S-02 / R2-06 — the word agrees with the Sessions pane. The orb used to
+    /// say "idle" for a tab that waits on a job, because the brain only knows
+    /// whether a turn is streaming. For every state the derived row state knows
+    /// better (waiting, needs you, finished, failed, cut off) its wording wins;
+    /// while the tab works, the brain's own word (thinking / tool / writing) is
+    /// the honest one. The orb is off by default now; the chat header carries a
+    /// small state dot driven by the same row state.
     private var captionLabel: String {
-        bootSettled ? state.rawValue : "boot"
+        guard bootSettled else { return "boot" }
+        guard let sid = ChatPreviewModel.shared.loadedSessionId else { return state.rawValue }
+        let registry = SessionRegistry.shared
+        let entry = registry.entry(sid)
+        return ChatHeaderState.orbCaption(
+            row: registry.rowState(sid),
+            brainName: state.rawValue,
+            waitLabel: entry?.waitingOn.map { SessionWait.label(kind: $0.kind, label: $0.label) },
+            waitingSince: entry?.waitSince,
+            now: registry.now
+        )
     }
 
     var body: some View {
