@@ -85,6 +85,7 @@ import SwiftUI
                     // its own glyph.
                     needsYouSection
                     section("Working", rows(where: { $0 == .working }), tint: GitDecorationColor.modified)
+                    finishedSection
                     waitingSection
                     integrateSection
                     idleSection
@@ -330,6 +331,20 @@ import SwiftUI
                 ForEach(items.sorted { $0.state.sortRank < $1.state.sortRank }) { row in
                     sessionRow(row)
                 }
+            }
+        }
+    }
+
+    /// W-08 — a turn that ended with a result and has not been looked at stays
+    /// here until it has (selecting the tab counts), then follows the idle rules.
+    /// The one that has been waiting for a review longest comes first.
+    @ViewBuilder
+    private var finishedSection: some View {
+        let finished = SessionWait.oldestFirst(rows(where: { $0 == .finished })) { $0.entry.lastTurnAt }
+        if !finished.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                sectionHeader("Finished", count: finished.count, tint: Color.accentColor)
+                ForEach(finished) { row in sessionRow(row) }
             }
         }
     }
@@ -689,6 +704,10 @@ import SwiftUI
                 .accessibilityLabel(longWait ? "Waiting for a long time" : "Waiting")
         case .done:
             Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 10)
+        case .finished:
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 10)
+                .accessibilityLabel("Finished, not reviewed")
         case .idle, .draft:
             Circle().fill(ChatPreviewView.tabTint(state)).frame(width: 6, height: 6).frame(width: 10)
         }
@@ -785,6 +804,9 @@ import SwiftUI
             smallAction("Resume", role: .neutral) { Task { await registry.resume(row.id) } }
         case .failed:
             smallAction("Open", role: .neutral) { supervisor.showTab(row.id) }
+        case .finished:
+            smallAction("Reviewed", role: .neutral) { registry.markReviewed(row.id) }
+                .help("Mark this as looked at. Opening the tab does the same.")
         case .waiting, .done, .idle, .draft:
             EmptyView()
         }
@@ -852,7 +874,7 @@ import SwiftUI
         } else if state == .waiting {
             // The wait itself is the row's own line (`waitLine`); the facts line only follows on.
             if let at = e.lastTurnAt { parts.append("last turn " + elapsed(at) + " ago") }
-        } else if state == .done {
+        } else if state == .done || state == .finished {
             parts.append(e.lastTurnAt.map { "Done · \(elapsed($0)) ago" } ?? "Done")
         } else if e.isLive, let since = e.liveSince {
             parts.append("\(e.activityLabel ?? "running") \(elapsed(since))")

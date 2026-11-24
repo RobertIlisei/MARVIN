@@ -3170,6 +3170,12 @@ final class ChatPreviewModel {
                         Image(systemName: "xmark")
                             .font(.system(size: 8, weight: .bold))
                             .foregroundStyle(GitDecorationColor.deleted)
+                    } else if state == .finished {
+                        // W-08 — a result nobody has looked at: filled, in the accent hue.
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Self.tabTint(state))
+                            .accessibilityLabel("Finished, not reviewed")
                     } else if state == .done {
                         // ADR-0130 — a neutral glyph; the outcome hues stay with outcomes.
                         Image(systemName: "checkmark")
@@ -3287,6 +3293,8 @@ final class ChatPreviewModel {
         // the pane tells these two apart by glyph, the dot by shade.
         case .waiting: return .secondary
         case .done: return MarvinTheme.textMuted
+        // W-08 — calm, not an outcome hue, but not grey: it is waiting for a look.
+        case .finished: return Color.accentColor
         case .idle: return MarvinTheme.textMuted
         case .draft: return .secondary
         }

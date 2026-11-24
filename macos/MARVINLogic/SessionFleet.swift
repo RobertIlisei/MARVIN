@@ -12,8 +12,11 @@ public struct FleetCounts: Equatable, Sendable {
     public let waiting: Int
     /// Sessions (not confirms) that wait on an answer from the person.
     public let needsYou: Int
-    public init(total: Int, working: Int, waiting: Int, needsYou: Int) {
+    /// W-08 — turns that ended with a result and have not been looked at.
+    public let finished: Int
+    public init(total: Int, working: Int, waiting: Int, needsYou: Int, finished: Int = 0) {
         self.total = total; self.working = working; self.waiting = waiting; self.needsYou = needsYou
+        self.finished = finished
     }
 }
 
@@ -22,23 +25,24 @@ public enum SessionFleet {
     /// NOT counted as needing you: they are history with a Resume chip, and a
     /// stale error would keep the rail badge lit for days.
     public static func counts(_ states: [SessionRowState]) -> FleetCounts {
-        var working = 0, waiting = 0, needsYou = 0
+        var working = 0, waiting = 0, needsYou = 0, finished = 0
         for s in states {
             switch s {
             case .working: working += 1
             case .waiting: waiting += 1
             case .needsYou: needsYou += 1
+            case .finished: finished += 1
             default: break
             }
         }
-        return FleetCounts(total: states.count, working: working, waiting: waiting, needsYou: needsYou)
+        return FleetCounts(total: states.count, working: working, waiting: waiting, needsYou: needsYou, finished: finished)
     }
 
     /// How much the status-bar segment says. The bar drops detail before it
     /// drops any other segment.
     public enum Detail: Sendable { case full, compact, minimal }
 
-    /// "11 tabs · 2 working · 5 waiting · 1 needs you"; zero parts vanish.
+    /// "11 tabs · 2 working · 5 waiting · 1 needs you · 2 finished"; zero parts vanish.
     /// Empty string means "show nothing".
     public static func summary(_ c: FleetCounts, detail: Detail) -> String {
         guard c.total > 0 else { return "" }
@@ -46,6 +50,7 @@ public enum SessionFleet {
         if c.working > 0 { parts.append("\(c.working) working") }
         if c.waiting > 0 { parts.append("\(c.waiting) waiting") }
         if c.needsYou > 0 { parts.append("\(c.needsYou) needs you") }
+        if c.finished > 0 { parts.append("\(c.finished) finished") }
         let tabs = "\(c.total) tab\(c.total == 1 ? "" : "s")"
         switch detail {
         case .full:

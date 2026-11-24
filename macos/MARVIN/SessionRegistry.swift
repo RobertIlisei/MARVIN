@@ -51,6 +51,7 @@ final class SessionRegistry {
         stop()
         projectId = pid
         loadOpenTabs(projectId: pid)
+        loadReviewed(projectId: pid)
         for id in openTabs { ledger.ensure(id) }
         refreshSnapshot()
         ensureFeed(projectId: pid)
@@ -69,6 +70,7 @@ final class SessionRegistry {
         projectId = nil
         openTabs = []
         draftIds.removeAll()
+        reviewedAt = [:]
         ledger = SessionLedger()
     }
 
@@ -78,7 +80,39 @@ final class SessionRegistry {
 
     func rowState(_ id: String) -> SessionRowState {
         guard let e = ledger[id] else { return draftIds.contains(id) ? .draft : .idle }
-        return SessionRowStateDeriver.derive(e)
+        return SessionRowStateDeriver.derive(e, unreviewed: isUnreviewed(e))
+    }
+
+    // MARK: - Finished, not yet reviewed (W-08)
+
+    /// When the person last looked at each tab. Persisted per project beside
+    /// the tab set (`marvin.reviewed.<pid>`): a restart must not turn every
+    /// tab back into "not looked at".
+    private(set) var reviewedAt: [String: Date] = [:]
+    /// When the rule first ran for this project: turns that ended before it
+    /// are not asked for a review (see `FinishedReview.isUnreviewed`).
+    private var reviewBaseline = Date()
+
+    /// The tab on screen is being looked at, so it is never "unreviewed".
+    private func isUnreviewed(_ e: SessionEntry) -> Bool {
+        if e.id == MarvinBridge.shared.activeMarvinSessionId { return false }
+        return FinishedReview.isUnreviewed(lastTurnAt: e.lastTurnAt, reviewedAt: reviewedAt[e.id], baseline: reviewBaseline)
+    }
+
+    /// Record that the person has seen the tab as it is now.
+    func markReviewed(_ id: String) {
+        guard projectId != nil else { return }
+        let seen = max(Date(), ledger[id]?.lastTurnAt ?? .distantPast)
+        guard reviewedAt[id].map({ $0 < seen }) ?? true else { return }
+        reviewedAt[id] = seen
+        persistReviewed()
+    }
+
+    /// Selection moved: the tab being left was seen up to now, the one
+    /// arrived at is seen now. Called from the one funnel the bridge has.
+    func noteSelection(from previous: String?, to next: String?) {
+        if let previous { markReviewed(previous) }
+        if let next { markReviewed(next) }
     }
 
     /// Confirms and questions waiting on the user, across every session.
@@ -504,6 +538,28 @@ final class SessionRegistry {
         if r.writeNewKey { d.set(r.tabs, forKey: Self.chatTabsKey(pid)) }
         if r.removeLegacyKey { d.removeObject(forKey: Self.legacyKey(pid)) }
         openTabs = r.tabs
+    }
+
+    private static func reviewedKey(_ pid: String) -> String { "marvin.reviewed.\(pid)" }
+    private static func reviewBaselineKey(_ pid: String) -> String { "marvin.reviewedBaseline.\(pid)" }
+
+    private func loadReviewed(projectId pid: String) {
+        let d = UserDefaults.standard
+        if let stored = d.object(forKey: Self.reviewBaselineKey(pid)) as? Double {
+            reviewBaseline = Date(timeIntervalSince1970: stored)
+        } else {
+            // First run of the rule for this project: everything that has
+            // already ended counts as seen.
+            reviewBaseline = Date()
+            d.set(reviewBaseline.timeIntervalSince1970, forKey: Self.reviewBaselineKey(pid))
+        }
+        let stored = d.dictionary(forKey: Self.reviewedKey(pid)) as? [String: Double] ?? [:]
+        reviewedAt = stored.mapValues { Date(timeIntervalSince1970: $0) }
+    }
+
+    private func persistReviewed() {
+        guard let pid = projectId else { return }
+        UserDefaults.standard.set(reviewedAt.mapValues(\.timeIntervalSince1970), forKey: Self.reviewedKey(pid))
     }
 
     private func persistOpenTabs() {

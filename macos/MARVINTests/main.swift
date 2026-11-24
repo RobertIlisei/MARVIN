@@ -6112,6 +6112,56 @@ runner.suite("supervisor-queue") {
     }
 }
 
+runner.suite("session-finished-review") {
+    func entry(_ f: (inout SessionEntry) -> Void) -> SessionEntry { var e = SessionEntry(id: "s"); f(&e); return e }
+    let t0 = Date(timeIntervalSince1970: 1_000_000)
+    runner.test("an unreviewed turn that ended with a result is finished; once reviewed it is done or idle as before") {
+        let scopeMet = entry { $0.isDone = true; $0.lastOutcome = .completed }
+        runner.expect(SessionRowStateDeriver.derive(scopeMet, unreviewed: true), equals: SessionRowState.finished, "scope met, unreviewed")
+        runner.expect(SessionRowStateDeriver.derive(scopeMet, unreviewed: false), equals: SessionRowState.done, "scope met, reviewed")
+        let plain = entry { $0.lastOutcome = .completed }
+        runner.expect(SessionRowStateDeriver.derive(plain, unreviewed: true), equals: SessionRowState.finished, "a completed turn is a result too")
+        runner.expect(SessionRowStateDeriver.derive(plain, unreviewed: false), equals: SessionRowState.idle, "reviewed, idle")
+        runner.expect(SessionRowStateDeriver.derive(plain), equals: SessionRowState.idle, "the default asks for nothing new")
+    }
+    runner.test("everything with its own action outranks finished, and a stopped turn is not a result") {
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .completed; $0.liveTurnId = "t" }, unreviewed: true), equals: SessionRowState.working, "live")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .completed; $0.waitingOn = .init(kind: "job") }, unreviewed: true), equals: SessionRowState.waiting, "waiting")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .error }, unreviewed: true), equals: SessionRowState.failed, "failed")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .error; $0.interrupted = true }, unreviewed: true), equals: SessionRowState.interrupted, "interrupted")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .completed; $0.attention = .init(kind: "prose-question", excerpt: "?") }, unreviewed: true), equals: SessionRowState.needsYou(1), "a question")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .cancelled }, unreviewed: true), equals: SessionRowState.idle, "Stop is not a result")
+        runner.expect(SessionRowStateDeriver.derive(entry { _ in }, unreviewed: true), equals: SessionRowState.idle, "nothing ever ran")
+    }
+    runner.test("finished sorts after failed and before waiting, and never folds into the idle group") {
+        let ranks = [SessionRowState.done, .idle, .waiting, .finished, .failed].sorted { $0.sortRank < $1.sortRank }
+        runner.expect(ranks == [.failed, .finished, .waiting, .idle, .done], "ordering")
+        runner.expect(!SessionRowState.finished.isIdle, "not idle")
+        let now = Date(timeIntervalSince1970: 10_000)
+        let rows = (0..<6).map { SessionIdleCollapse.Row(id: "f\($0)", state: .finished, idleSince: now.addingTimeInterval(-9_999)) }
+        runner.expect(SessionIdleCollapse.partition(rows, selected: nil, now: now, expanded: false).collapsed.isEmpty, "six old finished rows all stay")
+    }
+    runner.test("the rule: a turn that ended after the last look, and after the feature began, is unreviewed") {
+        let base = t0
+        runner.expect(FinishedReview.isUnreviewed(lastTurnAt: t0.addingTimeInterval(60), reviewedAt: nil, baseline: base), "never looked")
+        runner.expect(!FinishedReview.isUnreviewed(lastTurnAt: t0.addingTimeInterval(60), reviewedAt: t0.addingTimeInterval(60), baseline: base), "looked at the moment it ended")
+        runner.expect(!FinishedReview.isUnreviewed(lastTurnAt: t0.addingTimeInterval(60), reviewedAt: t0.addingTimeInterval(500), baseline: base), "looked later")
+        runner.expect(FinishedReview.isUnreviewed(lastTurnAt: t0.addingTimeInterval(600), reviewedAt: t0.addingTimeInterval(500), baseline: base), "ended again after the look")
+        runner.expect(!FinishedReview.isUnreviewed(lastTurnAt: t0.addingTimeInterval(-3_600), reviewedAt: nil, baseline: base), "ended before this build: the owner has not been asked to review it")
+        runner.expect(!FinishedReview.isUnreviewed(lastTurnAt: t0, reviewedAt: nil, baseline: base), "at the baseline exactly counts as before")
+        runner.expect(!FinishedReview.isUnreviewed(lastTurnAt: nil, reviewedAt: nil, baseline: base), "no end time, no claim")
+    }
+    runner.test("the fleet counts finished tabs and says so, but the minimal form stays about what needs a person") {
+        let c = SessionFleet.counts([.finished, .finished, .working, .done])
+        runner.expect(c, equals: FleetCounts(total: 4, working: 1, waiting: 0, needsYou: 0, finished: 2), "counted")
+        runner.expect(SessionFleet.summary(c, detail: .full), equals: "4 tabs \u{B7} 1 working \u{B7} 2 finished", "full")
+        runner.expect(SessionFleet.summary(c, detail: .compact), equals: "1 working \u{B7} 2 finished", "compact")
+        runner.expect(SessionFleet.summary(c, detail: .minimal), equals: "", "minimal is silent unless someone is needed")
+        let all = FleetCounts(total: 9, working: 1, waiting: 3, needsYou: 1, finished: 2)
+        runner.expect(SessionFleet.summary(all, detail: .full), equals: "9 tabs \u{B7} 1 working \u{B7} 3 waiting \u{B7} 1 needs you \u{B7} 2 finished", "everything, in the order of urgency")
+    }
+}
+
 runner.suite("session-fleet") {
     let now = Date(timeIntervalSince1970: 2_000_000)
     func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }

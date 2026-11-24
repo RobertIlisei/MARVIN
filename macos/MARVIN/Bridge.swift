@@ -674,7 +674,10 @@ final class MarvinBridge {
 
     func setActiveMarvinSession(_ id: String?) {
         guard activeMarvinSessionId != id else { return }
+        let previous = activeMarvinSessionId
         activeMarvinSessionId = id
+        // W-08 — looking at a tab is what reviews it; the one left was seen up to now.
+        SessionRegistry.shared.noteSelection(from: previous, to: id)
         // ADR-0108 — the posture fields below describe the session ON SCREEN,
         // so switching tabs swaps them. Done here rather than at the four
         // call sites because a tab switch that forgot to re-read the posture

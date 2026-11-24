@@ -20,6 +20,9 @@ public enum SessionRowState: Equatable, Sendable {
     case waiting
     /// ADR-0130 — not live, nothing pending, the last turn closed scope-met.
     case done
+    /// W-08 — the last turn ended with a result (scope met, or completed) and
+    /// the person has not looked at the tab since.
+    case finished
     case idle
     case draft
 
@@ -30,10 +33,11 @@ public enum SessionRowState: Equatable, Sendable {
         case .working: return 1
         case .interrupted: return 2
         case .failed: return 3
-        case .waiting: return 4
-        case .idle: return 5
-        case .done: return 6
-        case .draft: return 7
+        case .finished: return 4
+        case .waiting: return 5
+        case .idle: return 6
+        case .done: return 7
+        case .draft: return 8
         }
     }
 
@@ -42,12 +46,14 @@ public enum SessionRowState: Equatable, Sendable {
 }
 
 public enum SessionRowStateDeriver {
-    public static func derive(_ e: SessionEntry) -> SessionRowState {
+    public static func derive(_ e: SessionEntry, unreviewed: Bool = false) -> SessionRowState {
         if e.needsYou > 0 { return .needsYou(e.needsYou) }
         if e.isLive { return .working }
         if e.interrupted { return .interrupted }
         if e.lastOutcome == .error { return .failed }
         if e.waitingOn != nil { return .waiting }
+        // W-08 — a result nobody has looked at yet. A Stop is not a result.
+        if unreviewed, e.isDone || e.lastOutcome == .completed { return .finished }
         if e.isDone { return .done }
         if e.isDraft && e.lastOutcome == nil { return .draft }
         return .idle
