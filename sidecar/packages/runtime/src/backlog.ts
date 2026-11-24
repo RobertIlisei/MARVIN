@@ -50,8 +50,11 @@ export function bodyLimitError(body: string): string | null {
 /** Open+doing rail — a guard against a runaway queue, not a workload
  *  target. Raised 50 → 200 (2026-07-08): a real project hit 50 through
  *  ordinary capture-at-discovery use; the rail exists to stop a model
- *  auto-parking in a loop, not to force curation on the user. */
-export const MAX_OPEN_ITEMS = 200;
+ *  auto-parking in a loop, not to force curation on the user.
+ *  Raised 200 → 500 (2026-11-18): the same project sat at 200 with every item
+ *  groomed twice in two days, and three grooming sessions had to write 88 real
+ *  follow-ups as notes on other items because `backlog_add` refused them. */
+export const MAX_OPEN_ITEMS = 500;
 
 // `provisional` (ADR-0047) is the pre-`open` stage: an item auto-captured the
 // moment it was noticed in flight, awaiting the user's keep (→ open) / dismiss
