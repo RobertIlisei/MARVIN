@@ -161,7 +161,8 @@ public struct TabNotificationPlanner {
             return before == .working ? .failed : nil
         case .interrupted:
             return before == .working ? .interrupted : nil
-        case .done, .idle:
+        case .done, .idle, .finished:
+            // `.finished` is the row state of a completed turn nobody has looked at yet (W-08); same event.
             // The user pressing Stop is `.cancelled`: not a result, not a finish.
             return before == .working && tab.outcome == .completed ? .finished : nil
         case .working, .waiting, .draft:
@@ -174,7 +175,7 @@ public struct TabNotificationPlanner {
         case (.needsYou, .needsYou): return true
         case (.failed, .failed): return true
         case (.interrupted, .interrupted): return true
-        case (.finished, .done), (.finished, .idle): return true
+        case (.finished, .done), (.finished, .idle), (.finished, .finished): return true
         default: return false
         }
     }

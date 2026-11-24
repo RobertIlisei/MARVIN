@@ -500,6 +500,12 @@ runner.suite("tab-notifications (N-01)") {
         runner.expect(out.first?.body, equals: "Finished: scope met", "body")
         runner.expect(out.first?.tabIds, equals: ["a"], "the click target")
     }
+    runner.test("a finished tab nobody has looked at yet (W-08 row state) is still announced as finished") {
+        var p = TabNotificationPlanner()
+        let out = settle(&p, [tab("a", .working, title: "fix login")], [tab("a", .finished, outcome: .completed, title: "fix login")])
+        runner.expect(out.count, equals: 1, "the unreviewed-finished state does not swallow the notification")
+        runner.expect(out.first?.kind, equals: .finished, "kind")
+    }
     runner.test("a turn that ended without scope-met says it finished its turn") {
         var p = TabNotificationPlanner()
         let out = settle(&p, [tab("a", .working)], [tab("a", .idle, outcome: .completed)])
