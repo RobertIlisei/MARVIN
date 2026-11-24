@@ -398,9 +398,15 @@ export function recordAllowedTool(
   // ADR-0104 — the two events the ship-review gate reasons about: a review
   // skill ran, or a commit went through. Keyed on the working tree, not the
   // turn, because "has this diff been reviewed" is a property of the tree.
+  // The tree is the SESSION's checkout (`sessionCwd`): a tab's worktree, or the
+  // project root for a shared tab. Until v1.1.2 this and the diff below read
+  // `ctx.cwd`, the project root, so a tab's commit was judged on whatever was
+  // staged in the main checkout (a merge in flight there: 50 files and another
+  // tab's migration for a one-file docs commit), and one tab's review covered
+  // every other tab's commit.
   const reviewSkill = shipReviewSkillOf(toolName, toolInput);
   if (reviewSkill) {
-    shipReviewTreeState(ctx.cwd).reviews[reviewSkill] = { seq: nextShipSeq(), turnId: ctx.turnId };
+    shipReviewTreeState(ctx.sessionCwd).reviews[reviewSkill] = { seq: nextShipSeq(), turnId: ctx.turnId };
     return;
   }
   // ADR-0124 D — the two events the plan-spine gate orders: a list update and
@@ -412,7 +418,7 @@ export function recordAllowedTool(
   if (toolName === "Bash") {
     const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
     if (parseCommitCommand(cmd)) {
-      shipReviewTreeState(ctx.cwd).lastCommit = { seq: nextShipSeq(), turnId: ctx.turnId };
+      shipReviewTreeState(ctx.sessionCwd).lastCommit = { seq: nextShipSeq(), turnId: ctx.turnId };
       if (ctx.spineSession) {
         const st = spineCommitState(ctx.spineSession);
         st.commits += 1;
@@ -1758,7 +1764,7 @@ export function checkPracticeRules(
         editedFiles: ctx.editedFilesThisTurn.size,
       },
       hasSkillRun: (skill) => {
-        const st = shipReviewByTree.get(ctx.cwd);
+        const st = shipReviewByTree.get(ctx.sessionCwd);
         const mark = st?.reviews[skill as ShipReviewSkill];
         if (!mark) return false;
         return mark.turnId === ctx.turnId || !st?.lastCommit || mark.seq > st.lastCommit.seq;
@@ -1767,7 +1773,7 @@ export function checkPracticeRules(
         const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
         const parsed = parseCommitCommand(cmd);
         if (!parsed) return false;
-        const diff = collectCommitDiff(ctx.cwd, parsed);
+        const diff = collectCommitDiff(ctx.sessionCwd, parsed);
         if (!diff) return false;
         return classifyShipDiff(diff).some((n) => n.skill === "security-audit");
       },
@@ -2110,11 +2116,11 @@ export function checkShipReview(
   const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
   const parsed = parseCommitCommand(cmd);
   if (!parsed) return null;
-  const diff = collect(ctx.cwd, parsed);
+  const diff = collect(ctx.sessionCwd, parsed);
   if (!diff) return null;
   const needs = classifyShipDiff(diff);
   if (needs.length === 0) return null;
-  const st = shipReviewTreeState(ctx.cwd);
+  const st = shipReviewTreeState(ctx.sessionCwd);
   const unmet = needs.filter((n) => !shipReviewSatisfied(st, n.skill, ctx.turnId));
   if (unmet.length === 0) return null;
 
@@ -2266,7 +2272,7 @@ export function checkShipImpactRequired(
   const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
   const parsed = parseCommitCommand(cmd);
   if (!parsed) return null;
-  const diff = collect(ctx.cwd, parsed);
+  const diff = collect(ctx.sessionCwd, parsed);
   if (!diff) return null;
   if (classifyShipDiff(diff).length === 0) return null;
   if (ctx.shipImpactDenies >= SHIP_REVIEW_MAX_DENIES) {
@@ -2552,7 +2558,7 @@ export function checkNumberedCollision(
   if (!parsed) return null;
   let collisions;
   try {
-    const diff = collect(ctx.cwd, parsed);
+    const diff = collect(ctx.sessionCwd, parsed);
     if (!diff) return null;
     const added = diff.files.filter((f) => isNew(ctx.cwd, f));
     if (added.length === 0) return null;

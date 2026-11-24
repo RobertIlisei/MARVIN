@@ -1420,6 +1420,30 @@ describe("ship-review gate (ADR-0104)", () => {
     expect(checkShipReview(ctx, "Bash", { command: "git commit -m x" }, collect)).toBeNull();
   });
 
+  it("reads the commit's diff from the tab's own checkout, not the project root (a merge staged in the main checkout is not the tab's commit)", () => {
+    const tab = `${cwd}/.marvin/worktrees/tab-x`;
+    const ctx = createTurnDesignContext("t-1.1.2-a", cwd, { sessionCwd: tab });
+    const asked: string[] = [];
+    // The main checkout holds a staged merge that touches a migration; the tab's own index holds one Markdown file.
+    const collect = (dir: string) => {
+      asked.push(dir);
+      return dir === tab
+        ? { files: ["docs/handoff/note.md"], changedLines: 4 }
+        : { files: ["apps/api/src/main/resources/db/migration/V1__x.sql", ".env"], changedLines: 1229 };
+    };
+    expect(checkShipReview(ctx, "Bash", { command: "git commit -m docs" }, collect)).toBeNull();
+    expect(asked).toEqual([tab]);
+  });
+
+  it("keeps a review per checkout: one tab's review does not cover another tab's boundary commit", () => {
+    const a = createTurnDesignContext("t-1.1.2-b", cwd, { sessionCwd: `${cwd}/.marvin/worktrees/tab-a` });
+    const b = createTurnDesignContext("t-1.1.2-c", cwd, { sessionCwd: `${cwd}/.marvin/worktrees/tab-b` });
+    recordAllowedTool(a, "Skill", { skill: "security-audit" });
+    recordAllowedTool(a, "Skill", { skill: "pr-review" });
+    expect(checkShipReview(a, "Bash", { command: "git commit -m x" }, diffOf([".env"]))).toBeNull();
+    expect(checkShipReview(b, "Bash", { command: "git commit -m x" }, diffOf([".env"]))?.behavior).toBe("deny");
+  });
+
   it("fails open when the diff cannot be read, and ignores non-commit shell", () => {
     const ctx = createTurnDesignContext("t-0104-d", cwd);
     expect(checkShipReview(ctx, "Bash", { command: "git commit -m x" }, () => null)).toBeNull();
