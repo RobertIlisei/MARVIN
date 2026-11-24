@@ -6112,6 +6112,82 @@ runner.suite("supervisor-queue") {
     }
 }
 
+runner.suite("session-fleet") {
+    let now = Date(timeIntervalSince1970: 2_000_000)
+    func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
+
+    runner.test("counts are per derived state, and the total is every row") {
+        let c = SessionFleet.counts([.working, .waiting, .waiting, .needsYou(2), .idle, .done, .failed, .draft])
+        runner.expect(c, equals: FleetCounts(total: 8, working: 1, waiting: 2, needsYou: 1), "a session with two confirms is one session that needs you")
+        runner.expect(SessionFleet.counts([]), equals: FleetCounts(total: 0, working: 0, waiting: 0, needsYou: 0), "empty")
+    }
+    runner.test("the summary reads in full, drops zero parts, and degrades without cutting a word") {
+        let c = FleetCounts(total: 11, working: 2, waiting: 5, needsYou: 1)
+        runner.expect(SessionFleet.summary(c, detail: .full), equals: "11 tabs \u{B7} 2 working \u{B7} 5 waiting \u{B7} 1 needs you", "full")
+        runner.expect(SessionFleet.summary(c, detail: .compact), equals: "2 working \u{B7} 5 waiting \u{B7} 1 needs you", "compact drops the total")
+        runner.expect(SessionFleet.summary(c, detail: .minimal), equals: "1 needs you", "minimal is the one thing that needs a person")
+        let quiet = FleetCounts(total: 1, working: 0, waiting: 3, needsYou: 0)
+        runner.expect(SessionFleet.summary(quiet, detail: .full), equals: "1 tab \u{B7} 3 waiting", "zero parts vanish, one tab is singular")
+        runner.expect(SessionFleet.summary(quiet, detail: .minimal), equals: "3 waiting", "minimal falls back to waiting")
+        let idle = FleetCounts(total: 4, working: 0, waiting: 0, needsYou: 0)
+        runner.expect(SessionFleet.summary(idle, detail: .full), equals: "4 tabs", "all idle")
+        runner.expect(SessionFleet.summary(idle, detail: .compact), equals: "4 tabs", "compact never reads empty while tabs exist")
+        runner.expect(SessionFleet.summary(idle, detail: .minimal), equals: "", "minimal is silent when nothing needs anyone")
+        runner.expect(SessionFleet.summary(FleetCounts(total: 0, working: 0, waiting: 0, needsYou: 0), detail: .full), equals: "", "no tabs, no segment")
+    }
+    runner.test("a wait's duration is whole minutes, then hours, and never rounds up into a longer one") {
+        runner.expect(SessionWait.duration(since: ago(0.2), now: now), equals: "<1 min", "seconds")
+        runner.expect(SessionWait.duration(since: ago(46), now: now), equals: "46 min", "minutes")
+        runner.expect(SessionWait.duration(since: ago(59.9), now: now), equals: "59 min", "truncates, not rounds")
+        runner.expect(SessionWait.duration(since: ago(72), now: now), equals: "1 h 12 min", "hours and minutes")
+        runner.expect(SessionWait.duration(since: ago(120), now: now), equals: "2 h", "exact hours")
+        runner.expect(SessionWait.duration(since: ago(60 * 27), now: now), equals: "1 d 3 h", "days")
+        runner.expect(SessionWait.duration(since: now.addingTimeInterval(30), now: now), equals: "<1 min", "a clock that ran ahead is not negative")
+    }
+    runner.test("the label is the feed's own words, one line, with a plain fallback by kind") {
+        runner.expect(SessionWait.label(kind: "job", label: "  gated commit: lane width\n(step 1) "), equals: "gated commit: lane width (step 1)", "trimmed, one line")
+        runner.expect(SessionWait.label(kind: "job", label: nil), equals: "Waiting on a job", "no label, job")
+        runner.expect(SessionWait.label(kind: "wakeup", label: "   "), equals: "Waiting on a wakeup", "blank label, wakeup")
+        runner.expect(SessionWait.label(kind: "mystery", label: nil), equals: "Waiting", "an unknown kind says only what is known")
+    }
+    runner.test("a wait is long past the threshold, and one with no start time is never called long") {
+        runner.expect(!SessionWait.isLong(since: ago(14), now: now), "14 min is ordinary")
+        runner.expect(SessionWait.isLong(since: ago(15), now: now), "15 min is the line")
+        runner.expect(!SessionWait.isLong(since: nil, now: now), "unknown start")
+    }
+    runner.test("an entry is on a long wait only while it waits, from the feed's own start time") {
+        var e = SessionEntry(id: "s")
+        runner.expect(!e.isLongWait(now: now), "not waiting")
+        e.waitingOn = .init(kind: "job", label: "x", since: "1970-01-24T03:33:20.000Z")
+        runner.expect(e.waitSince, equals: SessionLedger.parseISO("1970-01-24T03:33:20.000Z"), "parsed start")
+        runner.expect(e.isLongWait(now: (e.waitSince ?? now).addingTimeInterval(16 * 60)), "16 minutes in")
+        runner.expect(!e.isLongWait(now: (e.waitSince ?? now).addingTimeInterval(60)), "1 minute in")
+    }
+    runner.test("oldest wait first; an unknown start goes last; ties keep their order") {
+        let items: [(id: String, since: Date?)] = [("a", ago(3)), ("b", nil), ("c", ago(46)), ("d", ago(3)), ("e", ago(20))]
+        runner.expect(SessionWait.oldestFirst(items, since: { $0.since }).map(\.id), equals: ["c", "e", "a", "d", "b"], "order")
+    }
+    // S-01 — the wait lives only in the snapshot; nothing in the feed restates it
+    // once a turn has come and gone, so a turn ending must trigger a re-read.
+    runner.test("a turn ending asks for a fresh snapshot; the other events do not") {
+        runner.expect(SessionLedger.restatesWait(after: .ended(sessionId: "s", turnId: "t", outcome: .completed, costUsd: nil)), "ended")
+        runner.expect(!SessionLedger.restatesWait(after: .registered(sessionId: "s", turnId: "t", kind: nil, startedAt: 0)), "registered clears the wait itself")
+        runner.expect(!SessionLedger.restatesWait(after: .activity(sessionId: "s", turnId: "t", state: .writing, tool: nil)), "activity")
+        runner.expect(!SessionLedger.restatesWait(after: .attached), "attached")
+    }
+    runner.test("S-01 as measured: a wait that a snapshot set is gone after one turn, until the next snapshot says it again") {
+        var l = SessionLedger()
+        let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"w","state":"waiting","waitingOn":{"kind":"job","label":"gated commit","since":"2026-11-24T18:22:30.489Z"}}]}"#.utf8))!
+        l.apply(snapshot: rows, now: Date())
+        runner.expect(SessionRowStateDeriver.derive(l["w"]!), equals: SessionRowState.waiting, "waiting after the snapshot")
+        l.apply(.registered(sessionId: "w", turnId: "t", kind: "wakeup", startedAt: 0), now: Date())
+        l.apply(.ended(sessionId: "w", turnId: "t", outcome: .completed, costUsd: nil), now: Date())
+        runner.expect(SessionRowStateDeriver.derive(l["w"]!), equals: SessionRowState.idle, "the feed alone leaves it idle (the bug)")
+        l.apply(snapshot: rows, now: Date())
+        runner.expect(SessionRowStateDeriver.derive(l["w"]!), equals: SessionRowState.waiting, "the re-read restores it")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

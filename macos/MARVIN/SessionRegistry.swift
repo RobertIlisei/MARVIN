@@ -63,6 +63,8 @@ final class SessionRegistry {
         feedTask = nil
         clockTask?.cancel()
         clockTask = nil
+        stateRefreshTask?.cancel()
+        stateRefreshTask = nil
         feedConnected = false
         projectId = nil
         openTabs = []
@@ -81,6 +83,19 @@ final class SessionRegistry {
 
     /// Confirms and questions waiting on the user, across every session.
     var needsYouCount: Int { ledger.needsYouCount }
+
+    /// Open tabs plus anything live that is not a tab — the sessions the
+    /// Sessions pane lists and the status bar counts (W-06).
+    var fleetSessionIds: [String] {
+        var ids = openTabs
+        for (id, e) in ledger.entries where e.isLive && !ids.contains(id) && e.closedAt == nil {
+            ids.append(id)
+        }
+        return ids
+    }
+
+    /// Working / waiting / needs-you / total over `fleetSessionIds`.
+    var fleet: FleetCounts { SessionFleet.counts(fleetSessionIds.map { rowState($0) }) }
 
     // MARK: - Tabs
 
@@ -143,6 +158,25 @@ final class SessionRegistry {
     // MARK: - Feed + snapshot
 
     func refreshSnapshot() {
+        refreshStates()
+        guard let pid = projectId else { return }
+        // ADR-0113 — what each tab holds in the backlog, for the row subtitle.
+        Task { @MainActor in
+            guard let cwd = MarvinBridge.shared.projectWorkDir,
+                  let items = try? await BacklogService.shared.fetch(workDir: cwd, status: "doing"),
+                  self.projectId == pid else { return }
+            var map: [String: [String]] = [:]
+            for i in items {
+                if let by = i.claimedBy, !by.isEmpty { map[by, default: []].append(i.title) }
+            }
+            self.claimsBySession = map
+        }
+    }
+
+    /// Re-read every open tab's row from the sidecar. A tab's wait (its job or
+    /// wakeup) exists only in this read — no feed event carries it — so it is
+    /// repeated when a turn ends and on a slow clock (S-01).
+    func refreshStates() {
         guard let pid = projectId else { return }
         let ids = openTabs
         Task { @MainActor in
@@ -162,17 +196,6 @@ final class SessionRegistry {
                     NativePrefs.shared.adoptPosture(wire, for: row.marvinSessionId)
                 }
             }
-        }
-        // ADR-0113 — what each tab holds in the backlog, for the row subtitle.
-        Task { @MainActor in
-            guard let cwd = MarvinBridge.shared.projectWorkDir,
-                  let items = try? await BacklogService.shared.fetch(workDir: cwd, status: "doing"),
-                  self.projectId == pid else { return }
-            var map: [String: [String]] = [:]
-            for i in items {
-                if let by = i.claimedBy, !by.isEmpty { map[by, default: []].append(i.title) }
-            }
-            self.claimsBySession = map
         }
     }
 
@@ -201,6 +224,8 @@ final class SessionRegistry {
                         // ADR-0127 M6 — a posture set through the API: re-read the
                         // rows now, so the toolbar shows it within this one event.
                         if case .posture = event { self.refreshSnapshot() }
+                        // S-01 — the wait a turn armed is known only from a snapshot.
+                        if SessionLedger.restatesWait(after: event) { self.scheduleStateRefresh() }
                         // ADR-0127 M6 — an answer from elsewhere (the API, the
                         // supervisor, this pane) closes the chat's sheet or card
                         // on this one event, with who answered.
@@ -222,10 +247,28 @@ final class SessionRegistry {
     private func ensureClock() {
         clockTask?.cancel()
         clockTask = Task { @MainActor [weak self] in
+            var ticks = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 self?.now = Date()
+                // A wait that ends with no turn (a cancelled job) or begins
+                // outside one has no event either; a minute is the worst lag.
+                ticks += 1
+                if ticks % 4 == 0 { self?.refreshStates() }
             }
+        }
+    }
+
+    private var stateRefreshTask: Task<Void, Never>?
+
+    /// Coalesce a burst of `ended` events (a merge train ends several tabs
+    /// together) into one read, a moment after the last.
+    private func scheduleStateRefresh() {
+        stateRefreshTask?.cancel()
+        stateRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.refreshStates()
         }
     }
 
