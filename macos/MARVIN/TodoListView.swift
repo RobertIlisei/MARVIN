@@ -64,6 +64,9 @@ import SwiftUI
     /// Height at the moment the current drag began — see `resizeGrip`.
     @State private var dragStartHeight: Double = 132
     @State private var dragging = false
+    /// R2-08 — a plan shows its first few steps; the rest are one click away.
+    @State private var showAllSteps = false
+    private static let stepCap = 5
 
     /// Tier 2 (plan-backed) vs tier 1 (bare task list). Drives every
     /// styling fork below so the two never read as the same artifact.
@@ -181,11 +184,22 @@ import SwiftUI
                         if let steps {
                             // Tier 2 — top-level steps, each with its nested
                             // sub-tasks indented beneath (ADR-0046).
-                            ForEach(steps) { step in
+                            // R2-08 — five rows, then "Show all N": a plan of eight
+                            // paragraphs read as a wall inside a scrolling card.
+                            ForEach(showAllSteps ? steps : Array(steps.prefix(Self.stepCap))) { step in
                                 row(TodoItem(content: step.content, status: step.status, activeForm: step.activeForm))
                                 ForEach(Array(step.subtasks.enumerated()), id: \.offset) { _, sub in
                                     row(sub, indent: true)
                                 }
+                            }
+                            if steps.count > Self.stepCap {
+                                Button(showAllSteps ? "Show fewer" : "Show all \(steps.count)") {
+                                    MarvinMotion.with(.easeOut(duration: 0.15)) { showAllSteps.toggle() }
+                                }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 10))
+                                .foregroundStyle(tint)
+                                .padding(.leading, 17)
                             }
                         } else {
                             ForEach(Array(todos.enumerated()), id: \.offset) { _, item in
@@ -269,7 +283,10 @@ import SwiftUI
         // Superseded (ADR-0106) reads like completed here — closed, struck
         // through, out of the way — with its own icon so it never passes as done.
         let completed = item.status == "completed" || item.status == TodoItem.superseded
-        let label = running ? (item.activeForm ?? item.content) : item.content
+        let full = running ? (item.activeForm ?? item.content) : item.content
+        // R2-08 — a step is an action: its lead, not the paragraph of the brief
+        // it came from. The whole text stays in the tooltip.
+        let label = PlanStepTitle.lead(full)
         return HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: statusIcon(item.status))
                 .font(.system(size: indent ? 10 : 11))
@@ -280,7 +297,8 @@ import SwiftUI
             Text(label)
                 .font(.system(size: indent ? 10 : 11, weight: running ? .semibold : .regular))
                 .foregroundStyle(completed ? .secondary : .primary)
-                .lineLimit(completed ? 2 : nil)
+                .lineLimit(2)
+                .help(full)
             Spacer(minLength: 0)
         }
         // Nested sub-tasks (ADR-0046) sit indented under their plan step.

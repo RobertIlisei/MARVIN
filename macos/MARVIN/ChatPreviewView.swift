@@ -2331,6 +2331,19 @@ final class ChatPreviewModel {
         if plan.terminalRunning { bits.append("terminal closed") }
         model.lastError = bits.isEmpty ? nil : "Stopped: " + bits.joined(separator: ", ") + "."
     }
+    /// R2-18 — the tab strip's scroll offset and viewport width, measured so a
+    /// selection scrolls only when the selected tab is not fully in view.
+    /// A plain reference, not `@State`: it is written on every scroll frame and
+    /// read once, at selection, so it must not re-evaluate this whole column.
+    private final class StripMetrics { var offset: CGFloat = 0; var viewport: CGFloat = 0 }
+    @State private var stripMetrics = StripMetrics()
+    private static let tabStripSpace = "marvin.chatTabStrip"
+    /// R2-05 — the status strip: the person's open/close (nil: the default the
+    /// column's height decides), the cards they flipped, and the measured
+    /// height of this column.
+    @State private var statusStripChoice: Bool? = nil
+    @State private var statusCardsFlipped: Set<ChatStatusKind> = []
+    @State private var columnHeight: CGFloat = 0
     /// ADR-0044 — backlog browser sheet.
     @State private var backlogPanelOpen = false
     @State private var plansPanelOpen = false
@@ -2424,6 +2437,16 @@ final class ChatPreviewModel {
         // ADR-0128 brief §12.1 — the pinned Supervisor tab replaces everything
         // below the strip; the chat model underneath stays loaded as it was.
         .frame(minWidth: 280, minHeight: 200)
+        // The column's own height, for the status strip's default. Measured on
+        // the column, never on the strip, so collapsing cannot change the answer.
+        // Quantised to 24 pt so a window drag re-evaluates this column only when
+        // the strip's default could actually change.
+        .onGeometryChange(for: CGFloat.self) { ($0.size.height / 24).rounded() * 24 } action: { columnHeight = $0 }
+        // A different tab is a different status: its own choice, not the last tab's.
+        .onChange(of: model.loadedSessionId) { _, _ in
+            statusStripChoice = nil
+            statusCardsFlipped = []
+        }
         .preferredColorScheme(bridge.preferredColorScheme)
         // Names the scope by count before anything dies. "Stop everything?"
         // is a question a user cannot answer — one of those jobs might be a
@@ -2884,11 +2907,26 @@ final class ChatPreviewModel {
                                 }
                             }
                             .padding(.horizontal, 8)
+                            .onGeometryChange(for: CGFloat.self) { -$0.frame(in: .named(Self.tabStripSpace)).minX } action: { stripMetrics.offset = $0 }
                         }
+                        // R2-18 — the strip moves only when the selected tab is not
+                        // fully in view, and by the least that brings it in. It used
+                        // to centre the tab, so a click slid the strip and a different
+                        // tab arrived under the pointer. The offset and viewport are
+                        // measured with `onGeometryChange` (no views inserted).
+                        .coordinateSpace(name: Self.tabStripSpace)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stripMetrics.viewport = $0 }
                         .onChange(of: model.loadedSessionId) { _, sid in
-                            guard let sid else { return }
-                            MarvinMotion.with(MarvinTheme.transition) {
-                                proxy.scrollTo(sid, anchor: .center)
+                            guard let sid, let index = ids.firstIndex(of: sid) else { return }
+                            switch TabStripScroll.reveal(
+                                index: index, tabWidth: tabWidth, spacing: TabStripLayout.spacing,
+                                leadingInset: 8, contentOffset: stripMetrics.offset, viewportWidth: stripMetrics.viewport
+                            ) {
+                            case .none: break
+                            case .leading:
+                                MarvinMotion.with(.easeOut(duration: 0.18)) { proxy.scrollTo(sid, anchor: .leading) }
+                            case .trailing:
+                                MarvinMotion.with(.easeOut(duration: 0.18)) { proxy.scrollTo(sid, anchor: .trailing) }
                             }
                         }
                     }
@@ -3234,7 +3272,7 @@ final class ChatPreviewModel {
               let e = SessionRegistry.shared.entry(sid) else { return title }
         var lines = [title]
         if let b = e.tree?.branch { lines.append(b) }
-        if let s = model.sessions.first(where: { $0.sessionId == sid }) { lines.append("last active \(friendlyDate(s.updatedAt))") }
+        if let s = model.sessions.first(where: { $0.sessionId == sid }) { lines.append("last active \(FriendlyDate.lastActive(s.updatedAt, now: SessionRegistry.shared.now))") }
         return lines.joined(separator: "\n")
     }
 
@@ -3319,23 +3357,22 @@ final class ChatPreviewModel {
         .accessibilityLabel("Open the tab that needs you: \(tabTitle(forSessionId: sid))")
     }
 
-    /// ADR-0107 — one tint per session state, shared with the Sessions pane.
+    /// ADR-0107 — one tint per session state, shared with the Sessions pane. The
+    /// rule (amber from `SessionWait.longAfter`, blue while a result is
+    /// unreviewed) lives in `TabStripGlyph`; this maps the tone to a colour.
     static func tabTint(_ state: SessionRowState, longWait: Bool = false) -> Color {
         // W-04 — amber (the pane's "attention" hue) once a wait is long.
         if state == .waiting, longWait { return .orange }
-        switch state {
-        case .needsYou: return .orange
+        switch TabStripGlyph.tone(state, waitingSince: nil, now: Date()) {
+        case .amber: return .orange
         case .working: return GitDecorationColor.modified
-        case .interrupted: return .orange
         case .failed: return GitDecorationColor.deleted
         // ADR-0130 — neutral on purpose: green/orange/red are outcome hues (DESIGN.md);
-        // the pane tells these two apart by glyph, the dot by shade.
-        case .waiting: return .secondary
-        case .done: return MarvinTheme.textMuted
+        // the pane tells waiting and done apart by glyph, the dot by shade.
+        case .neutral, .draft: return .secondary
+        case .muted: return MarvinTheme.textMuted
         // W-08 — calm, not an outcome hue, but not grey: it is waiting for a look.
-        case .finished: return Color.accentColor
-        case .idle: return MarvinTheme.textMuted
-        case .draft: return .secondary
+        case .blue: return Color.accentColor
         }
     }
 
@@ -3371,8 +3408,7 @@ final class ChatPreviewModel {
         return friendlyDate(s.updatedAt)
     }
 
-    /// Format a session-summary label: "M/D · 12 turns · first 60 chars".
-    /// Concise enough to fit the menu width even with long first-user
+    /// Format a session-summary label: "M/D · 12 turns · first 60 chars".    /// Concise enough to fit the menu width even with long first-user
     /// messages. We trim the user message at 60 chars (vs the wire's
     /// 120) because menu items get truncated anyway and the date +
     /// turn count carry most of the disambiguation value.
@@ -3386,17 +3422,11 @@ final class ChatPreviewModel {
         return Text("\(date) · \(s.turnCount)t · \(trimmed)")
     }
 
-    /// "M/D" or "M/D HH:mm" for an ISO timestamp. Falls through to
-    /// the raw string on parse failure (defensive — the route emits
-    /// strict ISO 8601 today). Today's sessions get the time so users
-    /// can disambiguate multiple same-day starts; older ones drop it.
+    /// "HH:mm" today, "M/d" before. The sidecar's timestamps carry fractional
+    /// seconds, which the old parser refused, so the tooltip printed the raw
+    /// string (R2-19); `FriendlyDate` reads both shapes.
     private func friendlyDate(_ iso: String) -> String {
-        let parser = ISO8601DateFormatter()
-        guard let date = parser.date(from: iso) else { return iso }
-        let cal = Calendar.current
-        let formatter = DateFormatter()
-        formatter.dateFormat = cal.isDateInToday(date) ? "HH:mm" : "M/d"
-        return formatter.string(from: date)
+        FriendlyDate.short(iso, now: SessionRegistry.shared.now)
     }
 
     private var confirmSheetPresented: Binding<Bool> {
@@ -3467,7 +3497,8 @@ final class ChatPreviewModel {
             state: pauseBanner,
             done: done,
             total: items.count,
-            next: next.map { $0.status == "in_progress" ? ($0.activeForm ?? $0.content) : $0.content },
+            // R2-08 — the step's lead, not the paragraph of the brief behind it.
+            next: next.map { PlanStepTitle.lead($0.status == "in_progress" ? ($0.activeForm ?? $0.content) : $0.content) },
             reviewDetail: pauseReviewDetail,
             continueDisabled: model.isSending,
             onContinue: { continuePlan() }
@@ -3754,14 +3785,33 @@ final class ChatPreviewModel {
     /// message log (no more "the plan is in front of the log"), and each
     /// active strip is its own divider-separated row so session controls, the
     /// plan checklist, and the changed-files review never read as one blob.
+    ///
+    /// R2-05 — what ASKS something of the person (a confirm, a plan to approve,
+    /// a decision, a cut-off turn, the scope-met bar) is a full card here and is
+    /// never folded; what only REPORTS state (the plan, a job being waited on,
+    /// files changed, the project backlog) folds into ONE line, `statusStrip`.
+    /// The rule is `ChatStatusStrip` (tested); this lays it out.
     @ViewBuilder
     private var statusTray: some View {
-        let rows = trayRows
-        if !rows.isEmpty {
+        let entries = trayEntries
+        let split = ChatStatusStrip.split(entries.map(\.item))
+        let cards = Dictionary(entries.map { ($0.item.kind, $0.card) }, uniquingKeysWith: { first, _ in first })
+        let queued = !model.queuedMessages.isEmpty
+        if !entries.isEmpty || queued {
             VStack(spacing: 0) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                    if index > 0 { MarvinDivider() }
-                    row
+                ForEach(Array(split.open.enumerated()), id: \.element.id) { index, item in
+                    if let card = cards[item.kind] {
+                        if index > 0 { MarvinDivider() }
+                        card
+                    }
+                }
+                if !split.open.isEmpty, !split.folded.isEmpty || queued { MarvinDivider() }
+                if !split.folded.isEmpty {
+                    statusStrip(split.folded, cards: cards)
+                }
+                if queued {
+                    if !split.folded.isEmpty { MarvinDivider() }
+                    queuedStrip
                 }
             }
             .background(MarvinTheme.background)
@@ -3770,6 +3820,107 @@ final class ChatPreviewModel {
                     .fill(MarvinTheme.border)
                     .frame(height: 1)
             }
+        }
+    }
+
+    /// The folded status items. Collapsed: one line in the items' own words.
+    /// Expanded: one row per item, each opening to its full card. It starts
+    /// collapsed once the stack would take a real share of the column
+    /// (`ChatStatusStrip.startsCollapsed`, judged on the column's height, which
+    /// the strip cannot change); the person's click always wins.
+    @ViewBuilder
+    private func statusStrip(_ folded: [ChatStatusItem], cards: [ChatStatusKind: AnyView]) -> some View {
+        let expanded = ChatStatusStrip.isExpanded(userChoice: statusStripChoice, columnHeight: columnHeight, foldedCount: folded.count)
+        let cardsOpenByDefault = !ChatStatusStrip.startsCollapsed(columnHeight: columnHeight, foldedCount: folded.count)
+        let attention = folded.contains { $0.attention }
+        // Room to spare and a single item: no strip at all, just its card, as
+        // before — a header and a row over one card would only repeat it.
+        if expanded, cardsOpenByDefault, folded.count == 1, let card = cards[folded[0].kind] {
+            card
+        } else {
+        VStack(spacing: 0) {
+            Button {
+                MarvinMotion.with(.easeOut(duration: 0.15)) { statusStripChoice = !expanded }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .frame(width: 10)
+                    Text(expanded ? "Status" : ChatStatusStrip.summary(folded))
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .foregroundStyle(attention && !expanded ? Color.orange : Color.secondary)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .frame(minHeight: 26)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(expanded ? "Hide the status details" : "Show the status details")
+            .accessibilityLabel("Tab status: \(ChatStatusStrip.summary(folded))")
+            .accessibilityHint(expanded ? "Collapses the status details" : "Expands the status details")
+            if expanded, cardsOpenByDefault {
+                // Room to spare: the cards, one after another.
+                ForEach(folded) { item in
+                    if let card = cards[item.kind] {
+                        MarvinDivider()
+                        card.transition(.opacity)
+                    }
+                }
+            } else if expanded {
+                // The person opened a collapsed strip: one row per item, each
+                // opening to its full card.
+                ForEach(folded) { item in
+                    let open = statusCardsFlipped.contains(item.kind)
+                    MarvinDivider()
+                    Button {
+                        MarvinMotion.with(.easeOut(duration: 0.15)) {
+                            if statusCardsFlipped.contains(item.kind) { statusCardsFlipped.remove(item.kind) }
+                            else { statusCardsFlipped.insert(item.kind) }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: Self.statusIcon(item.kind))
+                                .font(.system(size: 10))
+                                .frame(width: 14)
+                            Text(item.line)
+                                .font(.system(size: 11))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8, weight: .semibold))
+                                .rotationEffect(.degrees(open ? 180 : 0))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .foregroundStyle(item.attention ? Color.orange : Color.secondary)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 26)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(item.line)
+                    .accessibilityHint(open ? "Hides the details" : "Shows the details")
+                    if open, let card = cards[item.kind] {
+                        card.transition(.opacity)
+                    }
+                }
+            }
+        }
+        }
+    }
+
+    private static func statusIcon(_ kind: ChatStatusKind) -> String {
+        switch kind {
+        case .plan: return "checklist"
+        case .job: return "clock"
+        case .files: return "doc.badge.ellipsis"
+        case .backlog: return "tray.full"
+        case .resetArmed: return "arrow.counterclockwise"
+        default: return "circle"
         }
     }
 
@@ -3782,43 +3933,79 @@ final class ChatPreviewModel {
         )
     }
 
-    /// The active strips, in priority order, as type-erased rows.
-    private var trayRows: [AnyView] {
-        var rows: [AnyView] = []
+    /// One tray row: what the strip rule reads (`item`) and what it draws (`card`).
+    private struct TrayEntry {
+        let item: ChatStatusItem
+        let card: AnyView
+        init(_ kind: ChatStatusKind, _ line: String, attention: Bool = false, _ card: some View) {
+            self.item = ChatStatusItem(kind: kind, line: line, attention: attention)
+            self.card = AnyView(card)
+        }
+        /// A card that asks something of the person: it has no line, it is never folded.
+        init(_ kind: ChatStatusKind, _ card: some View) {
+            self.init(kind, "", attention: false, card)
+        }
+    }
+
+    /// The waiting-on-a-job line. The feed's own label and start (the ones the
+    /// Sessions pane prints) win, so the two agree; the plan banner's job name
+    /// and the running-jobs list fill in when the feed has not said yet.
+    private var jobStatusItem: (line: String, attention: Bool) {
+        let registry = SessionRegistry.shared
+        if let sid = model.loadedSessionId, let entry = registry.entry(sid), let wait = entry.waitingOn {
+            return (ChatStatusStrip.jobLine(label: SessionWait.label(kind: wait.kind, label: wait.label), since: entry.waitSince, now: registry.now),
+                    entry.isLongWait(now: registry.now))
+        }
+        var name = "a background job"
+        if case .waitingOnJob(let n, _) = pauseBanner { name = n }
+        let since = model.runningJobsHere.min(by: { $0.startedAt < $1.startedAt }).flatMap { FriendlyDate.parse($0.startedAt) }
+        return (ChatStatusStrip.jobLine(label: name, since: since, now: registry.now), SessionWait.isLong(since: since, now: registry.now))
+    }
+
+    /// The active strips, in priority order. `statusTray` decides which of them
+    /// stay full cards and which fold into the strip.
+    private var trayEntries: [TrayEntry] {
+        var rows: [TrayEntry] = []
         // ADR-0112 — a tool confirm is a card here, not a sheet over the log.
         // The question form (AskUserQuestion) keeps its sheet.
         if let head = model.pendingConfirms.first, head.toolName != "AskUserQuestion" {
-            rows.append(AnyView(ConfirmCard(
+            rows.append(TrayEntry(.confirm, ConfirmCard(
                 request: head,
                 askedBy: confirmAskedBy,
                 onAllow: { model.respond(to: head, decision: .allow) },
                 onDeny: { reason in model.respond(to: head, decision: .deny, denyMessage: reason) }
             )
-            // Tray rows are index-keyed, so the next confirm lands in the same
+            // Tray rows are keyed by kind, so the next confirm lands in the same
             // slot; without an identity its half-typed deny reason carries
             // over (audit C10).
             .id(head.toolUseId)))
         } else if let note = model.externalAnswerNote {
             // ADR-0127 M6 — the card (or sheet) is gone; this says who answered it.
-            rows.append(AnyView(ExternalAnswerNoteRow(note: note) { model.externalAnswerNote = nil }))
+            rows.append(TrayEntry(.confirm, ExternalAnswerNoteRow(note: note) { model.externalAnswerNote = nil }))
         }
         // ADR-0107 — a turn a restart cut off, with the way back.
         if let sid = model.loadedSessionId, !model.isSending,
            SessionRegistry.shared.entry(sid)?.interrupted == true {
-            rows.append(AnyView(interruptedChip(sid)))
+            rows.append(TrayEntry(.interrupted, interruptedChip(sid)))
         }
-        if scopeMetVisible { rows.append(AnyView(scopeMetChipStrip)) }
+        if scopeMetVisible { rows.append(TrayEntry(.scopeMet, scopeMetChipStrip)) }
         // The waiting banner names the job; the generic chip would say it twice.
-        if model.backgroundJobRunning && !(planPausedWaiting && pauseBanner != .paused) {
-            rows.append(AnyView(backgroundJobChip))
+        let waitingBanner = planPausedWaiting && pauseBanner != .paused
+        if model.backgroundJobRunning && !waitingBanner {
+            let job = jobStatusItem
+            rows.append(TrayEntry(.job, job.line, attention: job.attention, backgroundJobChip))
         }
-        if model.backlogOpenCount > 0 { rows.append(AnyView(backlogChip)) }
-        if model.resetSdkOnNextSend { rows.append(AnyView(resetArmedChip)) }
+        if model.backlogOpenCount > 0 {
+            rows.append(TrayEntry(.backlog, ChatStatusStrip.backlogLine(model.backlogOpenCount), backlogChip))
+        }
+        if model.resetSdkOnNextSend {
+            rows.append(TrayEntry(.resetArmed, "next message starts fresh", resetArmedChip))
+        }
         if let plan = model.activePlan {
             // Tier 2 (ADR-0046) — the active plan: purple, titled, steps with
             // nested sub-tasks, a picker when several plans exist, and "Open
             // plan". Driven by the plan's steps, not a flat todo list.
-            rows.append(AnyView(TodoListStrip(
+            rows.append(TrayEntry(.plan, ChatStatusStrip.planLine(done: plan.doneCount, total: plan.steps.count), TodoListStrip(
                 steps: plan.steps,
                 planTitle: plan.title,
                 plans: model.plans,
@@ -3830,7 +4017,8 @@ final class ChatPreviewModel {
             )))
         } else if !model.todos.isEmpty {
             // Tier 1 — a bare TodoWrite checklist, no plan behind it.
-            rows.append(AnyView(TodoListStrip(
+            let done = model.todos.filter { $0.status == "completed" }.count
+            rows.append(TrayEntry(.plan, ChatStatusStrip.planLine(done: done, total: model.todos.count), TodoListStrip(
                 todos: model.todos,
                 onClose: { model.dismissPlan() }
             )))
@@ -3840,18 +4028,24 @@ final class ChatPreviewModel {
         // (planPausedWaiting already excludes the all-complete case.)
         let planComplete = model.activePlanComplete
         if model.planAwaitingApproval && !model.isSending && !planComplete {
-            rows.append(AnyView(approvePlanChip))
+            rows.append(TrayEntry(.approvePlan, approvePlanChip))
         } else if planAwaitingDecision {
             // Paused ON A QUESTION — show the decision chip (answer in box /
             // use the rec), not the generic "Continue".
-            rows.append(AnyView(decisionChip))
+            rows.append(TrayEntry(.decision, decisionChip))
         } else if planPausedWaiting {
-            rows.append(AnyView(continuePlanChip))
+            if waitingBanner {
+                // Waiting on a job that will resume the tab: it reports, it asks nothing.
+                let job = jobStatusItem
+                rows.append(TrayEntry(.job, job.line, attention: job.attention, continuePlanChip))
+            } else {
+                rows.append(TrayEntry(.pausedPlan, continuePlanChip))
+            }
         }
         if !model.agentChangedFiles.isEmpty {
-            rows.append(AnyView(AgentChangesStrip(files: model.agentChangedFiles) { openReviewWindow() }))
+            rows.append(TrayEntry(.files, ChatStatusStrip.filesLine(model.agentChangedFiles.count),
+                                  AgentChangesStrip(files: model.agentChangedFiles) { openReviewWindow() }))
         }
-        if !model.queuedMessages.isEmpty { rows.append(AnyView(queuedStrip)) }
         return rows
     }
 
@@ -3900,7 +4094,25 @@ final class ChatPreviewModel {
                 onSwitch: { mode, action in applyTreeSwitch(sid, to: mode, action: action) },
                 onLane: { lane in applyLane(sid, lane: lane) }
             )
+            stateIndicator(sid)
         }
+    }
+
+    /// R2-06 / S-02 — what this tab is doing, in a dot and a few words, from the
+    /// same derived row state the Sessions pane and the tab strip read. It
+    /// replaces the 200 pt animated orb as the place to look; the orb is opt-in.
+    private func stateIndicator(_ sid: String) -> some View {
+        let registry = SessionRegistry.shared
+        let entry = registry.entry(sid)
+        let waitLabel = entry?.waitingOn.map { SessionWait.label(kind: $0.kind, label: $0.label) }
+        let indicator = ChatHeaderState.indicator(
+            row: registry.rowState(sid),
+            waitLabel: waitLabel,
+            waitingSince: entry?.waitSince,
+            now: registry.now
+        )
+        return ChatStateIndicator(indicator: indicator, long: entry?.isLongWait(now: registry.now) ?? false)
+            .layoutPriority(-1)
     }
 
     /// The two shapes a new tab can take, named by what they mean for the
@@ -4052,78 +4264,118 @@ final class ChatPreviewModel {
         return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
-    /// Two-button affordance below the chat: save a one-line scope
-    /// summary to memory.md, or clear the SDK session for the next
-    /// logical task. Both are opt-in — neither auto-fires on Scope-met.
+    /// The scope-met bar (R2-07). The step the owner takes next is the primary
+    /// one: "Mark reviewed" (the same `SessionRegistry.markReviewed` the Sessions
+    /// pane's "Reviewed" chip calls, which clears the Finished row), with "Review
+    /// changes" beside it when the tab has a diff. The three housekeeping actions
+    /// (note, start fresh, audit) live in the "…" menu: they are opt-in and
+    /// neither auto-fires on Scope-met. "Scope met" is the state word, in the
+    /// accent hue the Finished dot uses.
     private var scopeMetChipStrip: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "checkmark.circle")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            Text("Scope met")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button {
-                if let cwd = bridge.projectWorkDir, !cwd.isEmpty {
-                    let text = latestAssistantText(in: model.messages)
-                    let summary = ScopeMetSummary.extract(from: text)
-                    MemoryLog.append(workDir: cwd, line: summary)
+        let layout = ScopeMetBar.layout(hasChanges: !model.agentChangedFiles.isEmpty)
+        let reviewed = scopeMetReviewed
+        return HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.accentColor)
+            Text(ScopeMetBar.title(reviewed: reviewed))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            ForEach(layout.primary, id: \.self) { action in
+                switch action {
+                case .markReviewed:
+                    Button {
+                        guard let sid = model.loadedSessionId else { return }
+                        SessionRegistry.shared.markReviewed(sid)
+                    } label: {
+                        if reviewed {
+                            Label("Reviewed", systemImage: "checkmark").font(.system(size: 11))
+                        } else {
+                            Text("Mark reviewed").font(.system(size: 11))
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(reviewed || model.loadedSessionId == nil)
+                    .help("Mark this result as looked at. It leaves the Finished group in the Sessions pane. Opening the tab does the same.")
+                case .reviewChanges:
+                    Button { openReviewWindow() } label: {
+                        Text("Review changes").font(.system(size: 11))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Open the files this tab changed.")
+                default:
+                    EmptyView()
+                }
+            }
+            Menu {
+                ForEach(layout.menu, id: \.self) { action in
+                    switch action {
+                    case .saveNote:
+                        Button {
+                            if let cwd = bridge.projectWorkDir, !cwd.isEmpty {
+                                let text = latestAssistantText(in: model.messages)
+                                let summary = ScopeMetSummary.extract(from: text)
+                                MemoryLog.append(workDir: cwd, line: summary)
+                            }
+                        } label: {
+                            Label("Save session note", systemImage: "tray.and.arrow.down")
+                        }
+                        .help("Append a one-line summary of the just-completed scope to .marvin/session-notes.md. Durable facts (invariants/gotchas/constraints) are recorded by MARVIN via the remember tool into memory.md (ADR-0042).")
+                    case .startFresh:
+                        Button {
+                            model.newTab()
+                        } label: {
+                            Label("Start fresh next turn", systemImage: "arrow.uturn.left")
+                        }
+                        .help("Clear the SDK session before the next message (⌘⇧N). memory.md auto-loads on the new session.")
+                    case .auditSession:
+                        // ADR-0059 — the natural audit moment is right after a
+                        // completion claim. The mechanical guard (ADR-0057)
+                        // already checked the checkboxes; this offers the
+                        // judgement-level pass on the same claim. Read-only,
+                        // advisory, reports to the user. Deliberately NOT an
+                        // Ask-mode function: an executor auditing its own
+                        // narrative from inside that narrative is exactly the
+                        // self-briefing failure ADR-0059 avoids.
+                        Button {
+                            Task { await runSessionAudit() }
+                        } label: {
+                            Label(auditRunning ? "Auditing…" : "Audit session", systemImage: "magnifyingglass.circle")
+                        }
+                        .disabled(auditRunning || bridge.projectWorkDir == nil)
+                        .help("Run a read-only audit of this session: an independent pass that checks what MARVIN CLAIMED against what actually ran and changed. Advisory only — it can't block anything, and findings go to you, not to MARVIN.")
+                    default:
+                        EmptyView()
+                    }
                 }
             } label: {
-                Label("Save session note", systemImage: "tray.and.arrow.down")
-                    .font(.caption)
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 24, height: 22)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("Append a one-line summary of the just-completed scope to .marvin/session-notes.md. Durable facts (invariants/gotchas/constraints) are recorded by MARVIN via the remember tool into memory.md (ADR-0042).")
-            Button {
-                model.newTab()
-            } label: {
-                Label("Start fresh next turn", systemImage: "arrow.uturn.left")
-                    .font(.caption)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("Clear the SDK session before the next message (⌘⇧N). memory.md auto-loads on the new session.")
-            // ADR-0059 — the natural audit moment is right after a completion
-            // claim. The mechanical guard (ADR-0057) already checked the
-            // checkboxes; this offers the judgement-level pass on the same
-            // claim. Read-only, advisory, reports to the user.
-            auditSessionButton
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More: save a session note, start fresh, audit this session")
+            .accessibilityLabel("More scope-met actions")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(
-            Color.secondary.opacity(0.05)
-        )
+        .background(Color.accentColor.opacity(0.06))
     }
 
-    /// "Audit session" — runs the read-only session auditor (ADR-0059) over
-    /// this session's claims-vs-evidence packet and shows the findings report.
-    /// Deliberately NOT an Ask-mode function: Ask mode is the executor with
-    /// writes disabled (same session, same context), and an executor auditing
-    /// its own narrative from inside that narrative is exactly the
-    /// self-briefing failure ADR-0059 avoids.
-    @ViewBuilder
-    private var auditSessionButton: some View {
-        Button {
-            Task { await runSessionAudit() }
-        } label: {
-            if auditRunning {
-                HStack(spacing: 4) {
-                    ProgressView().controlSize(.small)
-                    Text("Auditing…").font(.caption)
-                }
-            } else {
-                Label("Audit session", systemImage: "magnifyingglass.circle")
-                    .font(.caption)
-            }
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .disabled(auditRunning || bridge.projectWorkDir == nil)
-        .help("Run a read-only audit of this session: an independent pass that checks what MARVIN CLAIMED against what actually ran and changed. Advisory only — it can't block anything, and findings go to you, not to MARVIN.")
+    /// The tab has been looked at since its last turn ended: the registry's own
+    /// record, read the way the Finished group reads it.
+    private var scopeMetReviewed: Bool {
+        guard let sid = model.loadedSessionId else { return false }
+        let registry = SessionRegistry.shared
+        guard let seen = registry.reviewedAt[sid] else { return false }
+        return seen >= (registry.entry(sid)?.lastTurnAt ?? .distantPast)
     }
 
     /// POST /api/audit → findings report. Read-only and out-of-band: the
@@ -4624,5 +4876,54 @@ final class ChatPreviewModel {
         .background(Color.orange.opacity(0.08))
         // An error replaces the status line silently for a VoiceOver user (C3).
         .announced("Error: \(message)", when: message)
+    }
+}
+
+/// The small state indicator in the chat header (R2-06): a dot and a few words.
+/// Only a working tab moves, and it moves gently (opacity, not size or position);
+/// with Reduce Motion on nothing moves at all. Colours follow the tab strip's
+/// glyphs (amber for something that needs a look or a long wait, the accent for
+/// an unreviewed result), so the two never disagree.
+@MainActor private struct ChatStateIndicator: View {
+    let indicator: ChatHeaderState.Indicator
+    let long: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dim = false
+
+    private var pulses: Bool { indicator.animates && !reduceMotion }
+
+    private var tint: Color {
+        switch indicator.kind {
+        case .working: return GitDecorationColor.modified
+        case .waiting: return long ? .orange : Color.secondary
+        case .needsYou, .interrupted: return .orange
+        case .finished: return Color.accentColor
+        case .failed: return GitDecorationColor.deleted
+        case .idle: return MarvinTheme.textMuted
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(tint)
+                .frame(width: 7, height: 7)
+                .opacity(pulses && dim ? 0.4 : 1)
+                .animation(pulses ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true) : nil, value: dim)
+            Text(indicator.label)
+                .font(.system(size: 11))
+                .foregroundStyle(long && indicator.kind == .waiting ? Color.orange : Color.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .help(indicator.label)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Tab state: \(indicator.label)")
+        .task(id: pulses) {
+            dim = false
+            guard pulses else { return }
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            dim = true
+        }
     }
 }
