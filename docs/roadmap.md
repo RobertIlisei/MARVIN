@@ -143,6 +143,8 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
+**v1.1.1** (2026-11-24) — four fixes from one night of supervising a real project. The sidecar's git reads never hold a checkout's index lock (`GIT_OPTIONAL_LOCKS=0`; a merge had been refused with "Unable to write index" three times in a month). The ship-review gate does not lift by repetition on a security-boundary path (ADR-0135; 134 commits had waited it out). A fix or rule keeps the rate it was accepted at, the Practice pane shows "was X %, now Y %", and the nightly loop is opt-in (ADR-0136). At a scope-met close the backlog is checked: claimed items gate the close, open items naming an edited file are suggested (ADR-0137). The open-items rail is 500. Not built: ADR-0137 part 3, an item resolved from an unmerged branch shown as "done, waiting to merge".
+
 **v1.1.0** (2026-11-11) — supervision improvements from two days of supervising real tabs (ADR-0130 to ADR-0134, six milestones). Sessions rows read `waiting` and `done`, and a prose question or a chain-cap refusal raises an attention item; a project notice rides every turn's reminder; `builtin:go-ahead` ships at `nudge`; an approved queue opens briefs as slots free under a user-only cap; a standing merge authorisation merges finished tab branches behind the project's gate in a scratch worktree, fast-forward only, never pushing. Agent SDK 0.3.301 with every built-in classified at the gate; a tab's graph is seeded as an APFS clone.
 
 **v1.0.0** (2026-10-31) — MARVIN's first 1.0. Cost and plan accounting corrected: the cost panel overstated spend about 3.8× because a resumed session's running total was recorded as per-turn; each turn now records its own increase, with model / advisor / auth mode per turn, input split into new / cache read / cache write, labels per billing source, the plan name from the SDK's `accountInfo()`, and plan windows that expire (an Ultra account shows only its weekly bar). Search, Files and Practice no longer push the left column under the title bar; the Sessions feed reads as connected when the stream attaches; the supervisor conversation shipped (ADR-0128, milestone 7: a pinned Supervisor tab where no text is consent, the chat card is the inbox item, and a followed tab reports back and raises its merge card); close never reports a merge it did not do; the gate reads git / gh / glab as the binary does; tool badges tinted by kind again (never outcome hues); the Ultron persona rewritten as VisionQuest plays it. Everything v0.1.119 introduced stands: the in-app Supervisor (ADR-0127), Impeccable across the native UI, accessibility, the app icon, the worktree data-loss fix.
@@ -304,6 +306,10 @@ switch has no known cause, only new telemetry that will name it next time.
 ## Recent milestones
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
+
+### 2026-11-24 — v1.1.1: the gates hold where the model had learned to wait them out
+
+_Shipped. Four fixes from one night of supervising a real project from outside. Git reads never lock a checkout (`063f5d9e`); the ship-review gate does not lift on a boundary path ([ADR-0135](./decisions/0135-the-ship-review-gate-does-not-lift-on-a-boundary-path.md), `ee0a5de7`); a fix keeps its baseline and Practice is opt-in ([ADR-0136](./decisions/0136-practice-is-opt-in-and-a-fix-keeps-its-baseline.md), `67c0953d`); the backlog is checked at a scope-met close ([ADR-0137](./decisions/0137-the-backlog-is-checked-when-a-tab-closes-its-scope.md), `02faae20`). Detail in the [changelog](./history/CHANGELOG.md)._
 
 ### 2026-11-11 — v1.1.0: a tab says what it is waiting on; a queue and a merge the user approves once
 

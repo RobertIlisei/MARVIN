@@ -8,6 +8,62 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-11-24 — v1.1.1: the gates hold where the model had learned to wait them out (ADR-0135 to ADR-0137); git reads never lock a checkout.**
+
+  *Where it came from.* One night of supervising a real project's tabs from
+  outside MARVIN, with scripts merging their branches in the project's main
+  checkout. Four things were measured, not guessed.
+
+  *A merge that never started* (`063f5d9e`). The merge runner reported "merge
+  state lost" for the third time in a month. Git's own output, still on disk,
+  said `fatal: Unable to write index.`: the merge had not started. The main
+  checkout's reflog held one reset, the runner's own, and thirteen git commands
+  tried in a throwaway repository showed none that clears an open merge without
+  a second entry. `git status` writes a refreshed index back under
+  `index.lock`, and MARVIN runs it in the project root (`worktrees.ts` and five
+  other callers) with nothing to stop it. `git-env.ts` now sets
+  `GIT_OPTIONAL_LOCKS=0` on the sidecar's environment at boot, before any git
+  child is spawned. Verified in the installed app: a sidecar git child carries
+  the variable.
+
+  *A gate that was a delay* (ADR-0135, `ee0a5de7`). The practice ledger of that
+  project: `ship.unreviewed` in 95 sessions and 134 commits since the gate
+  shipped. The model took the two refusals ADR-0104 allows and committed on the
+  third call. A diff that touches a boundary path is now refused every time
+  until both review skills have run; past the cap the message says to stop and
+  tell the user. A non-boundary reviewable diff is unchanged. Test first, seen
+  failing ("expected undefined to be 'deny'").
+
+  *A measurement against zero* (ADR-0136, `67c0953d`). Asked whether Practice
+  works, the ledger answered: three fixes of 2 September, all "regressed". The
+  comparison was already a rate, but the rate before came from pre-fix sessions
+  still in the 45-day window, and after 45 days there were none. A fix or rule
+  now stores `baseline {at, hits, sessions, rate}` at acceptance; with none
+  left, it regresses only if the behaviour would be proposed today. On the real
+  ledger the next run moved `command.retried` (1 % of sessions) from regressed
+  to confirmed and left `ship.unreviewed` where it belonged. The pane prints
+  "was X % of sessions, now Y %". The nightly loop is opt-in: off on a new
+  install, on where a ledger exists, the stored choice wins. The built-in gates
+  are not part of the switch.
+
+  *A claim left behind* (ADR-0137, `02faae20`). At a scope-met close the
+  turn-close hook reads the backlog: `doing` items the session holds block the
+  close (two blocks, then logged), open items nobody holds that name a file the
+  turn edited are offered once. The hook never resolves an item. Part 3 (an
+  item resolved from an unmerged branch shown as "done, waiting to merge") is
+  decided and not built.
+
+  *Also:* the open-items rail is 500 (`4eda3f0a`); a real project sat at 200
+  with 88 follow-ups written as notes because `backlog_add` refused them.
+
+  *Corrected while building.* The plan listed a missing scope-met nudge; it has
+  existed since 2026-09-03 and skips machine turns on purpose. Nothing was
+  built for it.
+
+  *Verification.* 187 test files, 2,968 tests; `pnpm typecheck --force` clean;
+  the app rebuilt and restarted twice on the project's machine with six tabs
+  open, which recovered through `session-recovery` and the wakeup rails.
+
 - **2026-11-11 — v1.1.0: a tab says what it is waiting on, a notice reaches every tab, an approved queue and a standing merge (ADR-0130 to ADR-0134); Agent SDK 0.3.301.**
 
   *Where it came from.* Over 2026-11-09 to 11 about 45 branches were merged on a

@@ -2,7 +2,7 @@
 
 ## One assistant, enforced discipline: a design for AI pair-programming that survives real projects
 
-**Robert Ilisei** · November 2026 · v1.1.0 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
+**Robert Ilisei** · November 2026 · v1.1.1 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 
 *M.A.R.V.I.N. — Moderately Advanced Robotic Virtual Intelligence Network. A
 pair-programming AI IDE for macOS.*
@@ -148,6 +148,8 @@ those acts ask the user even in full auto. It opens a tab only on the user's
 request, in a fresh worktree; one request is one tab. Its append-only ledger
 is reviewed by the session auditor, whose report goes to the user and never
 to the supervisor.
+
+**A third night showed where a gate was only a delay (v1.1.1).** The ship-review gate refused twice per turn and then let the commit through, so that a failing skill call could never stall a turn. One project's own ledger showed what the model made of that: 134 commits to security-boundary paths went through with no review, each after two refusals. A brake the model can wait out is a delay. On a boundary path the gate now refuses every time, and past the second refusal tells the model to stop and tell the user, who still holds the gate's strength (ADR-0135). The same night corrected the measuring: a fix older than the 45-day window had been compared against a rate of zero and always read as regressed, so each fix now keeps the rate it was accepted at and the pane shows both (ADR-0136); and a tab that says its scope is met while it still holds a claimed backlog item is stopped until it closes the item with evidence or releases it (ADR-0137).
 
 **Two days of supervising from outside set the next limits.** About 45
 branches were merged on a real project by scripts outside MARVIN, and what
@@ -940,4 +942,4 @@ Anthropic Console key, or an OpenRouter key.
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v1.1.0; the repository is the authoritative, current reference.*
+v1.1.1; the repository is the authoritative, current reference.*

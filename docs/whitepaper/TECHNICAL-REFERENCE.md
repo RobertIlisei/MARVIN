@@ -2,7 +2,7 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v1.1.0
+code. Written for contributors and deep evaluators. Covers v1.1.1
 (2026-11-11). Where this document and the repository disagree, the
 repository wins.*
 
@@ -72,6 +72,17 @@ repository wins.*
 > and a Helpers section in the Models dialog. **Claude's server-side advisor**
 > (ADR-0125) is a role too: off by default, `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`
 > when off, `settings.advisorModel` when on.
+> v1.1.1 (2026-11-24): **gates and measurement** (ADR-0135 to ADR-0137).
+> *Git* — `git-env.ts` sets `GIT_OPTIONAL_LOCKS=0` on the sidecar's environment at
+> boot (`instrumentation.ts`), so no git read holds a checkout's `index.lock`.
+> *Ship-review* — `classifyShipDiff` marks boundary needs; `checkShipReview`
+> refuses them past `SHIP_REVIEW_MAX_DENIES`, with a "stop and tell the user"
+> message. *Practice* — `LedgerFinding.baseline {at,hits,sessions,rate}` and
+> `rateAfter`; with no baseline a fix regresses only if the behaviour would be
+> proposed today; `readPracticeConfig().enabled` defaults to whether a ledger
+> exists. *Turn close* — `backlogCloseCandidates` / `decideBacklogClose` in
+> `turn-close-hook.ts`: claimed `doing` items block a scope-met close (two
+> blocks), open items naming an edited file are suggested once.
 > v1.1.0 (2026-11-11): **supervision improvements** (ADR-0130 to ADR-0134).
 > *Session state* — `SessionWatchState` gains `waiting` and `done`;
 > `deriveSessionState` reads `attention`, `waitingOn {kind,label,since}` and
@@ -1277,5 +1288,5 @@ repo:
 ---
 
 *Compiled against the 2026-07-02 full feature inventory (51 ADRs,
-v0.1.55) and brought forward to v1.1.0 (134 ADRs, 2026-11-11). Corrections welcome — the ADRs are the authoritative record,
+v0.1.55) and brought forward to v1.1.1 (137 ADRs, 2026-11-24). Corrections welcome — the ADRs are the authoritative record,
 and this document cites them everywhere it can.*
