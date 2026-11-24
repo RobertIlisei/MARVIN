@@ -558,6 +558,15 @@ enum SurfaceSnapshot {
         // token or call the stand-in for it; fixtures fill their own models.
         SupervisorModel.shared.offline = true
 
+        if which == "window-work-area" {
+            guard let outPath = env["MARVIN_SNAPSHOT_OUT"], !outPath.isEmpty else {
+                fail("MARVIN_SNAPSHOT_OUT=<directory> is required")
+                return true
+            }
+            WorkAreaSnapshot.run(out: URL(fileURLWithPath: outPath, isDirectory: true))
+            return true
+        }
+
         if which == "window-left-pane" {
             guard let outPath = env["MARVIN_SNAPSHOT_OUT"], !outPath.isEmpty else {
                 fail("MARVIN_SNAPSHOT_OUT=<directory> is required")
