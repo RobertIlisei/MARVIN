@@ -25,6 +25,8 @@ import SwiftUI
 
 /// Which menu a command files under. Mirrors the reference's menu bar so
 /// the mapping is obvious; `.none` means palette-only.
+/// Where the moved app-level commands sit is `MenuPlacement` (MARVINLogic), so
+/// that table can be asserted; `placed(_:)` reads it.
 enum CommandMenuSlot: String, CaseIterable {
     case file = "File"
     case edit = "Edit"
@@ -33,6 +35,11 @@ enum CommandMenuSlot: String, CaseIterable {
     case go = "Go"
     case run = "Run"
     case terminal = "Terminal"
+    /// The app menu ("MARVIN"), right under About.
+    case app = "MARVIN"
+    /// Session stepping and the way back to the main window (R2-17): macOS keeps
+    /// "Show Previous / Next Tab" in Window.
+    case window = "Window"
     case help = "Help"
     case none = ""
 }
@@ -81,6 +88,14 @@ enum CommandRegistry {
         return (w?.isEmpty == false) ? w : nil
     }
 
+    /// The slot and key of a command whose place is decided by `MenuPlacement`.
+    private static func placed(_ id: String) -> (slot: CommandMenuSlot, shortcut: String?) {
+        guard let item = MenuPlacement.item(id), let slot = CommandMenuSlot(rawValue: item.menu) else {
+            preconditionFailure("MenuPlacement has no renderable entry for \(id)")
+        }
+        return (slot, item.shortcut)
+    }
+
     static var all: [AppCommand] {
         var c: [AppCommand] = []
 
@@ -115,12 +130,12 @@ enum CommandRegistry {
         // and neither was bound. Both wrap, and both are no-ops with one tab.
         c.append(AppCommand(
             id: "file.previousSession", title: "Previous Session",
-            slot: .file, shortcut: "⇧⌘[", keywords: ["tab", "chat", "switch", "back"],
+            slot: placed("file.previousSession").slot, shortcut: placed("file.previousSession").shortcut, keywords: ["tab", "chat", "switch", "back"],
             isEnabled: { SessionRegistry.shared.openTabs.count > 1 }
         ) { stepSession(.previous) })
         c.append(AppCommand(
             id: "file.nextSession", title: "Next Session",
-            slot: .file, shortcut: "⇧⌘]", keywords: ["tab", "chat", "switch", "forward"],
+            slot: placed("file.nextSession").slot, shortcut: placed("file.nextSession").shortcut, keywords: ["tab", "chat", "switch", "forward"],
             isEnabled: { SessionRegistry.shared.openTabs.count > 1 }
         ) { stepSession(.next) })
         // M-02 — ⇧⌘] walks the strip, which visits idle tabs on the way. This one
@@ -129,7 +144,7 @@ enum CommandRegistry {
         // ⇧⌘] and nothing else binds it (⌥⌘J is the supervisor inbox, ⌥⌘↑/↓ diff hunks).
         c.append(AppCommand(
             id: "go.nextTabNeedingMe", title: "Next Tab That Needs Me",
-            slot: .go, shortcut: "⌥⌘]", keywords: ["tab", "session", "attention", "needs you", "waiting", "finished", "failed", "inbox"],
+            slot: placed("go.nextTabNeedingMe").slot, shortcut: placed("go.nextTabNeedingMe").shortcut, keywords: ["tab", "session", "attention", "needs you", "waiting", "finished", "failed", "inbox"],
             isEnabled: { SessionRegistry.shared.nextTabNeedingMe != nil }
         ) {
             if let target = SessionRegistry.shared.nextTabNeedingMe {
@@ -482,16 +497,25 @@ enum CommandRegistry {
         // ── Help ────────────────────────────────────────────────────────
         c.append(AppCommand(
             id: "help.shortcuts", title: "Keyboard Shortcuts",
-            slot: .help, shortcut: "⌘/", keywords: ["keys", "bindings"]
+            slot: placed("help.shortcuts").slot, shortcut: placed("help.shortcuts").shortcut, keywords: ["keys", "bindings"]
         ) { MarvinBridge.shared.triggerShortcutsHelp() })
         c.append(AppCommand(
             id: "help.checkUpdates", title: "Check for Updates…",
-            slot: .help, keywords: ["version", "upgrade"]
+            slot: placed("help.checkUpdates").slot, keywords: ["version", "upgrade"]
         ) { Task { await UpdateService.shared.check(userInitiated: true) } })
         c.append(AppCommand(
             id: "help.copyDiagnostics", title: "Copy App Diagnostics",
-            slot: .help, keywords: ["support", "bug report", "logs", "version"]
+            slot: placed("help.copyDiagnostics").slot, keywords: ["support", "bug report", "logs", "version"]
         ) { AppDiagnosticsReport.copyToPasteboard() })
+
+        // Window ▸ Show MARVIN (R2-17). Its menu item is `ShowMainWindowButton`,
+        // which holds the `openWindow` action a closed window needs; this entry
+        // is the palette's and the shortcuts sheet's copy of it.
+        c.append(AppCommand(
+            id: "window.showMarvin", title: "Show MARVIN",
+            slot: placed("window.showMarvin").slot, shortcut: placed("window.showMarvin").shortcut,
+            keywords: ["main window", "bring forward", "open window"]
+        ) { MainWindowFocus.bringForward() })
 
         return c
     }

@@ -39,9 +39,12 @@ import SwiftUI
 @MainActor private struct ShowMainWindowButton: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
+        // R2-17 — ⌘0, from the one placement table (`MenuPlacement`).
+        let parsed = MenuShortcut.parse(MenuPlacement.item("window.showMarvin")?.shortcut)
         Button("Show MARVIN") {
             MainWindowFocus.bringForward()
         }
+        .modifier(OptionalShortcut(parsed: parsed))
         .onAppear {
             MainWindowFocus.openWindowAction = { openWindow(id: "marvin-main") }
         }
@@ -141,9 +144,29 @@ private func openTerminalAt(workDir: String?) {
 /// deriving each key equivalent from the registry's own shortcut string so
 /// the menu and the palette can never disagree about a binding.
 @ViewBuilder
-func registryItems(_ slot: CommandMenuSlot) -> some View {
-    ForEach(CommandRegistry.commands(in: slot)) { cmd in
+func registryItems(_ slot: CommandMenuSlot, excluding ids: Set<String> = []) -> some View {
+    ForEach(CommandRegistry.commands(in: slot).filter { !ids.contains($0.id) }) { cmd in
         RegistryMenuItem(command: cmd)
+    }
+}
+
+/// One registry command by id, for a menu that orders its items by hand (Help).
+@MainActor @ViewBuilder
+func registryItem(_ id: String) -> some View {
+    if let cmd = CommandRegistry.all.first(where: { $0.id == id }) {
+        RegistryMenuItem(command: cmd)
+    }
+}
+
+/// `.keyboardShortcut` takes a non-optional key, so "maybe a shortcut" is a modifier.
+private struct OptionalShortcut: ViewModifier {
+    let parsed: (key: KeyEquivalent, modifiers: EventModifiers)?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let parsed {
+            content.keyboardShortcut(parsed.key, modifiers: parsed.modifiers)
+        } else {
+            content
+        }
     }
 }
 
@@ -608,6 +631,9 @@ struct MARVINApp: App {
             // the sidecar reports.
             CommandGroup(replacing: .appInfo) {
                 OpenAboutButton()
+                // R2-17 — "Check for Updates…" sits right under About, where
+                // macOS apps put it. It was in Window.
+                registryItems(.app)
             }
 
             // ADR-0021 M5: Reload/Zoom were WebView-only — removed. ⌘R
@@ -738,10 +764,15 @@ struct MARVINApp: App {
             // What is left is genuinely window- or app-scoped. Everything
             // else moved to View / Go / Run, where the reference — and
             // every other editor — files it.
+            // R2-17 — Window holds what is window- and tab-scoped: stepping
+            // through the open sessions (macOS's "Show Previous / Next Tab"),
+            // the tab that needs the user, and the way back to the main window.
+            // The update check moved to the app menu; shortcuts and diagnostics to Help.
             CommandGroup(after: .windowList) {
                 Divider()
+                registryItems(.window, excluding: ["window.showMarvin"])
+                Divider()
                 ShowMainWindowButton()
-                registryItems(.help)
             }
 
             // ── Navigate menu ───────────────────────────────────────────
@@ -755,6 +786,8 @@ struct MARVINApp: App {
             // and a "$AppName Help" item; CommandGroup(replacing:
             // .help) lets us put real items there.
             CommandGroup(replacing: .help) {
+                registryItem("help.shortcuts")
+                Divider()
                 Button("Show Onboarding…") {
                     // Reset the flag — onboarding renders when
                     // projectWorkDir is nil. If the user is currently
@@ -775,6 +808,8 @@ struct MARVINApp: App {
                         NSWorkspace.shared.open(url)
                     }
                 }
+                // The report is what an issue should attach.
+                registryItem("help.copyDiagnostics")
             }
         }
 
