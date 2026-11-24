@@ -472,6 +472,247 @@ runner.suite("ClockFormat") {
     }
 }
 
+// MARK: - UX review N-01 / N-02 / F-01 / F-02 / F-03 (2026-11-24)
+
+runner.suite("tab-notifications (N-01)") {
+    let t0 = Date(timeIntervalSince1970: 3_000_000)
+    func tab(_ id: String, _ state: SessionRowState, outcome: TurnOutcome? = nil, title: String? = nil) -> TabObservation {
+        TabObservation(id: id, title: title ?? "tab \(id)", state: state, outcome: outcome)
+    }
+    func settle(_ p: inout TabNotificationPlanner, _ before: [TabObservation], _ after: [TabObservation],
+                selected: String? = nil, frontmost: Bool = false) -> [TabNotification] {
+        p.observe(before, now: t0)
+        p.observe(after, now: t0.addingTimeInterval(0.1))
+        return p.flush(now: t0.addingTimeInterval(3), current: after, selectedId: selected, appIsFrontmost: frontmost)
+    }
+
+    runner.test("a tab seen for the first time is a baseline, never an event") {
+        var p = TabNotificationPlanner()
+        p.observe([tab("a", .done), tab("b", .failed), tab("c", .interrupted)], now: t0)
+        runner.expect(!p.hasPending, "nothing queued from the first look")
+    }
+    runner.test("a tab that was working and closed scope-met says so, by name") {
+        var p = TabNotificationPlanner()
+        let out = settle(&p, [tab("a", .working, title: "fix login")], [tab("a", .done, outcome: .completed, title: "fix login")])
+        runner.expect(out.count, equals: 1, "one notification")
+        runner.expect(out.first?.kind, equals: .finished, "kind")
+        runner.expect(out.first?.title, equals: "fix login", "title is the tab")
+        runner.expect(out.first?.body, equals: "Finished: scope met", "body")
+        runner.expect(out.first?.tabIds, equals: ["a"], "the click target")
+    }
+    runner.test("a turn that ended without scope-met says it finished its turn") {
+        var p = TabNotificationPlanner()
+        let out = settle(&p, [tab("a", .working)], [tab("a", .idle, outcome: .completed)])
+        runner.expect(out.first?.body, equals: "Finished its turn", "body")
+    }
+    runner.test("a turn the user stopped, or an idle tab with no outcome, is not a finish") {
+        var p = TabNotificationPlanner()
+        runner.expect(settle(&p, [tab("a", .working)], [tab("a", .idle, outcome: .cancelled)]).isEmpty, "stopped by the user")
+        var q = TabNotificationPlanner()
+        runner.expect(settle(&q, [tab("a", .working)], [tab("a", .idle)]).isEmpty, "no outcome")
+        var r = TabNotificationPlanner()
+        runner.expect(settle(&r, [tab("a", .working)], [tab("a", .waiting, outcome: .completed)]).isEmpty, "waiting on a job is not finished")
+    }
+    runner.test("failed and interrupted notify only for a tab seen working") {
+        var p = TabNotificationPlanner()
+        let f = settle(&p, [tab("a", .working, title: "T")], [tab("a", .failed, outcome: .error, title: "T")])
+        runner.expect(f.first?.kind, equals: .failed, "failed kind")
+        runner.expect(f.first?.body, equals: "Stopped with an error", "failed body")
+        var q = TabNotificationPlanner()
+        let i = settle(&q, [tab("a", .working, title: "T")], [tab("a", .interrupted, title: "T")])
+        runner.expect(i.first?.kind, equals: .interrupted, "interrupted kind")
+        runner.expect(i.first?.body, equals: "Cut off by a restart; open it to resume", "interrupted body")
+        var r = TabNotificationPlanner()
+        runner.expect(settle(&r, [tab("a", .idle)], [tab("a", .failed, outcome: .error)]).isEmpty, "an old failure arriving with the first snapshot")
+    }
+    runner.test("needs-you notifies on arrival, counts the items, and does not repeat as the count grows") {
+        var p = TabNotificationPlanner()
+        let a = settle(&p, [tab("a", .idle)], [tab("a", .needsYou(2))])
+        runner.expect(a.first?.kind, equals: .needsYou, "kind")
+        runner.expect(a.first?.body, equals: "2 things are waiting for your answer", "plural")
+        var q = TabNotificationPlanner()
+        runner.expect(settle(&q, [tab("a", .working)], [tab("a", .needsYou(1))]).first?.body, equals: "1 thing is waiting for your answer", "singular")
+        var r = TabNotificationPlanner()
+        runner.expect(settle(&r, [tab("a", .needsYou(1))], [tab("a", .needsYou(2))]).isEmpty, "1 to 2 is not a new event")
+    }
+    runner.test("nothing is posted before the coalescing window has passed, then everything at once") {
+        var p = TabNotificationPlanner()
+        p.observe([tab("a", .working)], now: t0)
+        p.observe([tab("a", .done, outcome: .completed)], now: t0.addingTimeInterval(0.2))
+        runner.expect(p.hasPending, "queued")
+        runner.expect(p.nextFlushDelay(now: t0.addingTimeInterval(0.2)) ?? -1, equals: 2.0, "waits the whole window from the first event")
+        runner.expect(p.flush(now: t0.addingTimeInterval(1.0), current: [tab("a", .done, outcome: .completed)], selectedId: nil, appIsFrontmost: false).isEmpty, "too early")
+        runner.expect(p.hasPending, "still queued")
+        runner.expect(p.flush(now: t0.addingTimeInterval(2.3), current: [tab("a", .done, outcome: .completed)], selectedId: nil, appIsFrontmost: false).count, equals: 1, "due")
+        runner.expect(!p.hasPending, "emptied")
+    }
+    runner.test("a burst of tabs finishing becomes one notification that names them") {
+        var p = TabNotificationPlanner()
+        let before = (1...3).map { tab("t\($0)", .working, title: "Tab \($0)") }
+        let after = (1...3).map { tab("t\($0)", .done, outcome: .completed, title: "Tab \($0)") }
+        let out = settle(&p, before, after)
+        runner.expect(out.count, equals: 1, "coalesced")
+        runner.expect(out.first?.title, equals: "3 tabs finished", "title")
+        runner.expect(out.first?.body, equals: "Tab 1, Tab 2, Tab 3", "names")
+        runner.expect(out.first?.tabIds, equals: ["t1", "t2", "t3"], "ids in order; the click selects the first")
+    }
+    runner.test("more than three names are cut with a count") {
+        var p = TabNotificationPlanner()
+        let before = (1...5).map { tab("t\($0)", .working, title: "T\($0)") }
+        let after = (1...5).map { tab("t\($0)", .failed, outcome: .error, title: "T\($0)") }
+        let out = settle(&p, before, after)
+        runner.expect(out.first?.title, equals: "5 tabs failed", "title")
+        runner.expect(out.first?.body, equals: "T1, T2, T3 and 2 more", "body")
+    }
+    runner.test("different kinds in one burst stay separate, attention first") {
+        var p = TabNotificationPlanner()
+        let before = [tab("a", .working, title: "A"), tab("b", .working, title: "B"), tab("c", .idle, title: "C")]
+        let after = [tab("a", .done, outcome: .completed, title: "A"), tab("b", .failed, outcome: .error, title: "B"), tab("c", .needsYou(1), title: "C")]
+        let out = settle(&p, before, after)
+        runner.expect(out.map(\.kind), equals: [.needsYou, .failed, .finished], "order")
+    }
+    runner.test("the selected tab is not announced while the app is in front, but is when it is not") {
+        var p = TabNotificationPlanner()
+        runner.expect(settle(&p, [tab("a", .working)], [tab("a", .done, outcome: .completed)], selected: "a", frontmost: true).isEmpty, "selected + frontmost")
+        var q = TabNotificationPlanner()
+        runner.expect(settle(&q, [tab("a", .working)], [tab("a", .done, outcome: .completed)], selected: "a", frontmost: false).count, equals: 1, "selected, app in the background")
+        var r = TabNotificationPlanner()
+        runner.expect(settle(&r, [tab("a", .working)], [tab("a", .done, outcome: .completed)], selected: "b", frontmost: true).count, equals: 1, "another tab is selected")
+    }
+    runner.test("the selected tab drops out of a group without losing the others") {
+        var p = TabNotificationPlanner()
+        let before = [tab("a", .working, title: "A"), tab("b", .working, title: "B")]
+        let after = [tab("a", .done, outcome: .completed, title: "A"), tab("b", .done, outcome: .completed, title: "B")]
+        let out = settle(&p, before, after, selected: "a", frontmost: true)
+        runner.expect(out.first?.title, equals: "B", "the one that remains is named, not counted")
+        runner.expect(out.first?.tabIds, equals: ["b"], "ids")
+    }
+    runner.test("an event whose tab has since moved on is dropped at flush time") {
+        var p = TabNotificationPlanner()
+        p.observe([tab("a", .working)], now: t0)
+        p.observe([tab("a", .done, outcome: .completed)], now: t0.addingTimeInterval(0.1))
+        let resumed = p.flush(now: t0.addingTimeInterval(3), current: [tab("a", .working)], selectedId: nil, appIsFrontmost: false)
+        runner.expect(resumed.isEmpty, "it started another turn")
+        var q = TabNotificationPlanner()
+        q.observe([tab("a", .working)], now: t0)
+        q.observe([tab("a", .idle, outcome: .completed)], now: t0.addingTimeInterval(0.1))
+        runner.expect(q.flush(now: t0.addingTimeInterval(3), current: [tab("a", .waiting)], selectedId: nil, appIsFrontmost: false).isEmpty, "the snapshot then said it waits on a job")
+        var r = TabNotificationPlanner()
+        r.observe([tab("a", .working)], now: t0)
+        r.observe([tab("a", .done, outcome: .completed)], now: t0.addingTimeInterval(0.1))
+        runner.expect(r.flush(now: t0.addingTimeInterval(3), current: [], selectedId: nil, appIsFrontmost: false).isEmpty, "the tab was closed")
+    }
+    runner.test("a second event for the same tab replaces the queued one") {
+        var p = TabNotificationPlanner()
+        p.observe([tab("a", .working)], now: t0)
+        p.observe([tab("a", .done, outcome: .completed)], now: t0.addingTimeInterval(0.1))
+        p.observe([tab("a", .working)], now: t0.addingTimeInterval(0.2))
+        p.observe([tab("a", .done, outcome: .completed)], now: t0.addingTimeInterval(0.3))
+        runner.expect(p.flush(now: t0.addingTimeInterval(3), current: [tab("a", .done, outcome: .completed)], selectedId: nil, appIsFrontmost: false).count, equals: 1, "one, not two")
+    }
+    runner.test("a tab's name falls back the way the Sessions pane does") {
+        runner.expect(TabNotificationTitle.make(entryTitle: "fix\nlogin", isDraft: false, id: "abcdef123456"), equals: "fix login", "newline folded")
+        runner.expect(TabNotificationTitle.make(entryTitle: String(repeating: "x", count: 60), isDraft: false, id: "i").count, equals: 39, "long titles are cut with an ellipsis")
+        runner.expect(TabNotificationTitle.make(entryTitle: "  ", isDraft: false, id: "abcdef123456"), equals: "abcdef12", "id prefix")
+        runner.expect(TabNotificationTitle.make(entryTitle: nil, isDraft: true, id: "abcdef123456"), equals: "New chat", "draft")
+    }
+    runner.test("an identifier is stable per kind and tabs, so a repeat replaces instead of stacking") {
+        var p = TabNotificationPlanner()
+        let out = settle(&p, [tab("a", .working)], [tab("a", .done, outcome: .completed)])
+        runner.expect(out.first?.identifier, equals: "marvin.tab.finished.a", "identifier")
+    }
+}
+
+runner.suite("confirm sheet (N-02)") {
+    runner.test("the header names the tab and its branch") {
+        runner.expect(ConfirmSheetText.askedBy(tabTitle: "fix login", branch: "marvin/tab/fix-login"), equals: "Tab \u{201C}fix login\u{201D} \u{B7} marvin/tab/fix-login", "both")
+        runner.expect(ConfirmSheetText.askedBy(tabTitle: "fix login", branch: nil), equals: "Tab \u{201C}fix login\u{201D}", "title only")
+        runner.expect(ConfirmSheetText.askedBy(tabTitle: nil, branch: "main"), equals: "Branch main", "branch only")
+        runner.expect(ConfirmSheetText.askedBy(tabTitle: " ", branch: ""), equals: nil, "nothing to say")
+        runner.expect(ConfirmSheetText.askedBy(tabTitle: String(repeating: "y", count: 90), branch: nil)?.count ?? 0, equals: 66, "a long title is cut")
+    }
+}
+
+runner.suite("launch window check (F-01)") {
+    let screen = ScreenArea(x: 0, y: 0, width: 2560, height: 1410)
+    func win(visible: Bool = true, mini: Bool = false, main: Bool = true, x: Double = 100, y: Double = 100, w: Double = 1440, h: Double = 900) -> WindowProbe {
+        WindowProbe(title: "MARVIN", identifier: "marvin-main", isVisible: visible, isMiniaturized: mini, isMainCandidate: main, x: x, y: y, width: w, height: h)
+    }
+    runner.test("a visible main window on a screen needs nothing") {
+        runner.expect(LaunchWindowCheck.decide(windows: [win()], screens: [screen]), equals: .none, "fine")
+    }
+    runner.test("no window at all is what the second `open` fixed: ask for a reopen") {
+        runner.expect(LaunchWindowCheck.decide(windows: [], screens: [screen]), equals: .reopen, "none")
+        runner.expect(LaunchWindowCheck.decide(windows: [win(main: false)], screens: [screen]), equals: .reopen, "only a panel or status item")
+    }
+    runner.test("a window that exists but is hidden or minimised is brought forward") {
+        runner.expect(LaunchWindowCheck.decide(windows: [win(visible: false)], screens: [screen]), equals: .bringForward(index: 0, recenter: false), "hidden")
+        runner.expect(LaunchWindowCheck.decide(windows: [win(mini: true)], screens: [screen]), equals: .bringForward(index: 0, recenter: false), "miniaturised")
+    }
+    runner.test("a visible window that is off every screen is pulled back") {
+        runner.expect(LaunchWindowCheck.decide(windows: [win(x: 5000, y: 5000)], screens: [screen]), equals: .bringForward(index: 0, recenter: true), "off screen")
+        runner.expect(LaunchWindowCheck.decide(windows: [win(x: 5000, y: 5000)], screens: []), equals: .none, "no screen information: do not guess")
+    }
+    runner.test("a visible secondary window does not hide a missing main window") {
+        let about = WindowProbe(title: "About MARVIN", identifier: nil, isVisible: true, isMiniaturized: false, isMainCandidate: false, x: 10, y: 10, width: 300, height: 200)
+        runner.expect(LaunchWindowCheck.decide(windows: [about], screens: [screen]), equals: .reopen, "about only")
+        runner.expect(LaunchWindowCheck.decide(windows: [about, win(visible: false)], screens: [screen]), equals: .bringForward(index: 1, recenter: false), "index points at the main one")
+    }
+    runner.test("one visible main window among hidden ones is enough") {
+        runner.expect(LaunchWindowCheck.decide(windows: [win(visible: false), win()], screens: [screen]), equals: .none, "second is visible")
+    }
+    runner.test("the log line carries what the next occurrence needs") {
+        let line = LaunchWindowCheck.logLine(label: "launch+2.0s", windows: [win(visible: false)], appIsActive: false, appIsHidden: false, screens: [screen], decision: .bringForward(index: 0, recenter: false))
+        for needle in ["launch+2.0s", "windows=1", "visible=false", "marvin-main", "frame=100,100,1440x900", "active=false", "decision=bringForward"] {
+            runner.expect(line.contains(needle), "contains \(needle)")
+        }
+        runner.expect(LaunchWindowCheck.logLine(label: "x", windows: [], appIsActive: true, appIsHidden: false, screens: [], decision: .reopen).contains("windows=0"), "empty")
+    }
+}
+
+runner.suite("startup screens (F-02, F-03)") {
+    runner.test("connecting is quiet at first, then says how long and that tabs are being restored") {
+        let a = StartupScreenText.connecting(elapsed: 1.2, tabCount: 14)
+        runner.expect(a.headline, equals: "Connecting to the MARVIN sidecar\u{2026}", "headline")
+        runner.expect(a.detail, equals: nil, "no detail in the first seconds")
+        runner.expect(!a.offersLog, "no log button yet")
+        let b = StartupScreenText.connecting(elapsed: 7.4, tabCount: 14)
+        runner.expect(b.detail, equals: "Still starting (7 s). Your 14 tabs are restored as soon as it answers.", "tabs")
+        runner.expect(StartupScreenText.connecting(elapsed: 7, tabCount: 1).detail, equals: "Still starting (7 s). Your tab is restored as soon as it answers.", "one tab")
+        runner.expect(StartupScreenText.connecting(elapsed: 7, tabCount: 0).detail, equals: "Still starting (7 s).", "no tabs")
+        runner.expect(StartupScreenText.connecting(elapsed: 7, tabCount: nil).detail, equals: "Still starting (7 s).", "unknown")
+    }
+    runner.test("after a sensible time it stops pretending and offers the log") {
+        let c = StartupScreenText.connecting(elapsed: 25, tabCount: 14)
+        runner.expect(c.detail?.contains("longer than usual") ?? false, "says so")
+        runner.expect(c.detail?.contains("25 s") ?? false, "still counts")
+        runner.expect(c.offersLog, "log offered")
+        runner.expect(StartupScreenText.connecting(elapsed: 95, tabCount: nil).detail?.contains("1 min") ?? false, "minutes")
+        runner.expect(StartupScreenText.connecting(elapsed: 19.9, tabCount: nil).offersLog == false, "threshold is 20 s")
+    }
+    runner.test("the installed app never tells its user to run a repository command") {
+        let t = StartupScreenText.offline(isBundled: true, logPath: "~/Library/Logs/MARVIN/sidecar.log")
+        let all = ([t.headline, t.explanation] + t.steps).joined(separator: " ")
+        runner.expect(!all.contains("bin/marvin"), "no repo command")
+        runner.expect(!all.contains("repo"), "no repo")
+        runner.expect(!t.showsDeveloperCommand, "no developer block")
+        runner.expect(all.contains("sidecar.log"), "says where the log is")
+        runner.expect(all.contains("Retry"), "names the retry button")
+    }
+    runner.test("a development build keeps the developer instructions") {
+        let t = StartupScreenText.offline(isBundled: false, logPath: "x")
+        runner.expect(t.showsDeveloperCommand, "developer block")
+        runner.expect(t.developerCommand, equals: "bin/marvin start", "command")
+    }
+    runner.test("the tabs a relaunch restores are counted without guessing the project") {
+        runner.expect(StartupScreenText.savedTabCount(saved: ["p": ["a", "b", "a"]], activeProjectId: "p"), equals: 2, "active project, deduped")
+        runner.expect(StartupScreenText.savedTabCount(saved: ["p": ["a", "b"]], activeProjectId: nil), equals: 2, "one project saved, none active yet")
+        runner.expect(StartupScreenText.savedTabCount(saved: ["p": ["a"], "q": ["b", "c"]], activeProjectId: nil), equals: nil, "several projects: unknown")
+        runner.expect(StartupScreenText.savedTabCount(saved: ["p": ["a"]], activeProjectId: "other"), equals: nil, "active project has none saved")
+        runner.expect(StartupScreenText.savedTabCount(saved: [:], activeProjectId: nil), equals: nil, "nothing saved")
+    }
+}
+
 // MARK: - PlanRebaseGuard (ADR-0052)
 
 runner.suite("plan-rebase-guard") {
