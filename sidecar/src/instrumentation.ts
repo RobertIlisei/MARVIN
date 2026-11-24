@@ -16,6 +16,11 @@ export async function register(): Promise<void> {
   const { guardStdio } = await import("@marvin/runtime/stdio-guard");
   guardStdio([process.stdout, process.stderr]);
 
+  // Before any git child is spawned: MARVIN's background reads must never
+  // hold a checkout's index.lock against the user's own merge or commit.
+  const { gitReadsTakeNoLock } = await import("@marvin/runtime/git-env");
+  gitReadsTakeNoLock();
+
   const { setWakeupFireHandler, armAll } = await import(
     "@marvin/runtime/wakeup-scheduler"
   );

@@ -13,6 +13,7 @@
     "./claude-cli": "./src/claude-cli.ts",
     "./session": "./src/session.ts",
     "./stdio-guard": "./src/stdio-guard.ts",
+    "./git-env": "./src/git-env.ts",
     "./plan-state": "./src/plan-state.ts",
     "./plan-seed": "./src/plan-seed.ts",
     "./session-cwd": "./src/session-cwd.ts",
