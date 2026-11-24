@@ -519,6 +519,12 @@ final class NativePrefs {
            let pc = try? JSONDecoder().decode(PanesCodable.self, from: data) {
             panes = pc.toState()
         }
+        // S-02 — the large animated orb is off by default (a state dot in the chat
+        // header replaces it). A layout saved before that has it on, so it is
+        // switched off ONCE; a person who turns it back on keeps it.
+        let orb = BrainOrbDefault.migrate(brainOn: panes.brain, alreadyMigrated: d.bool(forKey: "marvin.brainOrbDefaultOff.v1"))
+        panes.brain = orb.brainOn
+        if orb.migrated { d.set(true, forKey: "marvin.brainOrbDefaultOff.v1") }
         if let t = d.string(forKey: "marvin.theme"), t == "light" || t == "dark" {
             themeName = t
         }

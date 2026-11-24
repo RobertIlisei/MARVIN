@@ -383,7 +383,8 @@ final class MarvinBridge {
     /// right initial state before the web side hydrates.
     struct PaneState: Equatable {
         var files: Bool = true
-        var brain: Bool = true
+        /// S-02 — off by default: the chat header carries a state dot instead.
+        var brain: Bool = false
         /// The bottom area is ONE tabbed panel (plan §D), not four
         /// independent panes. `graph`/`preview`/`terminal`/`problems` are
         /// derived from it so existing call sites and the legacy persisted
