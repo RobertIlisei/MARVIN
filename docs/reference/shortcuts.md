@@ -11,7 +11,10 @@ Wired in [`MARVINApp.swift`](../../macos/MARVIN/MARVINApp.swift) via `CommandGro
 | `⌘ O` | Open Project — NSOpenPanel; registers + activates the chosen `workDir` | File menu |
 | `⌘ ⌥ R` | Reveal active project in Finder | File menu |
 | `⌘ ⌥ T` | Open Terminal at the active project's `workDir` | File menu |
-| `⌘ /` | Open the **Keyboard Shortcuts** sheet (this list, native) | Window menu |
+| `⌘ /` | Open the **Keyboard Shortcuts** sheet (this list, native) | Help menu (was Window, R2-17) |
+| `⌘ 0` | **Show MARVIN** — bring the main window back, or open it if it was closed | Window menu |
+| `⇧⌘ [` / `⇧⌘ ]` | Previous / Next Session (open chat tabs) | Window menu (was File) |
+| `⌥⌘ ]` | Next Tab That Needs Me | Window menu (was Go) |
 | `⌘ P` | Quick Open File — fuzzy across the active project's tree | Window menu |
 | `⌘ T` | Go to Symbol — fuzzy across the project's `graphify-out/graph.json` | Window menu |
 | `⌘ ⇧ B` | Run Build Task — discovers tasks from `package.json` / `Makefile` / `Package.swift` / `Cargo.toml` and injects the chosen command into the terminal | Window menu |

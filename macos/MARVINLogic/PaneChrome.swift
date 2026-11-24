@@ -139,3 +139,31 @@ public enum PaneHeaderOverflow {
         return .iconOnlyPlusMenu(visible: iconLimit - 1)
     }
 }
+
+// MARK: - A skill row's description (R2-15)
+
+/// What a skill row prints where its description goes.
+///
+/// A skill whose SKILL.md carries `description: >` once printed ">" there — the
+/// parser read the block-scalar marker as the text (fixed in the sidecar). A row
+/// with truly nothing to say used to print nothing at all, which reads as a
+/// layout gap. It says so in a neutral, dimmed placeholder instead. A bare YAML
+/// marker is treated as no description too, so a sidecar that predates the parser
+/// fix cannot put ">" back on screen.
+public enum SkillRowDescription {
+    public static let placeholder = "No description"
+
+    public struct Display: Equatable, Sendable {
+        public let text: String
+        public let isPlaceholder: Bool
+    }
+
+    public static func display(_ raw: String) -> Display {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let markers: Set<String> = [">", "|", ">-", "|-", ">+", "|+"]
+        if t.isEmpty || markers.contains(t) {
+            return Display(text: placeholder, isPlaceholder: true)
+        }
+        return Display(text: t, isPlaceholder: false)
+    }
+}

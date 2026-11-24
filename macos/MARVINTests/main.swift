@@ -188,6 +188,116 @@ runner.suite("context-tokens") {
     }
 }
 
+// MARK: - UX review round 2, group E: window shell (W-11, R2-13, R2-17, R2-12, R2-15)
+
+runner.suite("work-area layout (W-11)") {
+    func content(file: Bool = false, preview: Bool = false, supervisor: Bool = false, bottom: Bool = false)
+        -> WorkAreaLayout.Content {
+        .init(hasOpenFile: file, previewOpen: preview, supervisorWorkspaceOpen: supervisor, bottomPanelOpen: bottom)
+    }
+
+    runner.test("nothing to show in the editor area: the chat fills the window") {
+        runner.expect(WorkAreaLayout.mode(content()), equals: .chatFills, "no file, no preview, no workspace, no panel")
+    }
+    runner.test("any one surface that lives in the editor column brings the split back") {
+        runner.expect(WorkAreaLayout.mode(content(file: true)), equals: .split, "a file is open")
+        runner.expect(WorkAreaLayout.mode(content(preview: true)), equals: .split, "the browser preview is open")
+        runner.expect(WorkAreaLayout.mode(content(supervisor: true)), equals: .split, "the Supervisor workspace is open")
+        runner.expect(WorkAreaLayout.mode(content(bottom: true)), equals: .split, "terminal / problems / graph is open")
+    }
+    runner.test("toggling is a pure function of state: the same state always gives the same mode") {
+        var seen: [WorkAreaLayout.Mode] = []
+        for i in 0..<6 { seen.append(WorkAreaLayout.mode(content(file: i % 2 == 0))) }
+        runner.expect(seen, equals: [.split, .chatFills, .split, .chatFills, .split, .chatFills], "alternates with the file, nothing else")
+    }
+    runner.test("the chat is held to a reading measure only while it fills the window") {
+        runner.expect(WorkAreaLayout.chatMaxWidth(.split) == nil, "the split decides the side column's width")
+        runner.expect(WorkAreaLayout.chatMaxWidth(.chatFills), equals: 900, "reading width")
+        runner.expect(WorkAreaLayout.readingWidth > 770, "wider than the 770 pt column it replaces, or the change gains nothing")
+        runner.expect(WorkAreaLayout.readingWidth <= 1000, "not so wide that prose stretches past a comfortable line")
+    }
+    runner.test("the tab strip band is the chat's top 33 pt (R2-13)") {
+        runner.expect(WorkAreaLayout.isInTabStrip(y: 0), "top edge")
+        runner.expect(WorkAreaLayout.isInTabStrip(y: 32), "last row of the strip")
+        runner.expect(!WorkAreaLayout.isInTabStrip(y: 33), "the header below it is not the strip")
+        runner.expect(!WorkAreaLayout.isInTabStrip(y: -1), "above the column")
+    }
+}
+
+runner.suite("menu placement (R2-17)") {
+    func item(_ id: String) -> MenuPlacement.Item? { MenuPlacement.item(id) }
+
+    runner.test("Check for Updates is in the app menu, not Window") {
+        runner.expect(item("help.checkUpdates")?.menu, equals: "MARVIN", "app menu")
+        runner.expect(item("help.checkUpdates")?.previousMenu, equals: "Window", "recorded as moved from Window")
+    }
+    runner.test("Keyboard Shortcuts and diagnostics are in Help, and ⌘/ still works") {
+        runner.expect(item("help.shortcuts")?.menu, equals: "Help", "shortcuts sheet")
+        runner.expect(item("help.shortcuts")?.shortcut, equals: "⌘/", "same key")
+        runner.expect(item("help.copyDiagnostics")?.menu, equals: "Help", "diagnostics")
+    }
+    runner.test("session stepping sits in Window with the keys it had") {
+        runner.expect(item("file.previousSession")?.menu, equals: "Window", "previous")
+        runner.expect(item("file.previousSession")?.shortcut, equals: "⇧⌘[", "previous key kept")
+        runner.expect(item("file.nextSession")?.shortcut, equals: "⇧⌘]", "next key kept")
+        runner.expect(item("go.nextTabNeedingMe")?.menu, equals: "Window", "out of the code-navigation Go menu")
+        runner.expect(item("go.nextTabNeedingMe")?.shortcut, equals: "⌥⌘]", "key kept")
+    }
+    runner.test("Show MARVIN gets ⌘0 and no other command has it") {
+        runner.expect(item("window.showMarvin")?.shortcut, equals: "⌘0", "main-window key")
+        let keys = MenuPlacement.table.compactMap(\.shortcut)
+        runner.expect(Set(keys).count, equals: keys.count, "no two placed commands share a key")
+    }
+    runner.test("every placed item names a menu the registry can render") {
+        let known: Set<String> = ["MARVIN", "File", "Edit", "Selection", "View", "Go", "Run", "Terminal", "Window", "Help"]
+        for i in MenuPlacement.table { runner.expect(known.contains(i.menu), "\(i.id) -> \(i.menu)") }
+    }
+}
+
+runner.suite("source control tree label (R2-12)") {
+    runner.test("a worktree tab: the pane says it shows the project, not the tab's tree") {
+        let l = SourceControlTreeLabel.make(
+            projectBranch: "feature/s00", tabTitle: "B54 security", tabIsWorktree: true, tabBranch: "marvin/tab/b54")
+        runner.expect(l.kind, equals: .otherTree, "kind")
+        runner.expect(l.headline, equals: "Project checkout, not the selected tab", "headline")
+        runner.expect((l.detail ?? "").contains("B54 security"), "names the tab")
+        runner.expect((l.detail ?? "").contains("marvin/tab/b54"), "names the tab's branch")
+        runner.expect((l.detail ?? "").contains("feature/s00"), "names the project's branch")
+        runner.expect(l.commitHelp.contains("feature/s00"), "commit help names the branch it commits on")
+        runner.expect(l.commitHelp.contains("not in the selected tab's worktree"), "and says what it does not touch")
+    }
+    runner.test("a shared-checkout tab or no tab: the same tree, nothing to warn about") {
+        let shared = SourceControlTreeLabel.make(projectBranch: "main", tabTitle: "Chat", tabIsWorktree: false, tabBranch: nil)
+        runner.expect(shared.kind, equals: .sameTree, "shared")
+        runner.expect(shared.headline, equals: "Project checkout", "headline")
+        let none = SourceControlTreeLabel.make(projectBranch: "main", tabTitle: nil, tabIsWorktree: false, tabBranch: nil)
+        runner.expect(none.detail == nil, "no tab, no sentence about it")
+    }
+    runner.test("an untitled worktree tab and a detached HEAD still read") {
+        let l = SourceControlTreeLabel.make(projectBranch: nil, tabTitle: "  ", tabIsWorktree: true, tabBranch: nil)
+        runner.expect((l.detail ?? "").hasPrefix("The selected tab works in its own worktree."), "fallback name")
+        runner.expect(l.commitHelp.contains("(detached)"), "detached HEAD named")
+    }
+}
+
+runner.suite("skill row description (R2-15)") {
+    runner.test("a real description is shown as is") {
+        let d = SkillRowDescription.display("  Make PDFs.  ")
+        runner.expect(d.text, equals: "Make PDFs.", "trimmed")
+        runner.expect(!d.isPlaceholder, "not a placeholder")
+    }
+    runner.test("nothing, whitespace, or a bare block-scalar marker shows the neutral placeholder") {
+        for raw in ["", "   ", ">", "|", ">-", "|-", ">+"] {
+            let d = SkillRowDescription.display(raw)
+            runner.expect(d.isPlaceholder, "'\(raw)' is a placeholder")
+            runner.expect(d.text, equals: "No description", "text for '\(raw)'")
+        }
+    }
+    runner.test("a description that merely starts with > is not a marker") {
+        runner.expect(!SkillRowDescription.display(">> redirects stdout").isPlaceholder, "real text")
+    }
+}
+
 // MARK: - context-band (ADR-0022 §2)
 //
 // Pin the four-band ramp boundaries. Tuned for Sonnet 4.x's 200K

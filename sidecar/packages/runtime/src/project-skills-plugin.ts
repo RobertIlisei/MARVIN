@@ -28,6 +28,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { join } from "node:path";
 
 import { validateProjectCwd } from "./projects";
+import { parseSkillFrontmatter as parseFrontmatter } from "./skill-frontmatter";
 
 /**
  * If `<workDir>/.marvin/skills/<name>/SKILL.md` exists for at least one
@@ -253,27 +254,3 @@ export function listProjectSkills(workDir: string): ProjectSkillEntry[] {
   return out;
 }
 
-/**
- * Tiny YAML-frontmatter parser. We only care about top-level scalar
- * `name:` and `description:` keys; nested keys / arrays are not in the
- * SKILL.md schema. Returns an empty object when the file has no
- * frontmatter or the frontmatter is malformed.
- */
-function parseFrontmatter(text: string): { name?: string; description?: string } {
-  if (!text.startsWith("---\n")) return {};
-  const end = text.indexOf("\n---", 4);
-  if (end < 0) return {};
-  const block = text.slice(4, end);
-  const out: { name?: string; description?: string } = {};
-  for (const line of block.split("\n")) {
-    const m = line.match(/^(\w+)\s*:\s*(.*)$/);
-    if (!m) continue;
-    const key = m[1];
-    const valRaw = m[2] ?? "";
-    const val = valRaw.trim().replace(/^['"](.*)['"]$/, "$1");
-    if (key === "name" || key === "description") {
-      out[key] = val;
-    }
-  }
-  return out;
-}

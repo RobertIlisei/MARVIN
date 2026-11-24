@@ -209,11 +209,10 @@ import SwiftUI
                             .transition(.opacity)
                     }
                 } else {
-                // IDE-style 3-pane split — every divider is a
-                // draggable NSSplitView handle. The ideal sizes are
-                // hints for first launch; idealWidth / idealHeight
-                // pre-position the dividers but the user can drag
-                // freely within [minWidth … available].
+                // IDE-style split: the left pane and the work area, one
+                // draggable NSSplitView handle between them. The work area (editor
+                // column + chat column) is plain SwiftUI — see `workArea` for why
+                // the editor/chat divider is not a second split.
                 HSplitView {
                     // `files` / `brain` pane toggles (⌘B, layout
                     // popover) gate their panes here — before
@@ -231,43 +230,14 @@ import SwiftUI
                             // Clamping at 200 was what made the pane "remain at
                             // an exact size" (user, 2026-08-29).
                             .frame(minWidth: 45, idealWidth: 260)
-                            .background(SplitViewAutosave(name: "marvin.main"))
+                            // "v2": the split had three children until W-11; saved
+                            // frames for three do not apply to two (see the note on
+                            // `SplitViewAutosave.name`).
+                            .background(SplitViewAutosave(name: "marvin.main.v2"))
                     }
-                    webIsland
+                    workArea
                         .frame(minWidth: 320)
-                    // Right pane mirrors the web `side` aside —
-                    // brain on top of chat, split by a plain draggable
-                    // divider. NOT a `VSplitView`: see `brainDivider`.
-                    VStack(spacing: 0) {
-                        if bridge.panes.brain {
-                            BrainPaneView()
-                                .frame(height: brainHeight)
-                            brainDivider
-                        }
-                        // Brief §13.2 — while the Supervisor workspace is open and
-                        // the supervisor enabled, its inspector covers the chat.
-                        // An opaque overlay on a still-mounted, full-width chat
-                        // (the pinned tab's mechanism): nothing reflows, and no
-                        // transcript is zero-framed.
-                        ChatPreviewView()
-                            .frame(minHeight: 200, maxHeight: .infinity)
-                            .accessibilityHidden(supervisorCovers)
-                            // Covered, it is out of the key-view loop too (pr-review).
-                            .disabled(supervisorCovers)
-                            .overlay {
-                                if supervisorCovers {
-                                    SupervisorInspector(model: SupervisorModel.shared,
-                                                        showsStateLine: !bridge.panes.brain)
-                                        .transition(.opacity)
-                                }
-                            }
-                    }
-                    .frame(minWidth: 320, idealWidth: 480)
                 }
-                // NB: no `.animation(value: bridge.panes)` on the split —
-                // animating an NSSplitView-backed layout feeds AppKit's
-                // update-constraints loop (ADR-0062); it crashed at launch
-                // on 2026-08-29. Pane toggles snap; contents animate.
                 } // end else (project active)
             case .offline(let reason):
                 offlineView(reason: reason)
@@ -413,7 +383,6 @@ import SwiftUI
             .onDrop(of: [.fileURL], isTargeted: nil) { providers in
                 handleFolderDrop(providers: providers)
             }
-            .animation(.easeOut(duration: 0.18), value: bridge.selectedFilePath)
     }
 
     /// Vertical split between the editor (top) and the bottom panes
@@ -479,6 +448,12 @@ import SwiftUI
                     .accessibilityHidden(!open)
             }
         }
+        // The cross-fade between the empty hint and the file viewer. It sits on the
+        // content, INSIDE the split views: on `webIsland` it also animated the
+        // editor column's width when W-11 made that change with the file (an
+        // animated NSSplitView layout is the ADR-0062 loop; 10-24 split resizes per
+        // toggle measured, 0-4 without).
+        .animation(.easeOut(duration: 0.18), value: bridge.selectedFilePath)
         .onChange(of: bridge.panes.previewOpen, initial: true) { _, open in
             if open { previewEverOpened = true }
         }
@@ -492,6 +467,150 @@ import SwiftUI
             guard supervisor.workspaceOpen, let path, !path.isEmpty, path != supervisor.innerOpenPath else { return }
             supervisor.closeWorkspace()
         }
+    }
+
+    /// W-11 — what the editor column has to show decides the layout, nothing
+    /// measured (see `WorkAreaLayout`).
+    private var workAreaMode: WorkAreaLayout.Mode {
+        WorkAreaLayout.mode(.init(
+            hasOpenFile: bridge.selectedFilePath?.isEmpty == false,
+            previewOpen: bridge.panes.previewOpen,
+            supervisorWorkspaceOpen: SupervisorModel.shared.workspaceOpen,
+            bottomPanelOpen: bridge.panes.bottom.isOpen
+        ))
+    }
+
+    /// The widest the editor/chat divider lets the chat be, in points.
+    private static let chatWidthRange: ClosedRange<Double> = 320...1600
+    private static let editorMinWidth: Double = 320
+
+    /// The editor column and the chat column.
+    ///
+    /// W-11. This used to be the second and third children of one `HSplitView`.
+    /// Collapsing the middle child there (measured: `window-work-area`) did not
+    /// give its width to the chat — AppKit gave it to the LEFT pane, so the file
+    /// tree grew to 1700 pt and the chat stayed 854. SwiftUI has no handle on
+    /// which neighbour a split view feeds, and the nearest AppKit one
+    /// (`setHoldingPriority`) means reaching into the view SwiftUI owns, which
+    /// ADR-0062 says not to. So the left pane is the split's only other child, and
+    /// this is an `HStack` whose layout rule is `WorkAreaLayout`: a change here
+    /// never resizes the split, so the left pane and its autosaved width do not
+    /// move at all when a file opens or closes.
+    ///
+    /// The editor/chat divider is a hand-drawn drag handle like `brainDivider`
+    /// (and `LeftPane.toolsDivider`), for the same reason they are not split views:
+    /// a second `NSSplitView` is what the 2026-09-01 runaway-pass crash was made of.
+    /// The chat's width is `marvin.chatWidth`; the editor takes the rest.
+    ///
+    /// The editor column is collapsed, not removed, when the chat fills the window:
+    /// the preview page, the Supervisor workspace's draft and the terminal's
+    /// scrollback stay mounted. Its content keeps a 320 pt minimum INSIDE the
+    /// zero-width frame, so nothing is laid out at width 0 (the text-measurement
+    /// oscillation of 2026-09-12 needed exactly that).
+    private var workArea: some View {
+        let mode = workAreaMode
+        let fills = mode == .chatFills
+        return HStack(spacing: 0) {
+            webIsland
+                .frame(minWidth: Self.editorMinWidth)
+                .frame(minWidth: fills ? 0 : Self.editorMinWidth, maxWidth: fills ? 0 : .infinity)
+                .clipped()
+                .allowsHitTesting(!fills)
+                .accessibilityHidden(fills)
+            chatDivider
+                .frame(width: fills ? 0 : 5)
+                .opacity(fills ? 0 : 1)
+                .allowsHitTesting(!fills)
+            chatColumn(fills: fills)
+                // Split: the chat is `chatWidth` wide (less if the window cannot
+                // give the editor its minimum). Fills: it takes the window, held to
+                // a reading measure by `chatColumn` and centred here.
+                .frame(minWidth: fills ? 320 : Self.editorMinWidth,
+                       maxWidth: fills ? .infinity : splitChatWidth)
+        }
+        // The one measurement, and it cannot feed back: this view's width is the
+        // split's (a fixed child of `HSplitView`), not a function of its content.
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in
+            LayoutOscillationProbe.record("workArea", size: CGSize(width: w, height: 0))
+            workAreaWidth = Double(w)
+        }
+        // NB: no `.animation` here either — see the note on the split above.
+    }
+
+    /// Measured width of `workArea`; 0 until the first pass, read as "unknown".
+    @State private var workAreaWidth: Double = 0
+    /// The chat's width while the editor column is showing.
+    @AppStorage("marvin.chatWidth") private var chatWidth: Double = 640
+    @State private var chatWidthAtDragStart: Double?
+
+    private var splitChatWidth: Double {
+        let room = workAreaWidth > 0 ? workAreaWidth - Self.editorMinWidth - 5 : .infinity
+        return max(Self.chatWidthRange.lowerBound, min(chatWidth, room, Self.chatWidthRange.upperBound))
+    }
+
+    private func chatColumn(fills: Bool) -> some View {
+        // Right pane mirrors the web `side` aside —
+        // brain on top of chat, split by a plain draggable
+        // divider. NOT a `VSplitView`: see `brainDivider`.
+        VStack(spacing: 0) {
+            if bridge.panes.brain {
+                BrainPaneView()
+                    .frame(height: brainHeight)
+                brainDivider
+            }
+            // Brief §13.2 — while the Supervisor workspace is open and
+            // the supervisor enabled, its inspector covers the chat.
+            // An opaque overlay on a still-mounted, full-width chat
+            // (the pinned tab's mechanism): nothing reflows, and no
+            // transcript is zero-framed.
+            ChatPreviewView()
+                .frame(minHeight: 200, maxHeight: .infinity)
+                // R2-13 — the inspector covers the chat BELOW its tab
+                // strip, so the strip's states stay visible and a tab is
+                // one click away. (It used to cover the strip too, and the
+                // whole view was `.disabled`, which the strip then could
+                // not escape.) A click in the strip's band also closes
+                // the workspace: the tab the user picks is the tab shown.
+                .overlay {
+                    if supervisorCovers {
+                        SupervisorInspector(model: SupervisorModel.shared,
+                                            showsStateLine: !bridge.panes.brain)
+                            .padding(.top, WorkAreaLayout.chatTabStripInset)
+                            .transition(.opacity)
+                    }
+                }
+                .simultaneousGesture(
+                    SpatialTapGesture().onEnded { tap in
+                        guard supervisorCovers, WorkAreaLayout.isInTabStrip(y: tap.location.y) else { return }
+                        SupervisorModel.shared.closeWorkspace()
+                    }
+                )
+        }
+        // W-11 — held to a reading measure while the chat fills the window,
+        // centred by the caller; unbounded in the split.
+        .frame(maxWidth: WorkAreaLayout.chatMaxWidth(fills ? .chatFills : .split) ?? .infinity)
+    }
+
+    /// Draggable edge between the editor and the chat: dragging LEFT widens the chat.
+    private var chatDivider: some View {
+        MarvinDivider()
+            .padding(.horizontal, 2)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                // Global coordinates: the handle moves while it is dragged, so a
+                // local translation would chase itself.
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { value in
+                        let start = chatWidthAtDragStart ?? splitChatWidth
+                        chatWidthAtDragStart = start
+                        let next = start - value.translation.width
+                        chatWidth = max(Self.chatWidthRange.lowerBound, min(next, Self.chatWidthRange.upperBound))
+                    }
+                    .onEnded { _ in chatWidthAtDragStart = nil }
+            )
     }
 
     /// §13.2 — the right column is the supervisor's only while it is enabled.
