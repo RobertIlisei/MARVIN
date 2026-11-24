@@ -49,4 +49,43 @@ Four things stopped MARVIN from enforcing the rest, each checked in the code:
 - [x] The `Skills:` parser reads the three shapes and a real brief line, and seeds once from the first message only: `skill-brief.test.ts`.
 - [x] The close hook blocks naming the missing skills, accepts the waiver line, treats an unavailable skill as unavailable, brakes after two blocks across a restart, and ignores machine turns, non-scope-met turns and read failures: `skills-close.test.ts`.
 - [x] The watch row carries `skills`; the extractor `skill.named.unused` counts a named, un-run, un-waived skill at the first scope-met close: `session-watch.test.ts`, `skill-named-unused.test.ts`.
-- Not built: a form in the Practice pane to create a skill-on-paths rule (route only), and a reminder line in the turn prompt naming the seeded skills (the block message is the only text the model sees).
+- Not built: a form in the Practice pane to create a skill-on-paths rule (route only). The turn reminder that names the seeded skills was built the same day, see the addendum below.
+
+## Addendum 2026-11-24: skills are asked for from the start, not at the end
+
+This extends the decision above; it supersedes nothing, so it is an addendum and not a new ADR. The close check, the waiver line, the brake and the row `builtin:skills-named` are unchanged.
+
+### Context
+
+One hour after the close check went live, on a real project, new tabs showed their seeded lists (9, 10 and 6 skills required) and two of them reached their first gated `git commit` with none used, including the working-method skill the brief asks for first. A check at the close turns a skill into a box ticked at the end. The owner's instruction: the skills are to be used from the beginning.
+
+### Decision
+
+1. **The turn says so, every turn.** While a session has seeded skills that have not run, the turn's `<system-reminder>` suffix carries one line: `Skills this brief named and not yet used: ...`, followed by `Run now, before your first change: ...` when some of them are start skills. It names only skills the project can invoke, and it disappears when none is missing. It rides the reminder suffix, never the system prompt append, because the append is recorded once per session (AGENTS.md, Agent SDK contract). Built by `skillsReminder`, passed through `turnReminders`.
+2. **A brief marks the start skills, not MARVIN.** A parenthesised note after a skill that holds the word `first` marks it (`` `ponytail` (first) ``, `(full, first)`, `(first, full)`), and a line `Skills first: ...` or `**Skills first:** ...` marks every name on it and also names them. The list is stored on the session meta as `skills.first`, a subset of `skills.required`. A meta written before this build has no `first`, which means none: a session already running is not gated.
+3. **The first change waits for the start skills.** While a start skill has not run, the gate `builtin:skills-first` refuses an Edit, Write or NotebookEdit on a file inside the session's checkout, and a `git commit`. It names the skills to run now. Reads, searches, graph calls, TodoWrite, Skill itself and the memory and backlog tools are never refused, and a subagent's calls keep their own rules. The row has native tier `deny` and the Practice pane can lower or switch it off; `MARVIN_DESIGN_HOOKS=measure` logs instead. ADR-0104's brake applies with its count on the session meta (`skills.firstBlocks`): two refusals a session, across turns and restarts, then the call is allowed and `skills.first.bypass` is logged. Telemetry: `skills.first.block`, `.bypass`, `.measured`. A start skill the project cannot invoke (not in the captured command catalog and not on disk) is not asked for, the same rule as the close check. A session with no start skill is never touched.
+4. **A project can say which skills belong at the start.** `<workDir>/.marvin/skills.json` takes a key `first`: an array of skill names. The brief must still name the skill; the setting only says that one belongs at the start, and it never adds a skill the brief did not name. It is applied when the list is seeded, so a session keeps the start skills it began with. The file is written by whoever wrote the repository, so it is read at a validating boundary: at most 20 entries, each a valid skill name, normalised and deduplicated, anything else reads as no setting. MARVIN ships no default for it.
+5. **Where the setting lives, and why.** `skills.json` is the project's per-project skill file and the Skills pane writes `enabled`, `source` and `decidedAt` to it. A second file would have been another place to look. The cost is that the pane rewrites the whole file, so `setEnabledSkills` now reads the old file and keeps `first` across a toggle (test: `the Skills pane's own write keeps the first key`). A tool that rewrites the file without reading it would erase the setting.
+6. **Visibility.** Watch rows carry `skills.first`, and the Sessions pane tooltip lists the start skills. An older sidecar's row has no `first` and still decodes.
+
+### Alternatives considered
+
+- **Gate every mutation until all named skills ran.** Most named skills are review or verification skills that only make sense later, and gating on them would stall the tab. Only the skills the brief itself calls first gate the start.
+- **A default start skill in MARVIN.** Golden Rule 6: another project names other skills. The project setting makes a default possible from data.
+- **Resolve the project setting at gate time.** A running session would be gated by a file edited after it started, and a hostile edit of the file would change a running tab. Resolving it once, at seeding, keeps a session's list its own.
+
+### Consequences
+
+- A session that already runs when MARVIN restarts onto this build has no `skills.first`, so it is never gated; it does start receiving the reminder line if its seeded skills have not run. The close check is unchanged for it.
+- A `Skill` call made by a subagent is recorded for the session (as noted above), so a scout that runs a start skill lifts the gate. The gate itself never fires on a subagent's call.
+- The first-change gate does not see a mutation made through the shell (`sed -i`, a redirect). Edit, Write, NotebookEdit and `git commit` are the changes it knows; the close check still catches a skill that never ran.
+- With no captured command catalog nothing is reported unavailable, so a start skill that is not installed blocks twice before the brake releases it. The model can say so in the chat, and the close check's waiver line still applies at the end.
+
+### Scope of Done
+
+- [x] The parser reads the `first` marker in a note (either order, with other words), on a `Skills first:` line plain or bold, and on a real brief line, and returns the list a brief without markers always produced: `skill-brief.test.ts`.
+- [x] The reminder line lists only skills that have not run, marks the start ones, leaves out an unavailable one and disappears when none is missing; it rides `turnReminders`: `skill-brief.test.ts`, `system-prompt-snapshot.test.ts`.
+- [x] The first Edit and the first commit are refused naming the skill, a read is not, running the skill lifts the gate, the brake lets the third through and survives a new turn context, an unavailable start skill does not block, a session with no start skill or a meta without `first` is untouched, a subagent's call is untouched, measure mode logs: `skills-first.test.ts`.
+- [x] The project `first` setting applies only to skills the brief names, is validated, and survives a Skills-pane write: `skill-brief.test.ts`.
+- [x] The watch row carries `skills.first` and the Swift row decodes with and without it: `session-watch.test.ts`, `MARVINTests`.
+- Not built: gating a mutation made through the shell, and a Practice pane form to edit `first` (edit the file).
