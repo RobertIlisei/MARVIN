@@ -12,6 +12,9 @@ import {
   graphifyMissingHint,
   graphifyPython,
   graphifyEnv,
+  graphifyExtrasHint,
+  graphifyMaxWorkers,
+  GRAPHIFY_EXTRAS_HINT,
   graphifyBelowMinimum,
   GRAPHIFY_MIN_VERSION,
   graphifyVersion,
@@ -138,6 +141,37 @@ describe("graphifyEnv", () => {
     expect(env.GRAPHIFY_NO_AUTO_REFRESH).toBe("1");
     expect(env.PATH).toBe("/bin");
     expect(env.HOME).toBe("/h");
+  });
+
+  // graphify sizes its extraction pool at one worker per core by default, so a
+  // per-turn `update` on a 19k-file project held ~14 of 18 cores for the whole
+  // run, once per tab (measured 2026-11-24, 0.9.73 and 0.9.118 alike).
+  it("caps extraction workers, and lets an explicit value win", () => {
+    expect(graphifyEnv({ NODE_ENV: "test" }, 18).GRAPHIFY_MAX_WORKERS).toBe("6");
+    expect(graphifyEnv({ NODE_ENV: "test", GRAPHIFY_MAX_WORKERS: "3" }, 18).GRAPHIFY_MAX_WORKERS).toBe("3");
+    expect(graphifyEnv({ NODE_ENV: "test", GRAPHIFY_MAX_WORKERS: "  " }, 18).GRAPHIFY_MAX_WORKERS).toBe("6");
+  });
+
+  it("scales the cap with the machine: half the cores, between 2 and 6", () => {
+    expect([1, 2, 4, 8, 12, 18, 64].map(graphifyMaxWorkers)).toEqual([2, 2, 2, 4, 6, 6, 6]);
+  });
+});
+
+// In 0.9.118 `query`, `explain`, `path`, `affected` and `benchmark` import
+// `anyio`, which only the `mcp` extra installs; 0.9.73 did not need it.
+describe("graphifyExtrasHint", () => {
+  it("names the reinstall when graphify died on a missing optional module", () => {
+    const err = Object.assign(new Error("Command failed: graphify query x"), {
+      stderr: "Traceback (most recent call last):\nModuleNotFoundError: No module named 'anyio'. Did you mean: '_pyio'?",
+    });
+    expect(graphifyExtrasHint(err)).toBe(GRAPHIFY_EXTRAS_HINT);
+    expect(GRAPHIFY_EXTRAS_HINT).toContain("graphifyy[mcp]");
+  });
+
+  it("stays quiet for any other failure", () => {
+    expect(graphifyExtrasHint(new Error("exit 3"))).toBeNull();
+    expect(graphifyExtrasHint(Object.assign(new Error("x"), { stderr: "No module named 'numpy'" }))).toBeNull();
+    expect(graphifyExtrasHint(null)).toBeNull();
   });
 });
 

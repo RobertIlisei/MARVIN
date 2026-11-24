@@ -18,7 +18,7 @@
 
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { availableParallelism, homedir } from "node:os";
 import { delimiter, join } from "node:path";
 
 export interface GraphifyBinOptions {
@@ -28,8 +28,26 @@ export interface GraphifyBinOptions {
 
 /** Shown wherever a graphify call fails because no binary could be found. */
 export const GRAPHIFY_MISSING_HINT =
-  "graphify CLI not found. Install it with `uv tool install graphifyy` (or `pipx install graphifyy`), " +
+  "graphify CLI not found. Install it with `uv tool install \"graphifyy[mcp]\"` (or `pipx install \"graphifyy[mcp]\"`), " +
   "or set GRAPHIFY_BIN to its absolute path, then restart MARVIN.";
+
+/**
+ * In 0.9.118 (not in 0.9.73) `graphify query`, `explain`, `path`, `affected` and
+ * `benchmark` import `graphify.serve`, which needs `anyio`, and the base install
+ * does not carry it: it belongs to the `mcp` extra. Every one of them dies with a Python
+ * traceback on a plain `uv tool install graphifyy`, which `graph_query`,
+ * `graph_explain` and `graph_benchmark` would show as an unreadable stack.
+ */
+export const GRAPHIFY_EXTRAS_HINT =
+  "This graphify is installed without its `mcp` extra, which query / explain / benchmark need. " +
+  "Reinstall with `uv tool install --force \"graphifyy[mcp]\"` (or `pipx install --force \"graphifyy[mcp]\"`), then retry.";
+
+/** The reinstall hint when `err` is a graphify run that died on a missing optional dependency, else null. */
+export function graphifyExtrasHint(err: unknown): string | null {
+  const e = err as { message?: unknown; stderr?: unknown } | null;
+  const text = `${typeof e?.message === "string" ? e.message : ""}\n${typeof e?.stderr === "string" ? e.stderr : ""}`;
+  return /No module named '(?:anyio|mcp|starlette)'/.test(text) ? GRAPHIFY_EXTRAS_HINT : null;
+}
 
 /** `graphify 0.9.65` → `[0, 9, 65]`; null when unreadable. */
 export function graphifyVersion(bin: string): number[] | null {
@@ -147,10 +165,28 @@ export function graphifyPython(opts: GraphifyBinOptions = {}): string {
  * on any non-install command when they are stale — and MARVIN runs graphify in
  * the background on every turn. A skill update is the Skills pane's job
  * (ADR-0071), never a side effect of a graph refresh. The user's own
- * `graphify` in a terminal is unaffected and still refreshes.
+ * `graphify` in a terminal is unaffected and still refreshes. It also caps the
+ * extraction workers ({@link graphifyMaxWorkers}).
  */
-export function graphifyEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return { ...base, GRAPHIFY_NO_AUTO_REFRESH: "1" };
+export function graphifyEnv(
+  base: NodeJS.ProcessEnv = process.env,
+  cpus: number = availableParallelism(),
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, GRAPHIFY_NO_AUTO_REFRESH: "1" };
+  if (!env.GRAPHIFY_MAX_WORKERS?.trim()) env.GRAPHIFY_MAX_WORKERS = String(graphifyMaxWorkers(cpus));
+  return env;
+}
+
+/**
+ * Extraction workers for a graphify MARVIN spawns. graphify defaults to one
+ * worker per core (up to the file count), so a per-turn `update` on a large
+ * project held ~14 of 18 cores for the whole run, once per tab (measured
+ * 2026-11-24). A background refresh should leave the machine to the user's
+ * builds: half the cores, never fewer than 2 or more than 6. An explicit
+ * `GRAPHIFY_MAX_WORKERS` in the sidecar's environment still wins.
+ */
+export function graphifyMaxWorkers(cpus: number): number {
+  return Math.max(2, Math.min(6, Math.floor(cpus / 2)));
 }
 
 /**
