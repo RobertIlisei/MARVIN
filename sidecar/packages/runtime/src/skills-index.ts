@@ -26,6 +26,7 @@ import {
 } from "./install-provenance";
 import { readCachedDiscovery } from "./project-skill-discoverer";
 import { listProjectSkills, type SkillLoadIssue } from "./project-skills-plugin";
+import { parseSkillFrontmatter as parseFrontmatter } from "./skill-frontmatter";
 import {
   applySuggestionRules,
   type SuggestionVerb,
@@ -132,31 +133,6 @@ function listUserGlobalSkills(): InstalledSkill[] {
     }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/**
- * Tiny YAML-frontmatter parser. Same shape as the one in
- * `project-skills-plugin.ts`; duplicated rather than re-exported
- * because the parser is a 20-line implementation and a re-export
- * cycle isn't worth the savings.
- */
-function parseFrontmatter(text: string): { name?: string; description?: string } {
-  if (!text.startsWith("---\n")) return {};
-  const end = text.indexOf("\n---", 4);
-  if (end < 0) return {};
-  const block = text.slice(4, end);
-  const out: { name?: string; description?: string } = {};
-  for (const line of block.split("\n")) {
-    const m = line.match(/^(\w+)\s*:\s*(.*)$/);
-    if (!m) continue;
-    const key = m[1];
-    const valRaw = m[2] ?? "";
-    const val = valRaw.trim().replace(/^['"](.*)['"]$/, "$1");
-    if (key === "name" || key === "description") {
-      out[key] = val;
-    }
-  }
-  return out;
 }
 
 /**

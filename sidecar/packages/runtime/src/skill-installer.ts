@@ -36,6 +36,7 @@ import {
   treeExists,
   writeSkillProvenance,
 } from "./install-provenance";
+import { parseSkillFrontmatter as parseFrontmatter } from "./skill-frontmatter";
 
 export type SkillScope = "user-global" | "project-local";
 
@@ -93,21 +94,6 @@ export function parseGitUrl(raw: string): ParsedGitUrl | null {
   // A local filesystem path (a private/local skill repo) or file:// URL.
   if (url.startsWith("file://") || url.startsWith("/")) return { cloneUrl: url };
   return null;
-}
-
-function parseFrontmatter(text: string): { name?: string; description?: string } {
-  if (!text.startsWith("---\n")) return {};
-  const end = text.indexOf("\n---", 4);
-  if (end < 0) return {};
-  const out: { name?: string; description?: string } = {};
-  for (const line of text.slice(4, end).split("\n")) {
-    const m = line.match(/^(\w+)\s*:\s*(.*)$/);
-    if (!m) continue;
-    const key = m[1];
-    const val = (m[2] ?? "").trim().replace(/^['"](.*)['"]$/, "$1");
-    if (key === "name" || key === "description") out[key] = val;
-  }
-  return out;
 }
 
 interface DiscoveredSkill {
