@@ -671,6 +671,21 @@ per-turn background rebuild must not update the user's skills — that is the
 Skills pane's job (ADR-0071). Your own terminal `graphify` still refreshes. (Before ADR-0041 the
 code-graph watchdog existed but was dormant — never wired to a trigger.)
 
+**Which graphify (ADR-0073 addendum, 2026-11-24).** The graph tools are
+validated on graphify **0.9.73 and 0.9.118**; 0.9.68 stays the floor the
+watchdog warns below. Install it as `uv tool install "graphifyy[mcp]"`: since
+0.9.118 `query`, `explain`, `path`, `affected` and `benchmark` import `anyio`,
+which only the `mcp` extra installs, and a plain install answers `graph_query`
+with a Python traceback. Add the `sql` and `terraform` extras on a project with
+`.sql` / `.hcl` files: a file whose grammar is missing never gets a manifest
+row, so the tool counts it as changed on every run and its own no-change exit
+(~14 s, 150 MB) never fires (~42 s, 2.5 GB instead; measured on 1,075 `.sql`
+files). `graphifyEnv` also sets `GRAPHIFY_MAX_WORKERS` (half the cores, between
+2 and 6; a value already in the sidecar's environment wins). graphify's own
+default is one worker per core, which held ~14 of 18 cores per refresh, per tab.
+Since 0.9.101 a graph built with `--code-only` stays code-only across `update`;
+a graph built on 0.9.73 keeps its Markdown document nodes until it is rebuilt.
+
 Each MCP tool (`graph_summary`, `graph_search`, `graph_neighbors`,
 `graph_path`, `graph_query`, `graph_save_result`) takes a `scope` parameter
 of `"code"` (default), `"knowledge"`, or `"all"`. Default preserves
