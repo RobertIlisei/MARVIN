@@ -632,6 +632,7 @@ final class SourceControlModel {
         VStack(spacing: 0) {
             panelHeader
             MarvinDivider()
+            treeBanner
             if graphShown, model.response?.enabled == true {
                 changesArea
                 graphSplitter
@@ -713,6 +714,65 @@ final class SourceControlModel {
         }
         model.refresh(cwd: cwd)
         graphModel.refresh(cwd: cwd)
+    }
+
+    // MARK: - Which tree (R2-12)
+
+    /// This pane reads the project's shared checkout whichever tab is selected;
+    /// a worktree tab works somewhere else. Say which tree is on screen, so a
+    /// "Commit 100" is never a guess about whose 100 files they are.
+    ///
+    /// Showing the selected tab's own worktree here instead is a larger change
+    /// than a label. The tab's path is known (`SessionEntry.tree.path`) and the git
+    /// routes take any directory as `cwd`, but the model holds ONE `cwd` for the
+    /// whole pane: the changes list, stage, commit, branch and push belong to the
+    /// tree on screen, while the worktree list, merge-all, sweep and Prepare MR
+    /// are project-level (they reconcile every tab's branch against the main
+    /// checkout). Pointing the single `cwd` at a tab's tree would send those
+    /// there too, and discard / force-push would then act on a tree chosen by
+    /// the tab selection rather than in this pane. So the pane stays on the
+    /// project checkout and names it; a per-section `cwd` plus a visible "viewing"
+    /// switch is the follow-up.
+    private var treeLabel: SourceControlTreeLabel {
+        let entry = bridge.activeMarvinSessionId.flatMap { SessionRegistry.shared.entry($0) }
+        return SourceControlTreeLabel.make(
+            projectBranch: model.response?.branch?.name,
+            tabTitle: entry?.title,
+            tabIsWorktree: entry?.tree?.mode == .worktree,
+            tabBranch: entry?.tree?.branch
+        )
+    }
+
+    @ViewBuilder
+    private var treeBanner: some View {
+        if model.response?.enabled == true {
+            let label = treeLabel
+            let other = label.kind == .otherTree
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: other ? "exclamationmark.circle.fill" : "folder")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(other ? Color.orange : Color.secondary)
+                    .frame(width: 12)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label.headline)
+                        .font(.system(size: 10.5, weight: other ? .semibold : .regular))
+                        .foregroundStyle(other ? MarvinTheme.textPrimary : MarvinTheme.textMuted)
+                    if let detail = label.detail {
+                        Text(detail)
+                            .font(.system(size: 10))
+                            .foregroundStyle(MarvinTheme.textMuted)
+                            .lineLimit(3)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.orange.opacity(other ? 0.08 : 0))
+            .accessibilityElement(children: .combine)
+            MarvinDivider()
+        }
     }
 
     // MARK: - Panel header
@@ -1122,6 +1182,7 @@ final class SourceControlModel {
                 // from the wrong surface is worse than no shortcut.
                 .modifier(CommitReturnShortcut(enabled: composerFocused))
                 .disabled(!model.canCommit)
+                .help(treeLabel.commitHelp)
 
                 Menu {
                     Button("Commit & Push") { model.commit(then: .push) }
