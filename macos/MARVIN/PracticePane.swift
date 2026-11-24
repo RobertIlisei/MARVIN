@@ -223,6 +223,17 @@ import SwiftUI
                 Text(view.lastRun.map { "last run \(Self.relative($0.at)) · \($0.sessionsRead) read · \($0.proposed) newly proposed" } ?? "never run")
                     .font(.caption2.monospaced()).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
+                // ADR-0136: the loop is opt-in. Off, it reads nothing at night
+                // and proposes nothing; the built-in gates below keep working.
+                if !view.config.enabled {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("Practice is off. It is an experiment: each night it reads this project's sessions and proposes rules. MARVIN's built-in gates work either way.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Turn on") { Task { await setSchedule(enabled: true, hour: nil) } }
+                            .rowChip(.primary)
+                    }
+                }
             }
         }
     }
@@ -239,7 +250,7 @@ import SwiftUI
                     howRow("Every night", "plain code reads this project's session transcripts and counts each failure kind by distinct session — and the same act done right, so a finding carries a rate.")
                     howRow("Proposed", "three sessions and a score of 0.6. Approve makes a rule; Dismiss silences it with a reason; Fixed in MARVIN says you changed MARVIN's code.")
                     howRow("Tiers", "prompt = a line in the system prompt. nudge = the call runs, MARVIN sees the message first. deny = the call is refused, twice per turn, then allowed and counted. A deny needs a checkable way out, or it acts as a nudge.")
-                    howRow("Verified", "regressed means two recurring sessions after acceptance at half the old rate or more; five sessions below that confirm. Same for a fix.")
+                    howRow("Verified", "each fix and rule keeps the rate it was accepted at. Regressed means two recurring sessions at half that rate or more; five sessions below it confirm. The row shows both: was 31 %, now 5 %.")
                     howRow("Built-in gates", "MARVIN's own gates are rows too — tier, off, message, fired counts. No row means native behaviour.")
                     howRow("Never", "no model reads a transcript; nothing changes without your click. Draft message is the only model call, and it sees aggregates.")
                     Text("Full guide: docs/guides/practice.md · design: ADR-0105")
@@ -457,10 +468,24 @@ import SwiftUI
         if let rate = f.rate { parts.append(String(format: "%.0f%% of sessions", rate * 100)) }
         parts.append("\(Self.compact(f.costTotal)) \(f.unit)")
         if let after = f.sessionsAfter, let rec = f.recurrenceAfter, f.ruleId != nil || f.fixNote != nil {
-            parts.append("\(rec) of \(after) since \(f.ruleId != nil ? "rule" : "fix")")
+            // Before and after, in the same unit: the question the pane is
+            // asked is "did it help", and a count since the fix cannot answer it.
+            let what = f.ruleId != nil ? "rule" : "fix"
+            let now = Self.percent(f.rateAfter ?? (after > 0 ? Double(rec) / Double(after) : 0))
+            if let base = f.baseline, base.sessions > 0 {
+                parts.append("was \(Self.percent(base.rate)) of sessions, now \(now) (\(rec) of \(after) since \(what))")
+            } else {
+                parts.append("now \(now) of sessions (\(rec) of \(after) since \(what)); the rate before was not kept")
+            }
         }
         parts.append("last \(Self.relative(f.lastSeen))")
         return parts.joined(separator: " · ")
+    }
+
+    /// One decimal under 10 %, none above: "0.4 %" and "26 %" both read right.
+    static func percent(_ r: Double) -> String {
+        let p = r * 100
+        return p > 0 && p < 10 ? String(format: "%.1f%%", p) : String(format: "%.0f%%", p)
     }
 
     @ViewBuilder

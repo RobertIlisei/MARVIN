@@ -87,7 +87,9 @@ export interface PracticeConfig {
 }
 
 export const DEFAULT_PRACTICE_CONFIG: PracticeConfig = {
-  enabled: true,
+  // ADR-0136: an experiment the user opts into. `readPracticeConfig` keeps it
+  // on for an install whose ledgers show it was already running.
+  enabled: false,
   hour: 3,
   weights: { recurrence: 0.3, cost: 0.2, rate: 0.15, reliability: 0.2, actionability: 0.15, decay: 0.15 },
   thresholds: { minSessions: 3, minValue: 0.6, minEvidence: 0.5, turnOverbudgetUsd: 10 },
@@ -539,6 +541,14 @@ export interface LedgerFinding {
   /** Verification, for `active` / `regressed` / `confirmed` / `fixed`. */
   sessionsAfter?: number;
   recurrenceAfter?: number;
+  /** What the fix or rule is measured against: the finding's share of the
+   *  window's sessions when it was accepted. Kept because the sessions it was
+   *  counted from age out after `windowDays`; without it a fix older than the
+   *  window had a rate before of 0 and any two recurrences read as a
+   *  regression (2026-11-24: three fixes of 2 September, all "regressed"). */
+  baseline?: { at: string; hits: number; sessions: number; rate: number };
+  /** `recurrenceAfter / sessionsAfter`, for the pane's "was X %, now Y %". */
+  rateAfter?: number;
   /** Processed sessions newer than the last one this was seen in (decay input). */
   sessionsSinceLastSeen?: number;
 }
@@ -593,10 +603,24 @@ function writeJson(path: string, data: unknown): void {
   renameSync(tmp, path);
 }
 
+/** Has the loop ever run on this install? One ledger file is enough. */
+function hasAnyLedger(): boolean {
+  try {
+    return readdirSync(practiceDir(), { withFileTypes: true }).some(
+      (d) => d.isDirectory() && existsSync(join(practiceDir(), d.name, "ledger.json")),
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function readPracticeConfig(): PracticeConfig {
   const raw = readJson<Partial<PracticeConfig>>(practicePaths.config(), {});
   return {
     ...DEFAULT_PRACTICE_CONFIG,
+    // ADR-0136: opt-in. An install that never chose keeps what it had: on
+    // where the loop has already been running, off on a new one.
+    enabled: hasAnyLedger(),
     ...raw,
     weights: { ...DEFAULT_PRACTICE_CONFIG.weights, ...(raw.weights ?? {}) },
     thresholds: { ...DEFAULT_PRACTICE_CONFIG.thresholds, ...(raw.thresholds ?? {}) },
@@ -1121,9 +1145,29 @@ function finishRun(st: RunState): RunRecord {
         // rate after acceptance of at least half the rate before it.
         const hitsBefore = sessionsList.length - f.recurrenceAfter;
         const processedBefore = processedMtimes.length - f.sessionsAfter;
-        const rateBefore = processedBefore > 0 ? hitsBefore / processedBefore : 0;
+        // The baseline is the rate at acceptance. A finding accepted before
+        // baselines were kept gets one from the sessions before it that are
+        // still in the window, while there are any; after that it is gone.
+        if (!f.baseline && processedBefore > 0) {
+          f.baseline = {
+            at: new Date(acceptedMs).toISOString(),
+            hits: hitsBefore,
+            sessions: processedBefore,
+            rate: hitsBefore / processedBefore,
+          };
+        }
+        const rateBefore = f.baseline && f.baseline.sessions > 0 ? f.baseline.rate : null;
         const rateAfter = f.sessionsAfter > 0 ? f.recurrenceAfter / f.sessionsAfter : 0;
-        const regressedNow = f.recurrenceAfter >= 2 && (rateBefore === 0 || rateAfter >= rateBefore / 2);
+        f.rateAfter = rateAfter;
+        // With no baseline left there is nothing to compare with, so the
+        // question becomes absolute: would this behaviour be proposed today?
+        const stillProposable =
+          f.distinctSessions >= config.thresholds.minSessions &&
+          f.value >= config.thresholds.minValue &&
+          (f.evidence ?? 1) >= config.thresholds.minEvidence;
+        const regressedNow =
+          f.recurrenceAfter >= 2 &&
+          (rateBefore === null ? stillProposable : rateBefore === 0 || rateAfter >= rateBefore / 2);
         if (regressedNow) {
           if (f.state !== "regressed") regressed += 1;
           f.state = "regressed";
@@ -1171,6 +1215,15 @@ function newRuleId(): string {
   return `rule-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/** The finding's share of the sessions still in the window, right now. */
+function baselineOf(ledger: Ledger, f: LedgerFinding, nowMs: number): LedgerFinding["baseline"] {
+  const cutoff = nowMs - readPracticeConfig().windowDays * 86_400_000;
+  const inWindow = (m: number): boolean => m >= cutoff && m <= nowMs;
+  const sessions = Object.values(ledger.watermarks).filter((w) => inWindow(w.mtime)).length;
+  const hits = Object.values(f.sessions).filter((e) => inWindow(e.mtime)).length;
+  return { at: new Date(nowMs).toISOString(), hits, sessions, rate: sessions > 0 ? hits / sessions : 0 };
+}
+
 export interface ApproveOptions {
   tier?: RuleTier;
   message?: string;
@@ -1216,6 +1269,8 @@ export function approveFinding(
   f.acceptedAt = now;
   f.sessionsAfter = 0;
   f.recurrenceAfter = 0;
+  f.baseline = baselineOf(ledger, f, Date.parse(now));
+  delete f.rateAfter;
   // The rule's clock replaces the fix's; a retired rule must not silently
   // resume verifying against a fix date the user has moved past.
   delete f.fixedAt;
@@ -1237,6 +1292,8 @@ export function markFindingFixed(projectId: string, findingId: string, note: str
   f.fixNote = note.trim().slice(0, 300);
   f.sessionsAfter = 0;
   f.recurrenceAfter = 0;
+  f.baseline = baselineOf(ledger, f, Date.parse(now));
+  delete f.rateAfter;
   delete f.dismissedAt;
   delete f.dismissReason;
   delete f.dismissedAtSessions;

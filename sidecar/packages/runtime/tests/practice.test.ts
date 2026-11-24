@@ -24,10 +24,12 @@ import {
   practicePromptBlock,
   practiceView,
   readLedger,
+  readPracticeConfig,
   readRules,
   retireRule,
   runPractice,
   scoreFinding,
+  writeLedger,
   writePracticeConfig,
   writeRules,
 } from "../src/practice";
@@ -486,6 +488,28 @@ describe("the run and the day-two diff (ADR-0105 §2)", () => {
     expect(escalateFinding(p2, "graph.first.skipped").ok).toBe(false); // nothing to escalate
   });
 
+  // 2026-11-24: three fixes of 2 September read "regressed" on a real project
+  // in November. The sessions from before the fix had aged out of the window,
+  // so the rate before was 0 and any two recurrences were a regression.
+  it("a fix keeps the rate it was measured against after the sessions before it age out", () => {
+    threeBadSessions();
+    expect(markFindingFixed(projectId, "ship.unreviewed", "ADR-0104 gate")).toBe(true);
+    let f = readLedger(projectId).findings["ship.unreviewed"]!;
+    expect(f.baseline?.hits).toBe(3);
+    expect(f.baseline?.rate).toBeGreaterThan(0.5);
+    const fixedAt = Date.parse(f.fixedAt!);
+    const later = fixedAt + 60 * 86_400_000; // past windowDays: everything before the fix is gone
+    for (let i = 1; i <= 20; i++) files.set(`late-good-${i}`, { raw: goodSession("2026-12-01"), mtime: later + i * 1000 });
+    files.set("late-bad-1", { raw: badSession("2026-12-02"), mtime: later + 30_000 });
+    files.set("late-bad-2", { raw: badSession("2026-12-03"), mtime: later + 31_000 });
+    runPractice(projectId, { ...seams, now: later + 60_000 });
+    f = readLedger(projectId).findings["ship.unreviewed"]!;
+    expect(f.recurrenceAfter).toBe(2);
+    expect(f.sessionsAfter).toBe(22);
+    expect(f.rateAfter).toBeCloseTo(2 / 22, 5);
+    expect(f.state).toBe("confirmed"); // 9 % against a baseline above 50 %: the fix held
+  });
+
   it("2026-09-09: what the extractors no longer count, and what they now do", () => {
     const denyRead = (p: string) => ({ name: "Read", input: { file_path: p }, error: "graphify-first: Read on `x` would be the first structural search" });
     const grep = (q: string) => ({ name: "Bash", input: { command: `grep -n "${q}" /p/src` } });
@@ -739,6 +763,31 @@ describe("rule enforcement", () => {
     expect(res.nudges.map((n) => n.ruleId)).toEqual(["hook-r"]);
     expect(ctx.pendingPracticeNudge).toContain("do the thing");
     expect(readRules()[0]?.metrics.fired).toBe(1);
+  });
+});
+
+// ADR-0136: the loop is an experiment a user opts into. A new install starts
+// with it off; an install that has already been running keeps it on.
+describe("Practice is opt-in", () => {
+  const dir = () => join(process.env.MARVIN_DATA_DIR!, "practice");
+  beforeEach(() => rmSync(dir(), { recursive: true, force: true }));
+
+  it("is off on an install that has never run it", () => {
+    expect(readPracticeConfig().enabled).toBe(false);
+  });
+
+  it("stays on for an install that already has a ledger and never chose", () => {
+    writeLedger({ ...readLedger("p-existing"), projectId: "p-existing" });
+    expect(readPracticeConfig().enabled).toBe(true);
+  });
+
+  it("the user's own choice wins either way", () => {
+    writeLedger({ ...readLedger("p-existing"), projectId: "p-existing" });
+    writePracticeConfig({ enabled: false });
+    expect(readPracticeConfig().enabled).toBe(false);
+    rmSync(dir(), { recursive: true, force: true });
+    writePracticeConfig({ enabled: true });
+    expect(readPracticeConfig().enabled).toBe(true);
   });
 });
 

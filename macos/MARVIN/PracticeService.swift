@@ -12,6 +12,12 @@ struct PracticeSessionEntry: Codable, Equatable {
     let detail: String
 }
 
+struct PracticeBaseline: Codable, Equatable {
+    let hits: Int
+    let sessions: Int
+    let rate: Double
+}
+
 struct PracticeFinding: Codable, Identifiable, Equatable {
     let id: String
     let kind: String
@@ -31,6 +37,11 @@ struct PracticeFinding: Codable, Identifiable, Equatable {
     let ruleId: String?
     let sessionsAfter: Int?
     let recurrenceAfter: Int?
+    /// The share of sessions this hit when the fix or rule was accepted.
+    /// Nil for one accepted before baselines were kept and since aged out.
+    let baseline: PracticeBaseline?
+    /// `recurrenceAfter / sessionsAfter`.
+    let rateAfter: Double?
     /// Cost unit label, e.g. "commits", "seconds waited".
     let unit: String
     /// False for report-only kinds — no rule can be made from them.
