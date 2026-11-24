@@ -227,11 +227,10 @@ runner.suite("work-area layout (W-11)") {
         for i in 0..<6 { seen.append(WorkAreaLayout.mode(content(file: i % 2 == 0))) }
         runner.expect(seen, equals: [.split, .chatFills, .split, .chatFills, .split, .chatFills], "alternates with the file, nothing else")
     }
-    runner.test("the chat is held to a reading measure only while it fills the window") {
+    runner.test("with nothing else open the chat takes the whole work area: no capped column with empty bands beside it") {
+        // Owner, 24.11.2026, on the 900 pt centred column: "if the preview is not enabled, it looks terrible".
         runner.expect(WorkAreaLayout.chatMaxWidth(.split) == nil, "the split decides the side column's width")
-        runner.expect(WorkAreaLayout.chatMaxWidth(.chatFills), equals: 900, "reading width")
-        runner.expect(WorkAreaLayout.readingWidth > 770, "wider than the 770 pt column it replaces, or the change gains nothing")
-        runner.expect(WorkAreaLayout.readingWidth <= 1000, "not so wide that prose stretches past a comfortable line")
+        runner.expect(WorkAreaLayout.chatMaxWidth(.chatFills) == nil, "the chat fills what the editor gave up")
     }
     runner.test("the tab strip band is the chat's top 33 pt (R2-13)") {
         runner.expect(WorkAreaLayout.isInTabStrip(y: 0), "top edge")

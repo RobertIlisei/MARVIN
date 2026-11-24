@@ -55,24 +55,14 @@ public enum WorkAreaLayout {
         content.needsEditorColumn ? .split : .chatFills
     }
 
-    /// The widest the chat column gets when it fills the window, in points.
-    ///
-    /// A message list is read, not scanned, so its line length matters more than
-    /// the room available: the transcript at 770 pt already runs about 110
-    /// characters a line, past the 60-90 a reader tracks comfortably. 900 pt keeps
-    /// code blocks, tables and diffs from wrapping (they are most of a coding
-    /// chat) while stopping prose from stretching across a 2200 pt area, which
-    /// is what a fully filling column would do on this display. The brain pane and
-    /// the composer share the column, so they stay one figure with the transcript.
-    /// Centred, not left-aligned: a left-aligned 900 pt column beside the left
-    /// pane leaves a dead strip on the right and reads as unfinished.
-    public static let readingWidth: Double = 900
-
+    /// The chat takes the whole work area when it fills. A first version capped it at a centred 900 pt "reading
+    /// width"; on a 2560 pt window that left two empty bands beside the conversation and read as broken (owner,
+    /// 24.11.2026). Line length is the message row's concern, not the column's.
     /// `nil` = take whatever the split gives it.
     public static func chatMaxWidth(_ mode: Mode) -> Double? {
         switch mode {
         case .split: return nil
-        case .chatFills: return readingWidth
+        case .chatFills: return nil
         }
     }
 
