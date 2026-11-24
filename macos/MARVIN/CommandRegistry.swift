@@ -123,6 +123,19 @@ enum CommandRegistry {
             slot: .file, shortcut: "⇧⌘]", keywords: ["tab", "chat", "switch", "forward"],
             isEnabled: { SessionRegistry.shared.openTabs.count > 1 }
         ) { stepSession(.next) })
+        // M-02 — ⇧⌘] walks the strip, which visits idle tabs on the way. This one
+        // goes to the tab that needs the person: a question, then a failure, then
+        // a finished result nobody has seen, then the longest wait. ⌥⌘] sits with
+        // ⇧⌘] and nothing else binds it (⌥⌘J is the supervisor inbox, ⌥⌘↑/↓ diff hunks).
+        c.append(AppCommand(
+            id: "go.nextTabNeedingMe", title: "Next Tab That Needs Me",
+            slot: .go, shortcut: "⌥⌘]", keywords: ["tab", "session", "attention", "needs you", "waiting", "finished", "failed", "inbox"],
+            isEnabled: { SessionRegistry.shared.nextTabNeedingMe != nil }
+        ) {
+            if let target = SessionRegistry.shared.nextTabNeedingMe {
+                MarvinBridge.shared.requestChatTab(.select(target))
+            }
+        })
         c.append(AppCommand(
             id: "file.openProject", title: "Open Project…",
             slot: .file, shortcut: "⌘O", keywords: ["folder", "workspace"]

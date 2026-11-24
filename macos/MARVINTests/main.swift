@@ -6112,6 +6112,162 @@ runner.suite("supervisor-queue") {
     }
 }
 
+runner.suite("session-finished-review") {
+    func entry(_ f: (inout SessionEntry) -> Void) -> SessionEntry { var e = SessionEntry(id: "s"); f(&e); return e }
+    let t0 = Date(timeIntervalSince1970: 1_000_000)
+    runner.test("an unreviewed turn that ended with a result is finished; once reviewed it is done or idle as before") {
+        let scopeMet = entry { $0.isDone = true; $0.lastOutcome = .completed }
+        runner.expect(SessionRowStateDeriver.derive(scopeMet, unreviewed: true), equals: SessionRowState.finished, "scope met, unreviewed")
+        runner.expect(SessionRowStateDeriver.derive(scopeMet, unreviewed: false), equals: SessionRowState.done, "scope met, reviewed")
+        let plain = entry { $0.lastOutcome = .completed }
+        runner.expect(SessionRowStateDeriver.derive(plain, unreviewed: true), equals: SessionRowState.finished, "a completed turn is a result too")
+        runner.expect(SessionRowStateDeriver.derive(plain, unreviewed: false), equals: SessionRowState.idle, "reviewed, idle")
+        runner.expect(SessionRowStateDeriver.derive(plain), equals: SessionRowState.idle, "the default asks for nothing new")
+    }
+    runner.test("everything with its own action outranks finished, and a stopped turn is not a result") {
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .completed; $0.liveTurnId = "t" }, unreviewed: true), equals: SessionRowState.working, "live")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .completed; $0.waitingOn = .init(kind: "job") }, unreviewed: true), equals: SessionRowState.waiting, "waiting")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .error }, unreviewed: true), equals: SessionRowState.failed, "failed")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .error; $0.interrupted = true }, unreviewed: true), equals: SessionRowState.interrupted, "interrupted")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .completed; $0.attention = .init(kind: "prose-question", excerpt: "?") }, unreviewed: true), equals: SessionRowState.needsYou(1), "a question")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .cancelled }, unreviewed: true), equals: SessionRowState.idle, "Stop is not a result")
+        runner.expect(SessionRowStateDeriver.derive(entry { _ in }, unreviewed: true), equals: SessionRowState.idle, "nothing ever ran")
+    }
+    runner.test("finished sorts after failed and before waiting, and never folds into the idle group") {
+        let ranks = [SessionRowState.done, .idle, .waiting, .finished, .failed].sorted { $0.sortRank < $1.sortRank }
+        runner.expect(ranks == [.failed, .finished, .waiting, .idle, .done], "ordering")
+        runner.expect(!SessionRowState.finished.isIdle, "not idle")
+        let now = Date(timeIntervalSince1970: 10_000)
+        let rows = (0..<6).map { SessionIdleCollapse.Row(id: "f\($0)", state: .finished, idleSince: now.addingTimeInterval(-9_999)) }
+        runner.expect(SessionIdleCollapse.partition(rows, selected: nil, now: now, expanded: false).collapsed.isEmpty, "six old finished rows all stay")
+    }
+    runner.test("the rule: a turn that ended after the last look, and after the feature began, is unreviewed") {
+        let base = t0
+        runner.expect(FinishedReview.isUnreviewed(lastTurnAt: t0.addingTimeInterval(60), reviewedAt: nil, baseline: base), "never looked")
+        runner.expect(!FinishedReview.isUnreviewed(lastTurnAt: t0.addingTimeInterval(60), reviewedAt: t0.addingTimeInterval(60), baseline: base), "looked at the moment it ended")
+        runner.expect(!FinishedReview.isUnreviewed(lastTurnAt: t0.addingTimeInterval(60), reviewedAt: t0.addingTimeInterval(500), baseline: base), "looked later")
+        runner.expect(FinishedReview.isUnreviewed(lastTurnAt: t0.addingTimeInterval(600), reviewedAt: t0.addingTimeInterval(500), baseline: base), "ended again after the look")
+        runner.expect(!FinishedReview.isUnreviewed(lastTurnAt: t0.addingTimeInterval(-3_600), reviewedAt: nil, baseline: base), "ended before this build: the owner has not been asked to review it")
+        runner.expect(!FinishedReview.isUnreviewed(lastTurnAt: t0, reviewedAt: nil, baseline: base), "at the baseline exactly counts as before")
+        runner.expect(!FinishedReview.isUnreviewed(lastTurnAt: nil, reviewedAt: nil, baseline: base), "no end time, no claim")
+    }
+    runner.test("the fleet counts finished tabs and says so, but the minimal form stays about what needs a person") {
+        let c = SessionFleet.counts([.finished, .finished, .working, .done])
+        runner.expect(c, equals: FleetCounts(total: 4, working: 1, waiting: 0, needsYou: 0, finished: 2), "counted")
+        runner.expect(SessionFleet.summary(c, detail: .full), equals: "4 tabs \u{B7} 1 working \u{B7} 2 finished", "full")
+        runner.expect(SessionFleet.summary(c, detail: .compact), equals: "1 working \u{B7} 2 finished", "compact")
+        runner.expect(SessionFleet.summary(c, detail: .minimal), equals: "", "minimal is silent unless someone is needed")
+        let all = FleetCounts(total: 9, working: 1, waiting: 3, needsYou: 1, finished: 2)
+        runner.expect(SessionFleet.summary(all, detail: .full), equals: "9 tabs \u{B7} 1 working \u{B7} 3 waiting \u{B7} 1 needs you \u{B7} 2 finished", "everything, in the order of urgency")
+    }
+}
+
+runner.suite("session-tab-strip") {
+    runner.test("a heading, emphasis and list marks are not part of a title") {
+        runner.expect(SessionTabTitle.display("# GATE-LANE-WIDTH \u{2014} gate lane width more than one full suite", maxLength: 24), equals: "GATE-LANE-WIDTH \u{2014} gate\u{2026}", "heading, cut at a word")
+        runner.expect(SessionTabTitle.display("Fix the login bug"), equals: "Fix the login bug", "short stays")
+        runner.expect(SessionTabTitle.display("> **Fix** the `thing`"), equals: "Fix the thing", "quote, bold, code")
+        runner.expect(SessionTabTitle.display("## 1. Plan the release"), equals: "Plan the release", "heading and number")
+        runner.expect(SessionTabTitle.display("- [ ] write tests"), equals: "write tests", "checkbox")
+    }
+    runner.test("the first line with words names the tab") {
+        runner.expect(SessionTabTitle.display("\n\n# Title\nbody text"), equals: "Title", "blank lines skipped")
+        runner.expect(SessionTabTitle.display("---\n===\nreal words"), equals: "real words", "rules are not words")
+        runner.expect(SessionTabTitle.display("###"), equals: "", "nothing to name it by")
+        runner.expect(SessionTabTitle.display(""), equals: "", "empty")
+    }
+    runner.test("a path is its file name; other slashes are left alone") {
+        runner.expect(SessionTabTitle.display("briefs/v31/ux-public-pages.md"), equals: "ux public pages", "relative path")
+        runner.expect(SessionTabTitle.display("Read briefs/v31/gate-lane-width.md and do it", maxLength: 60), equals: "Read gate lane width and do it", "inside a sentence")
+        runner.expect(SessionTabTitle.display("/Users/someone/proj/docs/plans/supervisor.md please"), equals: "supervisor please", "absolute path")
+        runner.expect(SessionTabTitle.display("~/notes.md"), equals: "notes", "home path")
+        runner.expect(SessionTabTitle.display("choose and/or either"), equals: "choose and/or either", "and/or is not a path")
+        runner.expect(SessionTabTitle.display("see https://example.com/a/b now", maxLength: 60), equals: "see https://example.com/a/b now", "a URL is not a path")
+    }
+    runner.test("a cut lands on a word, drops dangling separators, and never exceeds the limit") {
+        runner.expect(SessionTabTitle.display("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", maxLength: 10), equals: "aaaaaaaaa\u{2026}", "one long word is cut hard")
+        runner.expect(SessionTabTitle.display("alpha beta \u{2014} gamma delta", maxLength: 13), equals: "alpha beta\u{2026}", "no dash left hanging")
+        runner.expect(SessionTabTitle.display("exactly ten", maxLength: 11), equals: "exactly ten", "fits exactly")
+    }
+    runner.test("tabs share the width, never get narrower than the minimum, and say when they run past the edge") {
+        runner.expect(TabStripLayout.metrics(tabCount: 3, available: 800), equals: TabStripLayout.Metrics(tabWidth: 190, fitsAll: true), "few tabs are capped")
+        runner.expect(TabStripLayout.metrics(tabCount: 5, available: 800), equals: TabStripLayout.Metrics(tabWidth: 156, fitsAll: true), "shared")
+        runner.expect(TabStripLayout.metrics(tabCount: 14, available: 754), equals: TabStripLayout.Metrics(tabWidth: 128, fitsAll: false), "fourteen tabs scroll at the minimum")
+        runner.expect(TabStripLayout.metrics(tabCount: 0, available: 500).fitsAll, "no tabs fit")
+        runner.expect(TabStripLayout.metrics(tabCount: 4, available: 0), equals: TabStripLayout.Metrics(tabWidth: 128, fitsAll: false), "no width yet")
+    }
+    runner.test("only tabs that need the person are pinned, only when the strip scrolls, and in strip order") {
+        let tabs: [(id: String, state: SessionRowState)] = [("a", .idle), ("b", .needsYou(1)), ("c", .working), ("d", .needsYou(2)), ("e", .failed), ("f", .needsYou(1)), ("g", .needsYou(1))]
+        runner.expect(TabStripLayout.pinned(tabs, fitsAll: true), equals: [], "everything is visible already")
+        runner.expect(TabStripLayout.pinned(tabs, fitsAll: false), equals: ["b", "d", "f"], "needs-you only, capped at three")
+        runner.expect(TabStripLayout.pinned(tabs, fitsAll: false, limit: 5), equals: ["b", "d", "f", "g"], "limit is a parameter")
+        runner.expect(TabStripLayout.pinned([("x", .failed), ("y", .waiting)], fitsAll: false), equals: [], "none needs the person")
+    }
+    runner.test("every state has a symbol and words, and a wait says how long") {
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        let states: [SessionRowState] = [.needsYou(1), .working, .interrupted, .failed, .waiting, .finished, .done, .idle, .draft]
+        runner.expect(Set(states.map { SessionStateLabel.symbol($0) }).count, equals: states.count, "one symbol per state")
+        runner.expect(states.allSatisfy { !SessionStateLabel.symbol($0).isEmpty && !SessionStateLabel.caption($0, waitingSince: nil, now: now).isEmpty }, "none is blank")
+        runner.expect(SessionStateLabel.caption(.waiting, waitingSince: now.addingTimeInterval(-46 * 60), now: now), equals: "waiting 46 min", "wait with age")
+        runner.expect(SessionStateLabel.caption(.waiting, waitingSince: nil, now: now), equals: "waiting", "wait without a start")
+        runner.expect(SessionStateLabel.caption(.needsYou(1), waitingSince: nil, now: now), equals: "needs you", "one")
+        runner.expect(SessionStateLabel.caption(.needsYou(3), waitingSince: nil, now: now), equals: "needs you (3)", "several")
+        runner.expect(SessionStateLabel.caption(.finished, waitingSince: nil, now: now), equals: "finished, not reviewed", "finished")
+    }
+}
+
+runner.suite("session-attention-order") {
+    let t = Date(timeIntervalSince1970: 3_000_000)
+    func c(_ id: String, _ s: SessionRowState, wait: Double? = nil, ended: Double? = nil) -> AttentionCandidate {
+        AttentionCandidate(id: id, state: s, waitingSince: wait.map { t.addingTimeInterval($0) }, endedAt: ended.map { t.addingTimeInterval($0) })
+    }
+    runner.test("a question first, then failed or cut off, then a result nobody has seen, then the longest wait") {
+        let tabs = [c("wait-new", .waiting, wait: -60), c("fin", .finished, ended: -10), c("idle", .idle), c("fail", .failed),
+                    c("ask", .needsYou(1)), c("wait-old", .waiting, wait: -3_000), c("cut", .interrupted), c("work", .working), c("done", .done)]
+        runner.expect(SessionAttentionOrder.ordered(tabs), equals: ["ask", "fail", "cut", "fin", "wait-old", "wait-new"], "priority order; idle, working and done are not on it")
+    }
+    runner.test("inside a tier the strip order holds, except finished (oldest first) and waiting (longest first)") {
+        let tabs = [c("q2", .needsYou(1)), c("q1", .needsYou(3)), c("f-new", .finished, ended: -5), c("f-old", .finished, ended: -500), c("f-none", .finished),
+                    c("w-none", .waiting), c("w-old", .waiting, wait: -900), c("w-new", .waiting, wait: -30)]
+        runner.expect(SessionAttentionOrder.ordered(tabs), equals: ["q2", "q1", "f-old", "f-new", "f-none", "w-old", "w-new", "w-none"], "tiers")
+    }
+    runner.test("one press goes to the next on the list, wraps, and starts at the top from a tab that is not on it") {
+        let tabs = [c("a", .needsYou(1)), c("b", .failed), c("c", .waiting, wait: -100), c("z", .idle)]
+        runner.expect(SessionAttentionOrder.next(after: "a", in: tabs), equals: "b", "next")
+        runner.expect(SessionAttentionOrder.next(after: "b", in: tabs), equals: "c", "next again")
+        runner.expect(SessionAttentionOrder.next(after: "c", in: tabs), equals: "a", "wraps")
+        runner.expect(SessionAttentionOrder.next(after: "z", in: tabs), equals: "a", "from an idle tab: the most urgent")
+        runner.expect(SessionAttentionOrder.next(after: nil, in: tabs), equals: "a", "nothing selected")
+        runner.expect(SessionAttentionOrder.next(after: "gone", in: tabs), equals: "a", "an id that is not a tab")
+    }
+    runner.test("nothing to visit: no list, and the only tab on it being the current one, answer nil") {
+        runner.expect(SessionAttentionOrder.next(after: "a", in: []), equals: nil, "no tabs")
+        runner.expect(SessionAttentionOrder.next(after: nil, in: [c("a", .idle), c("b", .working), c("d", .done)]), equals: nil, "nobody needs anything")
+        runner.expect(SessionAttentionOrder.next(after: "a", in: [c("a", .needsYou(1)), c("b", .idle)]), equals: nil, "already there")
+        runner.expect(SessionAttentionOrder.next(after: "b", in: [c("a", .needsYou(1)), c("b", .idle)]), equals: "a", "from elsewhere")
+    }
+}
+
+runner.suite("session-restart-trace") {
+    runner.test("the banner lists the interrupted sessions nobody has dismissed, in order") {
+        runner.expect(SessionRestartTrace.pending(interrupted: ["a", "b", "c"], acknowledged: []), equals: ["a", "b", "c"], "all of them")
+        runner.expect(SessionRestartTrace.pending(interrupted: ["a", "b", "c"], acknowledged: ["b"]), equals: ["a", "c"], "one dismissed")
+        runner.expect(SessionRestartTrace.pending(interrupted: [], acknowledged: ["b"]), equals: [], "nothing interrupted, nothing to say")
+        runner.expect(SessionRestartTrace.pending(interrupted: ["a", "a"], acknowledged: []), equals: ["a"], "a session is named once")
+    }
+    runner.test("a dismissal lasts only while the session stays interrupted") {
+        runner.expect(SessionRestartTrace.stillAcknowledged(["a", "b"], interrupted: ["b", "c"]), equals: ["b"], "a has run again, so a new cut-off of a shows")
+        runner.expect(SessionRestartTrace.stillAcknowledged([], interrupted: ["a"]), equals: [], "nothing to keep")
+    }
+    runner.test("the sentence counts, names and shortens") {
+        runner.expect(SessionRestartTrace.message(titles: ["Gate lane width"]), equals: "A restart cut off 1 turn: Gate lane width.", "one")
+        runner.expect(SessionRestartTrace.message(titles: ["A", "B", "C"]), equals: "A restart cut off 3 turns: A, B, C.", "several")
+        runner.expect(SessionRestartTrace.message(titles: ["A", "B", "C", "D", "E", "F"]), equals: "A restart cut off 6 turns: A, B, C, D and 2 more.", "past the limit")
+        runner.expect(SessionRestartTrace.message(titles: ["A", "B", "C", "D"]), equals: "A restart cut off 4 turns: A, B, C, D.", "exactly the limit")
+        runner.expect(SessionRestartTrace.message(titles: []), equals: "", "nothing to say")
+    }
+}
+
 runner.suite("session-fleet") {
     let now = Date(timeIntervalSince1970: 2_000_000)
     func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
