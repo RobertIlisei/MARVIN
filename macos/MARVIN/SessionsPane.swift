@@ -85,7 +85,7 @@ import SwiftUI
                     // its own glyph.
                     needsYouSection
                     section("Working", rows(where: { $0 == .working }), tint: GitDecorationColor.modified)
-                    section("Waiting", rows(where: { $0 == .waiting }), tint: MarvinTheme.textMuted)
+                    waitingSection
                     integrateSection
                     idleSection
                     recentSection
@@ -163,10 +163,7 @@ import SwiftUI
 
     /// Open tabs plus anything live that is not a tab, attention first.
     private var rows: [Row] {
-        var ids = registry.openTabs
-        for (id, e) in registry.ledger.entries where e.isLive && !ids.contains(id) && e.closedAt == nil {
-            ids.append(id)
-        }
+        var ids = registry.fleetSessionIds
         // ADR-0127 M6 — an escalation about a tab that is neither open nor
         // live still needs its row: the header counted it, and an item the
         // user cannot see is the one failure this inbox must not have.
@@ -188,7 +185,11 @@ import SwiftUI
     private var keyboardOrder: [String] {
         supervisorLayout.tabless.map { "sup:" + $0.id } + needsYouRows.map(\.id)
             + rows.filter { r in !needsYouRows.contains { $0.id == r.id } }
-                .sorted { $0.state.sortRank < $1.state.sortRank }.map(\.id)
+                .sorted { a, b in
+                    if a.state.sortRank != b.state.sortRank { return a.state.sortRank < b.state.sortRank }
+                    // The Waiting group shows oldest first; the keyboard walks it the same way.
+                    return (a.entry.waitSince ?? .distantFuture) < (b.entry.waitSince ?? .distantFuture)
+                }.map(\.id)
     }
     private func moveFocus(_ delta: Int) {
         let ids = keyboardOrder
@@ -329,6 +330,19 @@ import SwiftUI
                 ForEach(items.sorted { $0.state.sortRank < $1.state.sortRank }) { row in
                     sessionRow(row)
                 }
+            }
+        }
+    }
+
+    /// W-04 — its own group above Idle, never folded behind "N more", oldest
+    /// wait first: the one that has waited longest is the one most likely stuck.
+    @ViewBuilder
+    private var waitingSection: some View {
+        let waiting = SessionWait.oldestFirst(rows(where: { $0 == .waiting })) { $0.entry.waitSince }
+        if !waiting.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                sectionHeader("Waiting", count: waiting.count, tint: MarvinTheme.textMuted)
+                ForEach(waiting) { row in sessionRow(row) }
             }
         }
     }
@@ -581,13 +595,14 @@ import SwiftUI
         let focused = row.id == focusedId
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                stateGlyph(row.state)
+                stateGlyph(row.state, longWait: isLongWait(e))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title(e))
                         .font(.system(size: 11, weight: selected ? .semibold : .regular))
                         .foregroundStyle(MarvinTheme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                    if row.state == .waiting, let w = e.waitingOn { waitLine(w) }
                     Text(subtitle(e, state: row.state))
                         .font(.system(size: 9.5))
                         .foregroundStyle(MarvinTheme.textMuted)
@@ -658,7 +673,7 @@ import SwiftUI
 
     /// ADR-0112 — a glyph per state so colour is never the only signal.
     @ViewBuilder
-    private func stateGlyph(_ state: SessionRowState) -> some View {
+    private func stateGlyph(_ state: SessionRowState, longWait: Bool = false) -> some View {
         switch state {
         case .working:
             ProgressView().controlSize(.mini).frame(width: 10, height: 10)
@@ -669,7 +684,9 @@ import SwiftUI
         case .failed:
             Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(GitDecorationColor.deleted).frame(width: 10)
         case .waiting:
-            Image(systemName: "clock").font(.system(size: 9, weight: .semibold)).foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 10)
+            Image(systemName: "clock").font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(ChatPreviewView.tabTint(state, longWait: longWait)).frame(width: 10)
+                .accessibilityLabel(longWait ? "Waiting for a long time" : "Waiting")
         case .done:
             Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 10)
         case .idle, .draft:
@@ -832,13 +849,9 @@ import SwiftUI
             parts.append("waiting: \(ToolLabel.plain(first.toolName))")
         } else if let a = e.attention {
             parts.append(a.kind == "chain-cap" ? "stopped at the chain cap" : "asked you a question")
-        } else if state == .waiting, let w = e.waitingOn {
-            let what = w.kind == "wakeup" ? "a wakeup" : "a job"
-            if let since = w.since.flatMap(SessionLedger.parseISO) {
-                parts.append("Waiting on \(what) · \(elapsed(since))")
-            } else {
-                parts.append("Waiting on \(what)")
-            }
+        } else if state == .waiting {
+            // The wait itself is the row's own line (`waitLine`); the facts line only follows on.
+            if let at = e.lastTurnAt { parts.append("last turn " + elapsed(at) + " ago") }
         } else if state == .done {
             parts.append(e.lastTurnAt.map { "Done · \(elapsed($0)) ago" } ?? "Done")
         } else if e.isLive, let since = e.liveSince {
@@ -881,6 +894,35 @@ import SwiftUI
         if let s = e.skills, !s.missing.isEmpty { lines.append("skills the brief named that have not run: " + s.missing.joined(separator: ", ")) }
         if let s = e.skills, let f = s.first, !f.isEmpty { lines.append("start skills (before the first change): " + f.joined(separator: ", ")) }
         return lines.joined(separator: "\n")
+    }
+
+    private func isLongWait(_ e: SessionEntry) -> Bool { e.isLongWait(now: registry.now) }
+
+    /// W-01 — what the tab waits on and for how long, straight under its title.
+    /// The label (the feed's words) is cut at the END if it must be; the
+    /// duration is its own fixed-size text and never is. Amber past
+    /// `SessionWait.longAfter`.
+    private func waitLine(_ w: SessionWatchRowWire.WaitingOn) -> some View {
+        let since = w.since.flatMap(SessionLedger.parseISO)
+        let long = SessionWait.isLong(since: since, now: registry.now)
+        let label = SessionWait.label(kind: w.kind, label: w.label)
+        let duration = since.map { SessionWait.duration(since: $0, now: registry.now) }
+        let tint: Color = long ? .orange : MarvinTheme.textPrimary.opacity(0.8)
+        return HStack(spacing: 4) {
+            Text(label)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if let duration {
+                Text("\u{B7} \(duration)")
+                    .lineLimit(1)
+                    .fixedSize()
+                    .layoutPriority(1)
+            }
+        }
+        .font(.system(size: 10.5))
+        .foregroundStyle(tint)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(duration.map { "\(label), waiting \($0)" } ?? label)
     }
 
     private func elapsed(_ date: Date) -> String {

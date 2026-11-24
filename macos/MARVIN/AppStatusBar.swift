@@ -70,10 +70,21 @@ private let statusBarPopoverEdge: Edge = .top
     enum Detail { case full, compact, minimal }
 
     var body: some View {
+        // W-06 — the fleet summary gives way BEFORE any other segment: for each
+        // level of the old bar, the richest summary that fits, then none, and
+        // only then the next level down. So it never pushes an existing item
+        // into a poorer level than the bar had without it.
         ViewThatFits(in: .horizontal) {
-            bar(.full)
-            bar(.compact)
-            bar(.minimal)
+            bar(.full, fleet: .full)
+            bar(.full, fleet: .compact)
+            bar(.full, fleet: .minimal)
+            bar(.full, fleet: nil)
+            bar(.compact, fleet: .compact)
+            bar(.compact, fleet: .minimal)
+            bar(.compact, fleet: nil)
+            bar(.minimal, fleet: .compact)
+            bar(.minimal, fleet: .minimal)
+            bar(.minimal, fleet: nil)
         }
         .padding(.horizontal, 10)
         .frame(height: 22)
@@ -102,9 +113,9 @@ private let statusBarPopoverEdge: Edge = .top
         }
     }
 
-    private func bar(_ detail: Detail) -> some View {
+    private func bar(_ detail: Detail, fleet: SessionFleet.Detail?) -> some View {
         HStack(spacing: 0) {
-            leftCluster(detail).fixedSize()
+            leftCluster(detail, fleet: fleet).fixedSize()
             Spacer(minLength: 12)
             rightCluster(detail).fixedSize()
         }
@@ -113,7 +124,7 @@ private let statusBarPopoverEdge: Edge = .top
 
     // MARK: - Left cluster
 
-    private func leftCluster(_ detail: Detail) -> some View {
+    private func leftCluster(_ detail: Detail, fleet: SessionFleet.Detail?) -> some View {
         HStack(spacing: 10) {
             connectionPip(detail)
             if let branch = bridge.branch, !branch.isEmpty {
@@ -127,7 +138,35 @@ private let statusBarPopoverEdge: Edge = .top
                 MarvinDivider().frame(height: 10)
                 diagnosticCounters
             }
+            if let fleet, let segment = fleetSegment(fleet) {
+                MarvinDivider().frame(height: 10)
+                segment
+            }
         }
+    }
+
+    /// W-06 — "11 tabs · 2 working · 5 waiting · 1 needs you", from the same
+    /// ledger the Sessions pane reads. Click opens that pane. Orange only
+    /// while something needs the person; waiting alone is not an alarm.
+    private func fleetSegment(_ detail: SessionFleet.Detail) -> AnyView? {
+        let counts = SessionRegistry.shared.fleet
+        let text = SessionFleet.summary(counts, detail: detail)
+        guard !text.isEmpty else { return nil }
+        let full = SessionFleet.summary(counts, detail: .full)
+        return AnyView(
+            Button {
+                MarvinBridge.shared.revealLeftTab("sessions")
+            } label: {
+                Text(text)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .foregroundStyle(counts.needsYou > 0 ? Color.orange : Color.secondary)
+                    .statusSegmentHitArea()
+            }
+            .buttonStyle(.plain)
+            .help("\(full) \u{B7} click to open Sessions")
+            .accessibilityLabel(full)
+        )
     }
 
     private var diagnosticCounters: some View {

@@ -2863,6 +2863,8 @@ final class ChatPreviewModel {
                                     systemImage: "bubble.left",
                                     active: sid == model.loadedSessionId,
                                     state: SessionRegistry.shared.rowState(sid),
+                                    longWait: SessionRegistry.shared.entry(sid)?
+                                        .isLongWait(now: SessionRegistry.shared.now) ?? false,
                                     width: tabWidth,
                                     onSelect: {
                                         model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
@@ -3113,6 +3115,7 @@ final class ChatPreviewModel {
         systemImage: String,
         active: Bool,
         state: SessionRowState = .draft,
+        longWait: Bool = false,
         width: CGFloat = 190,
         onSelect: @escaping () -> Void,
         onClose: (() -> Void)?
@@ -3133,6 +3136,14 @@ final class ChatPreviewModel {
                         ProgressView()
                             .controlSize(.mini)
                             .frame(width: 10, height: 10)
+                    } else if state == .waiting {
+                        // S-01 — not a dot: a waiting tab must not read as an idle one.
+                        // Amber once the wait is long (W-04).
+                        Image(systemName: "clock")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Self.tabTint(state, longWait: longWait))
+                            .frame(width: 10)
+                            .accessibilityLabel(longWait ? "Waiting for a long time" : "Waiting")
                     } else {
                         Circle()
                             .fill(Self.tabTint(state))
@@ -3159,11 +3170,12 @@ final class ChatPreviewModel {
                         Image(systemName: "xmark")
                             .font(.system(size: 8, weight: .bold))
                             .foregroundStyle(GitDecorationColor.deleted)
-                    } else if state == .waiting || state == .done {
-                        // ADR-0130 — neutral glyphs; the outcome hues stay with outcomes.
-                        Image(systemName: state == .waiting ? "clock" : "checkmark")
+                    } else if state == .done {
+                        // ADR-0130 — a neutral glyph; the outcome hues stay with outcomes.
+                        Image(systemName: "checkmark")
                             .font(.system(size: 8, weight: .semibold))
                             .foregroundStyle(Self.tabTint(state))
+                            .accessibilityLabel("Done")
                     }
                 }
             }
@@ -3263,7 +3275,9 @@ final class ChatPreviewModel {
     }
 
     /// ADR-0107 — one tint per session state, shared with the Sessions pane.
-    static func tabTint(_ state: SessionRowState) -> Color {
+    static func tabTint(_ state: SessionRowState, longWait: Bool = false) -> Color {
+        // W-04 — amber (the pane's "attention" hue) once a wait is long.
+        if state == .waiting, longWait { return .orange }
         switch state {
         case .needsYou: return .orange
         case .working: return GitDecorationColor.modified

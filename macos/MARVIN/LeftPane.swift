@@ -405,7 +405,11 @@ private struct LeftPaneWidthKey: PreferenceKey {
     }
 
     private func activityBarButton(_ t: LeftPaneTab) -> some View {
-        ActivityBarButton(systemImage: t.systemImage, label: t.label, selected: tab == t) { view in
+        // W-06 — the Sessions icon carries how many sessions need you.
+        let needsYou = t == .sessions ? SessionRegistry.shared.fleet.needsYou : 0
+        return ActivityBarButton(systemImage: t.systemImage, label: needsYou > 0 ? "\(t.label), \(needsYou) need you" : t.label,
+                                 selected: tab == t,
+                                 badge: PaneBadge.shows(needsYou) ? PaneBadge.text(needsYou) : nil) { view in
             tab = t
             // Collapsed sidebar + a rail click means "show me this pane", not
             // "switch the tab hiding behind a zero-width pane" (user,
