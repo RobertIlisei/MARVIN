@@ -79,15 +79,12 @@ public struct TabNotification: Equatable, Sendable {
     public var identifier: String { "marvin.tab.\(kind.rawValue).\(tabIds.joined(separator: "+"))" }
 }
 
-/// How a tab is named in a notification, the same way the Sessions pane names it.
+/// How a tab is named in a notification: the one name every surface uses
+/// (`SessionDisplayName`, R2-02). Until 2026-11-24 this printed the sidecar's
+/// raw title, which is often the path of the brief the tab was opened from.
 public enum TabNotificationTitle {
-    public static func make(entryTitle: String?, isDraft: Bool, id: String) -> String {
-        if isDraft { return "New chat" }
-        if let t = entryTitle?.replacingOccurrences(of: "\n", with: " "),
-           !t.trimmingCharacters(in: .whitespaces).isEmpty {
-            return t.count > 40 ? String(t.prefix(38)) + "\u{2026}" : t
-        }
-        return String(id.prefix(8))
+    public static func make(entryTitle: String?, isDraft: Bool, id: String, firstMessage: String? = nil, branch: String? = nil) -> String {
+        SessionDisplayName.make(id: id, isDraft: isDraft, firstMessage: firstMessage, title: entryTitle, branch: branch)
     }
 }
 
