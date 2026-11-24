@@ -61,6 +61,10 @@ import MARVINLogic
                 SupervisorBubble(mark: mark, blocks: message.blocks) { blockView(for: $0) }
             }
             .padding(.vertical, 6)
+        } else if message.role == .user, let machine = machineMessage {
+            // R2-09 — a job report or a wakeup was delivered as a user turn, but
+            // the person did not write it: its own label, no bubble, one line.
+            MachineMessageRow(info: machine)
         } else if message.role == .user {
             HStack(alignment: .top, spacing: 0) {
                 Spacer(minLength: 40)
@@ -98,6 +102,14 @@ import MARVINLogic
             }
             .disabled(plainText.isEmpty)
         }
+    }
+
+    /// The machine-originated user turn this message is, if it is one
+    /// (`MachineMessage`): a single text block that opens with the sidecar's
+    /// wakeup header or job report.
+    private var machineMessage: MachineMessage? {
+        guard message.blocks.count == 1, case .text(_, let text) = message.blocks[0] else { return nil }
+        return MachineMessage.classify(text)
     }
 
     /// User message bubble — accent-tinted rounded rectangle with
@@ -213,6 +225,52 @@ import MARVINLogic
         case .unknown(_, let kind, let raw):
             UnknownBlockView(kind: kind, raw: raw)
         }
+    }
+}
+
+/// A line the system wrote into the person's turn (a finished job, a scheduled
+/// wakeup). Quiet on purpose: muted, left-aligned, one line with the exit code,
+/// and the full report one click away. Never the "you" bubble (R2-09).
+@MainActor private struct MachineMessageRow: View {
+    let info: MachineMessage
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                MarvinMotion.with(.easeOut(duration: 0.15)) { open.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                        .frame(width: 10)
+                    Text(info.label)
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                        .fixedSize()
+                    Text(info.headline)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(info.label): \(info.headline)")
+            .accessibilityHint(open ? "Hide the report" : "Show the report")
+            if open {
+                Text(info.detail)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 16)
+            }
+        }
+        .foregroundStyle(MarvinTheme.textMuted)
+        .padding(.vertical, 4)
     }
 }
 
