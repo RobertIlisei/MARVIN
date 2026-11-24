@@ -64,7 +64,7 @@ import { z } from "zod";
 import { buildCallIndex, callersOf } from "./call-index";
 import { changedFilesOnBranch, changeImpact, renderChangeImpact } from "./change-impact";
 import { crossLayerReferences, renderCrossLayer } from "./cross-layer-refs";
-import { graphifyEnv, graphifyMissingHint, resolveGraphifyBin } from "./graphify-bin";
+import { graphifyEnv, graphifyExtrasHint, graphifyMissingHint, resolveGraphifyBin } from "./graphify-bin";
 import { resolveGraphRoot } from "./worktree-graph";
 import {
   type GraphScope,
@@ -85,10 +85,14 @@ function graphifyBin(): string {
   return resolveGraphifyBin();
 }
 
-/** A failed graphify call's message, with the install hint when no binary was found. */
+/**
+ * A failed graphify call's message, with the install hint when no binary was
+ * found, or the reinstall hint when it died on a missing optional dependency
+ * (a Python traceback is no use to the model reading the tool result).
+ */
 function graphifyErrorMessage(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
-  const hint = graphifyMissingHint(err);
+  const hint = graphifyMissingHint(err) ?? graphifyExtrasHint(err);
   return hint ? `${message}\n\n${hint}` : message;
 }
 
@@ -482,8 +486,9 @@ export function graphMcpTools(workDir: string, opts: { cwd?: string | undefined 
           }
           sections.push(`[${sc}]\n${out}`);
         } catch (err) {
-          const message = graphifyErrorMessage(err);
-          sections.push(`[${sc}] graphify query failed: ${message}`);
+          // Keep stdout: since 0.9.93 a bare name that matches several nodes
+          // exits 3 with the candidate ids on stdout, and the ids are the answer.
+          sections.push(`[${sc}] ${execFileErrorText("graphify query", err)}`);
         }
       }
       return textResult(sections.join("\n\n"));

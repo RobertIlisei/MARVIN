@@ -268,3 +268,133 @@ either way); `forkSession`, `getSessionMessages`, `getSubagentMessages`,
 `toggleMcpServer`, Ultracode settings, marketplace policy, Artifact
 `read.title` — MARVIN calls none of them.
 
+
+## Addendum — graphify 0.9.73 → 0.9.118 (2026-11-24)
+
+Prepared, not switched. The installed tool is still 0.9.73; this records what
+the bridge needs for 0.9.118, what it costs, and the order to switch in.
+
+**Why.** On agri-saas-platform (20k scanned files, Java and TypeScript) every
+tab ran `graphify update` per turn. 0.9.73 held ~14 of 18 cores for 30 to 60 s
+each time, and a tab's `graphify-out` was 2.2 to 2.6 GB.
+
+**Measured** on a throwaway checkout of that project, 6 workers, both versions
+with `GRAPHIFY_NO_AUTO_REFRESH=1`, `/usr/bin/time -l`, the project's own
+`.graphifyignore`. "0.9.118 plain" is a `uv pip install graphifyy==0.9.118`;
+"+grammars" adds `tree-sitter-sql` and `tree-sitter-hcl` (the `sql` and
+`terraform` extras), which the project's 1,075 `.sql` and 8 `.hcl` files need.
+
+| Run | 0.9.73 | 0.9.118 plain | 0.9.118 + grammars |
+|---|---|---|---|
+| `graphify . --code-only`, cold | 130 s, 2.6 GB, graph.json 294 MB; 109,711 nodes, 453,576 edges, 2,276 communities | 124 s, 1.4 GB, 264 MB; 113,341 / 467,113 / 2,316 | not run |
+| first `update` after that build | 233 s, 5.6 GB | 138 s, 4.8 GB (full rebuild, no build state yet) | 130 s, 3.2 GB (adds SQL nodes: 116,786 / 471,800 / 2,975) |
+| `update`, 15 Java + 5 TS files touched | 244 s, 6.9 GB, 265 CPU s | 109 s, 4.3 GB, 111 CPU s | 51 s, 3.1 GB, 53 CPU s |
+| `update`, nothing changed | 277 s, 7.2 GB | 42 s, 2.5 GB | 14 s, 150 MB |
+| tab seeded as MARVIN does (graph, manifest, cache), first `update` | not run | not run | 110 s, 6.3 GB; seeding the whole `graphify-out` instead: 97 s, 5.7 GB; then 20 files touched: 41 s, 3.7 GB |
+| 0.9.73-built `graphify-out` upgraded in place, first `update` | n/a | n/a | 223 s, 8.8 GB, 155,209 nodes; then nothing changed: 11 s, 152 MB |
+
+A tab's `graphify-out` after the same steps is about 290 MB on 0.9.118
+(graph.json 259 MB, cache 12 MB) against 1.2 GB on 0.9.73 (cache 480 MB, a
+356 MB dated snapshot). 0.9.90 moved the hub-fallback community names out of
+`.graphify_labels.json`, so they no longer count as curated and no dated
+snapshot is taken; three rebuilds on 0.9.118 made none.
+
+**What the tool already does, so MARVIN adds no skip.** 0.9.96 exits early when
+nothing changed, 0.9.102 re-extracts only changed files, and 0.9.115 reports an
+oversized JSON file as skipped so the early exit still holds. The early exit
+did not hold on the plain install: a file whose grammar is missing never gets a
+manifest row, so 1,075 `.sql` files were "changed" on every run (42 s, 2.5 GB
+against 14 s, 150 MB). The fix is the extras, not a MARVIN-side gate. MARVIN
+already skips a worktree whose HEAD and `git status` are unchanged
+(`treeFingerprint`) and a project whose HEAD has not moved.
+
+**Breaks found, and what changed.**
+- `graphify query`, `explain`, `path`, `affected` and `benchmark` import
+  `anyio` in 0.9.118 (`serve.py:14`), which only the `mcp` extra installs; 0.9.73
+  did not. On a plain install `graph_query`, `graph_explain` and `graph_benchmark`
+  died with a Python traceback. `graphifyExtrasHint` names the reinstall, and the
+  missing-binary hint now says `graphifyy[mcp]`.
+- A bare name that matches several nodes exits 3 with the candidate ids on
+  stdout (0.9.93; `query` was a fuzzy search on 0.9.73). `graph_query` kept only
+  the exit message and dropped the ids; it now uses the same stdout-keeping error
+  text as `graph_explain`.
+- The extraction cache writes caller ids as `$graphify-root$_<slug>` (0.9.80)
+  where graph.json keeps `<slug>`. Only the cache fallback of `graph_affected`
+  reads them, which is used when graph.json has no located `calls` edges. The
+  placeholder is stripped so the ids still resolve to graph nodes.
+- graphify sizes its extraction pool at one worker per core in both versions.
+  `graphifyEnv` now sets `GRAPHIFY_MAX_WORKERS` to half the cores, between 2 and
+  6 (6 on this machine); a value already in the environment wins.
+
+**Checked, no change needed.** `call-index` (`calls` edges, `source_file`,
+`source_location`, labels), `graph_affected` on salted Java overload ids,
+`summarizeGraph` and `community_name`, `graph_change_impact`, `graph_path` with
+`relations`, `discoverAreas`, `searchGraph`, `seedWorktreeGraph` (graph,
+manifest, cache seed as well as the whole directory), the per-turn refresh,
+the Swift readers of graph.json (`SymbolSearchSheet`, `ProjectToolsPanel`; every
+node still has a string `id`, `label` and `source_file`), `scripts/build-
+knowledge-graph.py` (it imports `graphify.cluster` and `graphify.detect`; the
+two graphs it wrote were identical in node, edge and community counts),
+`export obsidian` and `callflow-html`, `god-nodes --json`, `diagnose multigraph`,
+`save-result` and `reflect` with their flags. The bridge tests pass against both
+installs (`GRAPHIFY_BIN` pins the binary).
+
+**Behaviour changes to know about.**
+- graph.json carries `graph: {schema_version, graphify_version}` and is one
+  line of compact JSON; nodes gain a `metadata` block (arity, signature).
+- Each Java overload has its own node (0.9.112), so `.fact()` went from 21 to
+  225 call sites; labels are unchanged, ids of overloads gain a six-hex salt.
+- A graph built with `--code-only` stays code-only across `update` (0.9.101).
+  On 0.9.73 the first `update` after a code-only build added the Markdown files
+  (38,455 document nodes here); a 0.9.73-built graph upgraded in place keeps them.
+- The tool prints a "skill is from graphify 0.9.73" warning on every command
+  until `graphify install --platform claude` / `agents` is run. MARVIN's
+  `GRAPHIFY_NO_AUTO_REFRESH=1` stops it rewriting the skills; the warning is on
+  stderr and the graph tools ignore it on success.
+- `graphify update` has no rebuild timeout (`GRAPHIFY_REBUILD_TIMEOUT`, default
+  600 s, bounds only `--watch`).
+
+**Noticed, not changed.** The call index keys a Java or class method by its
+label, which starts with a dot (`.bindAndActivate()`), so `graph_affected
+bindAndActivate` finds nothing on 0.9.73 and 0.9.118 alike; only the dotted
+spelling matches, and TypeScript functions are unaffected. The per-worktree
+refresh does not lower its priority the way the project watchdog does.
+
+**Switch-over, in this order.** Each step can be undone on its own.
+1. Merge this branch and rebuild the app (`/rebuild-app`). It works on 0.9.73
+   and 0.9.118, so this can happen first and alone.
+2. With no refresh running (`pgrep -fl "graphify update"` shows none), keep a
+   copy of the project graph outside the project: `cp -cR <project>/graphify-out
+   ~/graphify-out-0.9.73-backup` (an APFS clone, no space until rewritten).
+3. `uv tool install --force "graphifyy[mcp,sql,terraform]==0.9.118"`. Drop `sql`
+   and `terraform` for a project without those files. `graphify --version`
+   must print 0.9.118; MARVIN picks the newest binary it finds on its next
+   spawn, no restart needed. Run `graphify install --platform claude` and
+   `--platform agents` in a terminal to refresh the skills and silence the
+   warning, or leave it to the Skills pane.
+4. Rebuild the project graph once, by hand, while no tab refreshes:
+   `cd <project> && GRAPHIFY_NO_AUTO_REFRESH=1 GRAPHIFY_MAX_WORKERS=6 graphify
+   update .` Expect 3 to 4 minutes and about 9 GB of memory at peak. Optionally
+   delete the old dated folders (`graphify-out/2026-*`, about 350 MB each).
+5. Tab graphs: every existing tab graph is a full rebuild on its next turn (the
+   cache epoch changed), serialised per project by MARVIN. To avoid that, delete
+   `<project>/.marvin/worktrees/*/graphify-out` for the idle tabs; each reseeds
+   from the new project graph on its next turn.
+6. Verify: `graphify query "<a symbol>" --graph graphify-out/graph.json` exits 0,
+   `graph_summary`, `graph_affected getApiAccessToken`, `graph_query` and
+   `graph_change_impact` answer in a MARVIN tab. Re-run `graphify label` only if
+   the community names matter; the knowledge graph (`bin/marvin knowledge-graph
+   .`) is unaffected.
+
+**Roll back.** `uv tool install --force graphifyy==0.9.73` (the receipt of the
+current install). Measured: 0.9.73 answers `query` on a 0.9.118 graph.json, and
+its `update` over a 0.9.118-built `graphify-out` ran to exit 0 in 268 s at 7.6 GB
+(a full rebuild; it added the Markdown nodes back, 151,619 in all). To go back
+without that rebuild, restore the step 2 copy. No MARVIN change needs reverting.
+
+**Not verified.** The real upgrade on the live project (a project with a
+curated `.graphify_labels.json` may keep taking a daily snapshot); the first
+`update` on a machine with fewer cores or less memory than this one;
+`extract --postgres` (no database to run it against; the flag is unchanged in
+`--help`); the macOS app against a 0.9.118-built graph beyond decoding the JSON
+types its two readers declare.

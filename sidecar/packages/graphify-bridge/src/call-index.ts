@@ -71,6 +71,18 @@ export function cacheDirFor(workDir: string): string {
 }
 
 /**
+ * graphify 0.9.80 stopped leaking the checkout path into ids: the extraction
+ * cache now writes caller ids as `$graphify-root$_<path slug>_<member>`, where
+ * graph.json keeps `<path slug>_<member>`. Strip the placeholder so a cache id
+ * still resolves to its graph node (`nodeLabelResolver` matches on suffix, and
+ * a graph id is not a suffix of the prefixed one).
+ */
+const ROOT_PLACEHOLDER = "$graphify-root$_";
+function unrootedNid(nid: string): string {
+  return nid.startsWith(ROOT_PLACEHOLDER) ? nid.slice(ROOT_PLACEHOLDER.length) : nid;
+}
+
+/**
  * Interning pool for the two strings that repeat across hundreds of thousands
  * of call sites: the source path and the caller node id.
  *
@@ -175,7 +187,7 @@ export function buildCallIndex(workDir: string): CallIndex {
     for (const rawEntry of raw) {
       const rc = rawEntry as Record<string, unknown>;
       const callee = typeof rc.callee === "string" ? rc.callee : "";
-      const callerNid = typeof rc.caller_nid === "string" ? rc.caller_nid : "";
+      const callerNid = unrootedNid(typeof rc.caller_nid === "string" ? rc.caller_nid : "");
       const rawFile = typeof rc.source_file === "string" ? rc.source_file : "";
       // graphify ≥ 0.9.5x writes paths relative to the scan root.
       const sourceFile = rawFile && !isAbsolute(rawFile) ? join(workDir, rawFile) : rawFile;
