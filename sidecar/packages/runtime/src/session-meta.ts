@@ -94,6 +94,13 @@ export interface SessionMeta {
    *  from it. Outlives the spine file, so "no spine at all" in a checklist tab
    *  is known to be a gap, not a chore. */
   checklist?: { planId: string; steps: number; seededAt: string };
+  /** ADR-0138 — the skills the brief named (a `Skills:` line), recorded by the
+   *  sidecar when the first message arrived. `blocks` counts the scope-met
+   *  closes refused for want of them (the ADR-0104 brake: two, then through). */
+  skills?: { required: string[]; seededAt: string; blocks?: number };
+  /** ADR-0138 — every skill this session has run, by normalised name. Persisted
+   *  so a session resumed after a MARVIN restart does not forget what ran. */
+  skillsRun?: string[];
   /**
    * ADR-0127 §9 — a posture set through `PUT /api/sessions/posture`, without a
    * turn. `postureRevision` counts those changes; `postureOverride` holds the
