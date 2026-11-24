@@ -6841,6 +6841,37 @@ runner.suite("session-row-text-r2-11") {
     }
 }
 
+runner.suite("status-bar-text-r2-14") {
+    runner.test("the context figure states its limit") {
+        runner.expect(StatusBarText.windowLabel(1_000_000), equals: "1M", "a million")
+        runner.expect(StatusBarText.windowLabel(200_000), equals: "200K", "two hundred thousand")
+        runner.expect(StatusBarText.windowLabel(1_500_000), equals: "1.5M", "a fraction of a million")
+        runner.expect(StatusBarText.windowLabel(1_048_576), equals: "1M", "binary million reads as a million")
+        runner.expect(StatusBarText.context(residentTokens: 196_400, window: 1_000_000, full: true), equals: "ctx 196K / 1M", "full")
+        runner.expect(StatusBarText.context(residentTokens: 196_400, window: 1_000_000, full: false), equals: "196K/1M", "compact")
+        runner.expect(StatusBarText.context(residentTokens: 4_000, window: 0, full: true), equals: "ctx 4K", "no known window, no invented limit")
+    }
+    runner.test("the cost figure says what period it is") {
+        runner.expect(StatusBarText.costChip("\u{2248}$431.27", full: true), equals: "today \u{2248}$431.27", "full")
+        runner.expect(StatusBarText.costChip("\u{2248}$431.27", full: false), equals: "\u{2248}$431.27", "compact keeps the figure alone")
+    }
+    runner.test("the sync figure says what it counts, in plain numbers") {
+        let help = StatusBarText.syncHelp(ahead: 2171, behind: 0, upstream: "origin/feature/x")
+        runner.expect(help.contains("2171 commits not pushed"), "ahead, without a thousands separator that reads as a decimal")
+        runner.expect(help.contains("origin/feature/x"), "names the upstream")
+        runner.expect(help.contains("Click to pull, then push"), "and what a click does")
+        runner.expect(StatusBarText.syncHelp(ahead: 1, behind: 3, upstream: "origin/main").contains("1 commit not pushed"), "singular")
+        runner.expect(StatusBarText.syncHelp(ahead: 1, behind: 3, upstream: "origin/main").contains("3 commits to pull"), "behind")
+        runner.expect(StatusBarText.syncHelp(ahead: 0, behind: 0, upstream: "origin/main").contains("Up to date"), "nothing to move")
+    }
+    runner.test("the graph and reads counter is explained as how MARVIN worked, not as an error") {
+        let text = StatusBarText.graphReadsHelp(graph: 164, reads: 273, hint: "Reads outpace graph lookups")
+        runner.expect(text.contains("164 graph lookups") && text.contains("273 file reads"), "both numbers in words")
+        runner.expect(text.contains("not an error"), "and the word that stops it reading as one")
+        runner.expect(text.contains("Reads outpace graph lookups"), "the existing hint stays")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

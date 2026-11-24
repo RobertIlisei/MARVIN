@@ -235,7 +235,7 @@ enum SurfaceSnapshot {
                        widths: [900, 1400])]
 
         let statusBar: [Surface] =
-            pair("status-bar", "Status bar", widths: [700, 1200], empty: "default bridge, offline health") {
+            pair("status-bar", "Status bar", widths: [700, 1200], empty: "default bridge, offline health", prepare: seedSessions) {
                 AnyView(AppStatusBar())
             }
 

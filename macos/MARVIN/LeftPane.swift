@@ -405,11 +405,15 @@ private struct LeftPaneWidthKey: PreferenceKey {
     }
 
     private func activityBarButton(_ t: LeftPaneTab) -> some View {
-        // W-06 — the Sessions icon carries how many sessions need you.
-        let needsYou = t == .sessions ? SessionRegistry.shared.fleet.needsYou : 0
-        return ActivityBarButton(systemImage: t.systemImage, label: needsYou > 0 ? "\(t.label), \(needsYou) need you" : t.label,
+        // W-06 / R2-03 — the Sessions icon carries what wants a look: sessions
+        // that need you, finished results not yet looked at, and waits that have
+        // run long. Orange when a person is wanted or a wait is long, the accent
+        // colour when it is only results; the tooltip says what it counts.
+        let badge = t == .sessions ? SessionFleet.badge(SessionRegistry.shared.fleet) : nil
+        return ActivityBarButton(systemImage: t.systemImage, label: badge.map { "\(t.label): \($0.help)" } ?? t.label,
                                  selected: tab == t,
-                                 badge: PaneBadge.shows(needsYou) ? PaneBadge.text(needsYou) : nil) { view in
+                                 badge: badge.map { PaneBadge.text($0.count) },
+                                 badgeTint: badge?.tone == .review ? Color.accentColor : Color.orange) { view in
             tab = t
             // Collapsed sidebar + a rail click means "show me this pane", not
             // "switch the tab hiding behind a zero-width pane" (user,
@@ -441,6 +445,8 @@ private struct LeftPaneWidthKey: PreferenceKey {
     var showsBar = true
     /// A count drawn on the glyph, as the Needs you header draws it.
     var badge: String? = nil
+    /// The badge's colour: orange for a person wanted, the accent for results to review.
+    var badgeTint: Color = .orange
     /// Receives the AppKit hit view so the click can reach the enclosing
     /// `NSSplitView` and re-open a collapsed sidebar.
     let action: (NSView) -> Void
@@ -471,10 +477,10 @@ private struct LeftPaneWidthKey: PreferenceKey {
                     // the glyph behind it does not show through the tint.
                     Text(badge)
                         .font(.system(size: 9, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(badgeTint)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 0.5)
-                        .background(Capsule().fill(Color.orange.opacity(0.18)))
+                        .background(Capsule().fill(badgeTint.opacity(0.18)))
                         .background(Capsule().fill(MarvinTheme.background))
                         .padding(.top, 3)
                         .padding(.trailing, 4)

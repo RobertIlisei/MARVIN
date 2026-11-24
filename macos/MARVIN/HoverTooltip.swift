@@ -50,13 +50,16 @@ final class HoverTooltip {
     /// Schedule `text` to appear next to `view`. Cancels any pending or
     /// visible tooltip first, so a fast sweep across the rail shows one
     /// tooltip, not a trail of them.
-    func show(_ text: String, for view: NSView) {
+    /// `above`: centred over the view instead of to its right — for the status
+    /// bar, where the view sits on the window's bottom edge and a tooltip to
+    /// its right would cover the neighbouring segments or the screen edge.
+    func show(_ text: String, for view: NSView, above: Bool = false) {
         cancel()
         guard !text.isEmpty else { return }
         let instant = Date().timeIntervalSince(lastDismissed) < Self.sessionWindow
         let work = DispatchWorkItem { [weak view] in
             guard let view, view.window != nil else { return }
-            self.present(text, for: view)
+            self.present(text, for: view, above: above)
         }
         pending = work
         if instant {
@@ -78,7 +81,7 @@ final class HoverTooltip {
         }
     }
 
-    private func present(_ text: String, for view: NSView) {
+    private func present(_ text: String, for view: NSView, above: Bool = false) {
         guard let window = view.window else { return }
         let (panel, label) = ensurePanel()
         label.stringValue = text
@@ -106,6 +109,9 @@ final class HoverTooltip {
             x: onScreen.maxX + 8,
             y: onScreen.midY - height / 2
         )
+        if above {
+            origin = NSPoint(x: onScreen.midX - width / 2, y: onScreen.maxY + 6)
+        }
 
         // Clamp to the display the view is actually on. Without this a rail
         // icon near the bottom of the screen draws its tooltip half off it.

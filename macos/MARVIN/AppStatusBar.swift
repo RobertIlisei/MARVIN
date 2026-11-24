@@ -145,9 +145,10 @@ private let statusBarPopoverEdge: Edge = .top
         }
     }
 
-    /// W-06 — "11 tabs · 2 working · 5 waiting · 1 needs you", from the same
-    /// ledger the Sessions pane reads. Click opens that pane. Orange only
-    /// while something needs the person; waiting alone is not an alarm.
+    /// W-06 — "11 tabs · 2 working · 5 waiting (2 long) · 3 finished", from the
+    /// same ledger the Sessions pane reads. Click opens that pane. Orange while
+    /// a person is wanted or a wait has run long (R2-03: a tab that had waited
+    /// 50 minutes read as grey text); waiting and finished alone are not alarms.
     private func fleetSegment(_ detail: SessionFleet.Detail) -> AnyView? {
         let counts = SessionRegistry.shared.fleet
         let text = SessionFleet.summary(counts, detail: detail)
@@ -160,12 +161,13 @@ private let statusBarPopoverEdge: Edge = .top
                 Text(text)
                     .lineLimit(1)
                     .fixedSize()
-                    .foregroundStyle(counts.needsYou > 0 ? Color.orange : Color.secondary)
+                    .foregroundStyle(SessionFleet.tone(counts) == .quiet ? Color.secondary : Color.orange)
                     .statusSegmentHitArea()
             }
             .buttonStyle(.plain)
-            .help("\(full) \u{B7} click to open Sessions")
+            .overlay(StatusTip(text: SessionFleet.help(counts)))
             .accessibilityLabel(full)
+            .accessibilityHint("Opens the Sessions pane")
         )
     }
 
@@ -346,27 +348,26 @@ private let statusBarPopoverEdge: Edge = .top
                         Image(systemName: "arrow.triangle.2.circlepath")
                             .font(.system(size: 10))
                     }
+                    // `verbatim`: an Int in a `Text` is localised, and "2.171↑" read as a decimal (R2-14).
                     if bridge.branchBehind > 0 {
-                        Text("\(bridge.branchBehind)↓").font(.system(size: 10, design: .monospaced))
+                        Text(verbatim: "\(bridge.branchBehind)↓").font(.system(size: 10, design: .monospaced))
                     }
                     if bridge.branchAhead > 0 {
-                        Text("\(bridge.branchAhead)↑").font(.system(size: 10, design: .monospaced))
+                        Text(verbatim: "\(bridge.branchAhead)↑").font(.system(size: 10, design: .monospaced))
                     }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(statusBarRunner.isBusy)
-            .help(syncHelp)
+            .overlay(StatusTip(text: syncHelp))
+            .accessibilityLabel("Sync")
+            .accessibilityValue(syncHelp)
         }
     }
 
     private var syncHelp: String {
-        guard let upstream = bridge.branchUpstream else { return "No upstream" }
-        if bridge.branchAhead == 0 && bridge.branchBehind == 0 {
-            return "Up to date with \(upstream) · click to fetch and sync"
-        }
-        return "Sync with \(upstream) — pull \(bridge.branchBehind), push \(bridge.branchAhead)"
+        StatusBarText.syncHelp(ahead: bridge.branchAhead, behind: bridge.branchBehind, upstream: bridge.branchUpstream)
     }
 
     /// Pull then push, sequenced. Same reasoning as the panel's Sync:
@@ -416,7 +417,7 @@ private let statusBarPopoverEdge: Edge = .top
                 toolUseSegment(detail)
                 subagentSegment(detail)
             }
-            costSegment
+            costSegment(detail)
             bellSegment
         }
     }
@@ -473,7 +474,6 @@ private let statusBarPopoverEdge: Edge = .top
             let window = bridge.reportedContextWindow
                 ?? ContextUsageReader.contextWindow(forModelId: currentModelId)
             let band = ContextUsageReader.band(forTokens: resident, window: window)
-            let kCtx = (Double(resident) / 1000.0).rounded()
             let billable = bridge.billableThisTurn
             Button {
                 contextPopoverOpen.toggle()
@@ -483,7 +483,8 @@ private let statusBarPopoverEdge: Edge = .top
                           ? "exclamationmark.triangle.fill"
                           : "gauge.with.dots.needle.50percent")
                         .font(.system(size: 10))
-                    Text(detail == .full ? "ctx \(Int(kCtx))K" : "\(Int(kCtx))K")
+                    // R2-14 — "ctx 196K" did not say of what: the window is the limit.
+                    Text(StatusBarText.context(residentTokens: resident, window: window, full: detail == .full))
                 }
                 .foregroundStyle(colour(for: band))
                 .statusSegmentHitArea()
@@ -541,7 +542,7 @@ private let statusBarPopoverEdge: Edge = .top
                      : "\(bridge.sessionGraphCalls)·\(bridge.sessionFileReadCalls)")
             }
             .foregroundStyle(toolUseColour(for: band))
-            .help(toolUseHover(band: band, counts: counts))
+            .overlay(StatusTip(text: toolUseHover(band: band, counts: counts)))
             MarvinDivider().frame(height: 10)
         }
     }
@@ -576,20 +577,17 @@ private let statusBarPopoverEdge: Edge = .top
         }
     }
 
+    /// R2-14 — never orange or red. Red means "error" everywhere else on this
+    /// bar; this counter says how the model worked (it read files instead of
+    /// asking the code graph), which the person watching cannot act on from
+    /// here. The drift is still readable: the numbers, and the tooltip.
     private func toolUseColour(for band: ToolUseBand) -> AnyShapeStyle {
-        switch band {
-        case .idle:     return AnyShapeStyle(.tertiary)
-        case .healthy:  return AnyShapeStyle(.secondary)
-        case .drifting: return AnyShapeStyle(Color.orange)
-        case .critical: return AnyShapeStyle(Color.red)
-        }
+        band == .idle ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary)
     }
 
     private func toolUseHover(band: ToolUseBand, counts: ToolUseCounts) -> String {
-        var text = "\(band.hint)\n"
-        text += "graph: \(counts.graphCalls) (summary \(counts.graphSummaryCalls)) · "
-        text += "reads: \(counts.fileReadCalls)\n"
-        text += "graphify-first protocol — see CLAUDE.md golden rule 7"
+        var text = StatusBarText.graphReadsHelp(graph: counts.graphCalls, reads: counts.fileReadCalls, hint: band.hint)
+        text += "\nGraph summaries: \(counts.graphSummaryCalls) · graphify-first protocol, golden rule 7"
         return text
     }
 
@@ -663,7 +661,7 @@ private let statusBarPopoverEdge: Edge = .top
     }
 
     @ViewBuilder
-    private var costSegment: some View {
+    private func costSegment(_ detail: Detail) -> some View {
         if let cost = bridge.costSummary {
             Button {
                 // Opening the panel asks for current numbers — the background
@@ -675,12 +673,15 @@ private let statusBarPopoverEdge: Edge = .top
                 HStack(spacing: 4) {
                     Image(systemName: "dollarsign.circle")
                         .font(.system(size: 10))
-                    Text(costChipText(cost))
+                    // R2-14 — which spend this is: today's, for this project (not this tab, not lifetime).
+                    Text(StatusBarText.costChip(costChipText(cost), full: detail == .full))
                 }
                 .statusSegmentHitArea()
             }
             .buttonStyle(.plain)
-            .help(costChipHelp(cost))
+            .overlay(StatusTip(text: costChipHelp(cost)))
+            .accessibilityLabel("Spend today, this project")
+            .accessibilityValue(costChipText(cost))
             .popover(isPresented: $costPopoverOpen, arrowEdge: statusBarPopoverEdge) {
                 CostHistoryPopover(summary: cost)
             }
@@ -898,6 +899,52 @@ private let statusBarPopoverEdge: Edge = .top
         }
         .padding(16)
         .frame(width: 300)
+    }
+}
+
+/// A tooltip drawn by `HoverTooltip` above the segment, which lets every click
+/// through to the segment under it (R2-03).
+///
+/// The fleet chip's `.help` gave no tooltip in 2.5 s of hovering on 2026-11-24,
+/// while the rail's (drawn by `HoverTooltip` since 2026-08-29, when `.help` on
+/// the rail also never showed) appeared at once. The cause of `.help` failing
+/// here was not reproduced; the segments this review changed use the mechanism
+/// known to work. The tracking area belongs to a view that is never the hit
+/// target, so the Button beneath still gets the click.
+private struct StatusTip: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> TipView {
+        let v = TipView()
+        v.text = text
+        return v
+    }
+
+    func updateNSView(_ v: TipView, context: Context) { v.text = text }
+
+    final class TipView: NSView {
+        var text = ""
+        private var tracking: NSTrackingArea?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func isAccessibilityElement() -> Bool { false }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let tracking { removeTrackingArea(tracking) }
+            let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+                                      owner: self, userInfo: nil)
+            addTrackingArea(area)
+            tracking = area
+        }
+
+        override func mouseEntered(with event: NSEvent) { HoverTooltip.shared.show(text, for: self, above: true) }
+        override func mouseExited(with event: NSEvent) { HoverTooltip.shared.cancel() }
+        override func mouseDown(with event: NSEvent) { HoverTooltip.shared.cancel(); super.mouseDown(with: event) }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil { HoverTooltip.shared.cancel() }
+        }
     }
 }
 
