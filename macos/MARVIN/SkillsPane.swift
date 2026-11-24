@@ -1176,10 +1176,15 @@ private struct SkillsIndexResponse: Decodable {
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
                 }
-                if !description.isEmpty {
-                    Text(description)
+                // R2-15 — a skill with no description says so, in a dimmer
+                // register, instead of leaving a gap or printing ">". A skill the
+                // loader flagged (`loadIssue`) already says why in its own line.
+                let shown = SkillRowDescription.display(description)
+                if !shown.isPlaceholder || loadIssue == nil {
+                    Text(shown.text)
                         .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
+                        .italic(shown.isPlaceholder)
+                        .foregroundStyle(shown.isPlaceholder ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
                         .lineLimit(2)
                         .truncationMode(.tail)
                 }
