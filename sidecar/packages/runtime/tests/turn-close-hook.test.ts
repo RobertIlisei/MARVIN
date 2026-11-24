@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { decideTurnClose, makeTurnCloseStopHook } from "../src/turn-close-hook";
+import { backlogCloseCandidates, decideBacklogClose, decideTurnClose, makeTurnCloseStopHook } from "../src/turn-close-hook";
 
 // The two practice-backtest findings about how a turn ENDS, made mechanical
 // through the SDK `Stop` event (2026-09-03).
@@ -97,5 +97,63 @@ describe("the Stop hook", () => {
     const off = makeTurnCloseStopHook({ turnId: "t", facts: () => ({ mutations: 1, lastTodos: undefined, machineTurn: false }), onFired: (d) => fired.push(d.kind) });
     expect(await off(stopInput("Done."), undefined, { signal: new AbortController().signal })).toEqual({});
     expect(fired).toHaveLength(1);
+  });
+});
+
+// ADR-0137: a tab that says "scope met" while it still holds a claimed backlog
+// item leaves the item `doing` for ever (a backlog audit found dozens), and
+// work that plainly finished an open item nobody claimed never closed it.
+describe("backlog at the close", () => {
+  const MET = "All done.\n\n**Scope met:** shipped. Anything else, or should I stop?\n<!-- marvin:scope-met -->";
+  const item = (id: string, over: Record<string, unknown> = {}) =>
+    ({ id, title: id.replace(/-/g, " "), body: "", status: "open", claimedBy: "", ...over }) as never;
+
+  it("blocks a scope-met close that still holds claimed items, and names them", () => {
+    const d = decideBacklogClose(MET, { claimed: [{ id: "fix-the-fx-date", title: "Fix the FX date" }], related: [] });
+    expect(d?.kind).toBe("backlog-claimed-open");
+    expect(d?.reason).toContain("fix-the-fx-date");
+    expect(d?.reason).toContain("backlog_resolve");
+  });
+
+  it("says nothing when the turn does not claim scope met, or holds nothing and nothing matches", () => {
+    expect(decideBacklogClose("Still working; the gate is running.", { claimed: [{ id: "a", title: "A" }], related: [] })).toBeNull();
+    expect(decideBacklogClose(MET, { claimed: [], related: [] })).toBeNull();
+  });
+
+  it("offers unclaimed look-alikes as suggestions, never as an instruction to close", () => {
+    const d = decideBacklogClose(MET, { claimed: [], related: [{ id: "invoice-fx-anchor", title: "Invoice FX anchor" }] });
+    expect(d?.kind).toBe("backlog-related");
+    expect(d?.reason).toContain("invoice-fx-anchor");
+    expect(d?.reason).toMatch(/only if|otherwise leave/i);
+  });
+
+  it("candidates: mine are the doing items this session claimed; related are open, unclaimed, and name a file this turn edited", () => {
+    const items = [
+      item("mine", { status: "doing", claimedBy: "sess-1" }),
+      item("someone-elses", { status: "doing", claimedBy: "sess-2", body: "see apps/api/src/InvoiceService.java" }),
+      item("names-my-file", { body: "the rate is read in apps/api/src/InvoiceService.java:120" }),
+      item("names-another-file", { body: "see apps/web/src/Other.tsx" }),
+      item("done-already", { status: "done", body: "apps/api/src/InvoiceService.java" }),
+    ];
+    const c = backlogCloseCandidates(items, "sess-1", ["/proj/wt/apps/api/src/InvoiceService.java"]);
+    expect(c.claimed.map((i) => i.id)).toEqual(["mine"]);
+    expect(c.related.map((i) => i.id)).toEqual(["names-my-file"]);
+  });
+
+  it("the Stop hook blocks twice on claimed items, then lets the close through", async () => {
+    delete process.env.MARVIN_DESIGN_HOOKS;
+    const stop = { hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: MET, session_id: "s", transcript_path: "", cwd: "/" } as never;
+    const fired: string[] = [];
+    const hook = makeTurnCloseStopHook({
+      turnId: "t-bk",
+      facts: () => ({ mutations: 1, lastTodos: undefined, machineTurn: true }),
+      backlog: async () => ({ claimed: [{ id: "mine", title: "Mine" }], related: [] }),
+      onFired: (d) => fired.push(d.kind),
+    });
+    const sig = { signal: new AbortController().signal };
+    expect(((await hook(stop, undefined, sig)) as { decision?: string }).decision).toBe("block");
+    expect(((await hook(stop, undefined, sig)) as { decision?: string }).decision).toBe("block");
+    expect(await hook(stop, undefined, sig)).toEqual({});
+    expect(fired).toEqual(["backlog-claimed-open", "backlog-claimed-open"]);
   });
 });

@@ -96,7 +96,7 @@ import type { ChainCapRefusal } from "./session-attention";
 import { readSessionMeta, type SessionTree } from "./session-meta";
 import { saveSlashCommands } from "./slash-commands";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
-import { makeTurnCloseStopHook } from "./turn-close-hook";
+import { backlogCloseCandidates, makeTurnCloseStopHook } from "./turn-close-hook";
 import { TurnInputChannel } from "./turn-input";
 import { listLiveTurns, markTurnMutated } from "./turn-registry";
 import { scheduleWakeup } from "./wakeup-scheduler";
@@ -2404,6 +2404,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           })()
         : 0,
     }),
+    // ADR-0137 — the backlog at a scope-met close: what this session still
+    // holds, and open items that name a file this turn edited.
+    backlog: async () =>
+      backlogCloseCandidates(await listBacklog(workDir), input.marvinSessionId ?? "", [...designCtx.editedFilesThisTurn]),
     onFired: () => {
       /* telemetry lives in the hook; nothing else to record per turn */
     },

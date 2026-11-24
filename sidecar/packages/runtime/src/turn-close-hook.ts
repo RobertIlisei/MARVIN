@@ -22,6 +22,7 @@
  */
 
 import type { HookCallback, HookJSONOutput, StopHookInput } from "@anthropic-ai/claude-agent-sdk";
+import { type BacklogItem, extractPathRefs } from "./backlog";
 import { BUILTIN_GATE_MAX_DENIES, readDesignHooksMode } from "./design-hooks";
 import { parsePlanTag } from "./plan-spine";
 import { builtinGate, notePracticeRuleFired } from "./practice";
@@ -53,8 +54,90 @@ export interface TurnCloseFacts {
 }
 
 export interface TurnCloseDecision {
-  kind: "scope-met-missing" | "plan-steps-open" | "plan-stale" | "seeded-steps-open" | "go-ahead";
+  kind:
+    | "scope-met-missing"
+    | "plan-steps-open"
+    | "plan-stale"
+    | "seeded-steps-open"
+    | "go-ahead"
+    | "backlog-claimed-open"
+    | "backlog-related";
   reason: string;
+}
+
+/** A backlog item as the close check names it. */
+export interface BacklogBrief {
+  id: string;
+  title: string;
+}
+
+/** ADR-0137 — what the close check needs from the project's backlog. */
+export interface BacklogCloseFacts {
+  /** `doing` items this session holds. */
+  claimed: BacklogBrief[];
+  /** Open, unclaimed items that name a file this turn edited. */
+  related: BacklogBrief[];
+}
+
+const RELATED_AT_CLOSE_MAX = 3;
+
+/**
+ * ADR-0137 — pick the two lists from the project's backlog. Pure.
+ *
+ * `related` is deliberately narrow: an open item nobody holds whose text names
+ * a file this turn edited, matched on the path as the item wrote it. Title
+ * similarity is not used: at a close it would offer every item about the same
+ * screen, and a suggestion that is usually wrong teaches the model to ignore it.
+ */
+export function backlogCloseCandidates(items: BacklogItem[], sessionId: string, editedFiles: string[]): BacklogCloseFacts {
+  const claimed = items
+    .filter((i) => i.status === "doing" && !!sessionId && i.claimedBy === sessionId)
+    .map((i) => ({ id: i.id, title: i.title }));
+  const edited = editedFiles.map((f) => f.replace(/\\/g, "/"));
+  const names = (item: BacklogItem): boolean =>
+    extractPathRefs(`${item.title}\n${item.body}`).some(
+      (ref) => ref.includes("/") && edited.some((f) => f === ref || f.endsWith(`/${ref}`)),
+    );
+  const related = items
+    .filter((i) => i.status === "open" && !i.claimedBy && names(i))
+    .slice(0, RELATED_AT_CLOSE_MAX)
+    .map((i) => ({ id: i.id, title: i.title }));
+  return { claimed, related };
+}
+
+/**
+ * ADR-0137 — the backlog at a scope-met close. A claimed item still `doing`
+ * is a gate (the claim says "I am working this"; the close says "I am done");
+ * an unclaimed look-alike is a suggestion and says so. Null when the turn does
+ * not claim scope met. Exported for tests.
+ */
+export function decideBacklogClose(lastText: string, facts: BacklogCloseFacts): TurnCloseDecision | null {
+  if (!hasScopeMet(lastText)) return null;
+  const list = (xs: BacklogBrief[]): string => xs.map((x) => `\`${x.id}\` (${x.title.slice(0, 70)})`).join("; ");
+  if (facts.claimed.length > 0) {
+    const n = facts.claimed.length;
+    return {
+      kind: "backlog-claimed-open",
+      reason:
+        `backlog check (ADR-0137): this turn claims scope met while this session still holds ${n} claimed backlog ` +
+        `item${n === 1 ? "" : "s"}: ${list(facts.claimed)}. For each one: if this work finished it, call ` +
+        "`backlog_resolve` with the evidence (the commit and the test that proves it); if it did not, release it " +
+        "back to open with a note saying exactly what remains. Do not resolve an item on the strength of this " +
+        `message. (After ${BUILTIN_GATE_MAX_DENIES} refusals the close is allowed and the bypass logged.)`,
+    };
+  }
+  if (facts.related.length > 0) {
+    return {
+      kind: "backlog-related",
+      reason:
+        `backlog check (ADR-0137): ${facts.related.length} open backlog item${facts.related.length === 1 ? "" : "s"} ` +
+        `nobody holds name${facts.related.length === 1 ? "s" : ""} a file this turn edited: ${list(facts.related)}. ` +
+        "Read each one. Resolve it only if this work really finished it, with the evidence; otherwise leave it " +
+        "exactly as it is and say in one line why it is not covered. This is a suggestion, not a finding. " +
+        "(Once per turn; this will not repeat.)",
+    };
+  }
+  return null;
 }
 
 /**
@@ -179,11 +262,15 @@ export function decideTurnClose(lastText: string, facts: TurnCloseFacts): TurnCl
 export function makeTurnCloseStopHook(args: {
   turnId: string;
   facts: () => Omit<TurnCloseFacts, "alreadyFired">;
+  /** ADR-0137 — read lazily, and only when the turn claims scope met. */
+  backlog?: () => Promise<BacklogCloseFacts>;
   onFired: (decision: TurnCloseDecision) => void;
 }): HookCallback {
   let fired = false;
   let seededBlocks = 0;
   let goAheadBlocked = false;
+  let backlogBlocks = 0;
+  let backlogSuggested = false;
   return async (input) => {
     if (input.hook_event_name !== "Stop") return {} as HookJSONOutput;
     const evt = input as StopHookInput;
@@ -215,6 +302,42 @@ export function makeTurnCloseStopHook(args: {
         notePracticeRuleFired("builtin:plan-spine", "fired");
         args.onFired(seeded);
         return { decision: "block", reason: gate.message ?? seeded.reason } as HookJSONOutput;
+      }
+    }
+    // ADR-0137 — the backlog at a scope-met close. Machine turns included (a
+    // supervised tab closes on a wakeup), and before the SDK's loop guard for
+    // the same reason as the plan gate above. A failed read never blocks.
+    if (args.backlog && hasScopeMet(evt.last_assistant_message ?? "")) {
+      let bk: BacklogCloseFacts = { claimed: [], related: [] };
+      try {
+        bk = await args.backlog();
+      } catch {
+        /* the backlog must never break a close */
+      }
+      const d = decideBacklogClose(evt.last_assistant_message ?? "", bk);
+      const tel = (kind: string) => {
+        try {
+          console.info("[marvin.telemetry] " + JSON.stringify({ kind, turnId: args.turnId, claimed: bk.claimed.length, related: bk.related.length, at: new Date().toISOString() }));
+        } catch {
+          /* never break a turn on telemetry */
+        }
+      };
+      if (d && mode === "measure") {
+        tel("backlog.close.measured");
+      } else if (d?.kind === "backlog-claimed-open") {
+        if (backlogBlocks >= BUILTIN_GATE_MAX_DENIES) {
+          tel("backlog.close.bypass");
+        } else {
+          backlogBlocks += 1;
+          tel("backlog.close.block");
+          args.onFired(d);
+          return { decision: "block", reason: d.reason } as HookJSONOutput;
+        }
+      } else if (d?.kind === "backlog-related" && !backlogSuggested && !evt.stop_hook_active) {
+        backlogSuggested = true;
+        tel("backlog.close.suggest");
+        args.onFired(d);
+        return { decision: "block", reason: d.reason } as HookJSONOutput;
       }
     }
     if (evt.stop_hook_active) return {} as HookJSONOutput;
