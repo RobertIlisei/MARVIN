@@ -30,6 +30,24 @@ import SwiftUI
     }
 }
 
+/// Window ▸ Show MARVIN — opens the main window when none exists (UX review
+/// F-01). A SwiftUI `Window` that has been closed is not brought back by a
+/// reopen event (measured on a scratch build: `open` and the reopen
+/// AppleEvent both left it closed), only by `openWindow`, which exists only in
+/// a view. So this menu item is the way back, and it hands the same action to
+/// `MainWindowFocus` for the launch safety net and the notification click.
+@MainActor private struct ShowMainWindowButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Show MARVIN") {
+            MainWindowFocus.bringForward()
+        }
+        .onAppear {
+            MainWindowFocus.openWindowAction = { openWindow(id: "marvin-main") }
+        }
+    }
+}
+
 // Phase 3d retired the `OpenFilesPreviewButton` + the standalone
 // "Native Files (preview)" Window scene. The native file tree now
 // lives inline as the leftmost pane of the main window's HSplitView.
@@ -337,6 +355,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // leaves a backtrace but no reason in the .ips, which is why two fixes
         // were aimed at an inferred cause. See CrashDiagnostics.swift.
         ExceptionLog.installHooks()
+        // F-01 — the first thing after the hooks, so the log line carries the
+        // launch time before anything below can block the main thread.
+        LaunchWindowGuard.shared.noteLaunchBegan()
 
         // Every draggable split handle gets MarvinTheme.border, so an
         // NSSplitView divider and a hand-drawn hairline are the same
@@ -376,6 +397,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // controller so it doesn't deallocate.
         statusBar.install()
 
+        // N-01 — system notifications for tab events, and the click that jumps to the tab.
+        NotificationManager.shared.install()
+        TabNotificationController.shared.start()
+
+        // F-01 — window-state log and the "no window after 2 s" safety net.
+        // Armed after the blocking start-up work above, so its delays are the
+        // time the user has actually been waiting.
+        LaunchWindowGuard.shared.begin()
+
         appNapToken = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiatedAllowingIdleSystemSleep],
             reason: "MARVIN polls the local sidecar every 5s — App Nap throttling causes spurious offline flashes on foreground."
@@ -384,12 +414,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         // ADR-0078 — hang up every terminal shell so none outlives the app.
+        let quitBegan = Date()
         TerminalSessionStore.shared.terminateAll()
         // Tear down the bundled sidecar before the AppKit run-loop
         // exits. Without this, the `node server.js` child survives
         // Cmd-Q and keeps :3030 bound until the user logs out — a
         // surprising "ghost server" the next launch fights with.
+        let sidecarStopBegan = Date()
         SidecarManager.shared.stop()
+        LaunchWindowGuard.noteQuit(began: quitBegan, sidecarStop: Date().timeIntervalSince(sidecarStopBegan))
 
         if let token = appNapToken {
             ProcessInfo.processInfo.endActivity(token)
@@ -707,6 +740,7 @@ struct MARVINApp: App {
             // every other editor — files it.
             CommandGroup(after: .windowList) {
                 Divider()
+                ShowMainWindowButton()
                 registryItems(.help)
             }
 

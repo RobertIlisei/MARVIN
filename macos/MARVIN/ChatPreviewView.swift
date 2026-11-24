@@ -2556,6 +2556,7 @@ final class ChatPreviewModel {
                 } else {
                     ConfirmSheet(
                         request: request,
+                        askedBy: confirmAskedBy,
                         onAllow: {
                             model.respond(to: request, decision: .allow)
                         },
@@ -3723,6 +3724,15 @@ final class ChatPreviewModel {
         }
     }
 
+    /// N-02 — which tab (and branch) a confirm card belongs to.
+    private var confirmAskedBy: String? {
+        guard let sid = model.loadedSessionId, let e = SessionRegistry.shared.entry(sid) else { return nil }
+        return ConfirmSheetText.askedBy(
+            tabTitle: TabNotificationTitle.make(entryTitle: e.title, isDraft: e.isDraft, id: sid),
+            branch: e.tree?.branch ?? e.worktree?.branch
+        )
+    }
+
     /// The active strips, in priority order, as type-erased rows.
     private var trayRows: [AnyView] {
         var rows: [AnyView] = []
@@ -3731,6 +3741,7 @@ final class ChatPreviewModel {
         if let head = model.pendingConfirms.first, head.toolName != "AskUserQuestion" {
             rows.append(AnyView(ConfirmCard(
                 request: head,
+                askedBy: confirmAskedBy,
                 onAllow: { model.respond(to: head, decision: .allow) },
                 onDeny: { reason in model.respond(to: head, decision: .deny, denyMessage: reason) }
             )

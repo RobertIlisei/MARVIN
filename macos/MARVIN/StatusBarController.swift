@@ -171,14 +171,11 @@ final class StatusBarController {
             mainWindow.deminiaturize(nil)
             mainWindow.makeKeyAndOrderFront(nil)
         } else {
-            // No window exists at all — the user closed it. Ask the
-            // app to re-create one via the standard reopen entry
-            // point. SwiftUI's Window scene re-opens on this signal.
-            NSApp.sendAction(
-                #selector(NSApplication.unhide(_:)),
-                to: nil,
-                from: nil
-            )
+            // No window exists at all — the user closed it. `unhide` here
+            // never brought it back (UX review F-01: a closed SwiftUI
+            // `Window` scene is reopened only by `openWindow`), so go
+            // through the same path the launch safety net uses.
+            MainWindowFocus.requestReopen()
         }
     }
 

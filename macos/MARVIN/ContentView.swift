@@ -49,6 +49,8 @@ import SwiftUI
     @State private var supervisorWorkspaceMounted = false
     @State private var previewEverOpened = false
     @State private var shortcutsOpen = false
+    /// F-03 — when this window started waiting for the sidecar.
+    @State private var connectingSince = Date()
 
     /// Height of the brain pane above the chat, in points.
     ///
@@ -160,7 +162,6 @@ import SwiftUI
         // the WebView was removed — so it was permanently zero.)
         .onChange(of: SessionRegistry.shared.needsYouCount) { _, count in
             updateDockBadge(count: count)
-            NotificationManager.shared.updateConfirmCount(count)
         }
         .onChange(of: bridge.projectWorkDir ?? "") { _, newWorkDir in
             updateRepresentedURL(workDir: newWorkDir.isEmpty ? nil : newWorkDir)
@@ -692,51 +693,116 @@ import SwiftUI
     // MARK: - States
 
     private var connectingView: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-                .controlSize(.large)
-            Text("Connecting to MARVIN sidecar…")
-                .font(.body.monospaced())
-                .foregroundStyle(.secondary)
+        // F-03 — a screen that counts, so 2 seconds and 2 minutes do not look alike.
+        TimelineView(.periodic(from: connectingSince, by: 1)) { context in
+            let text = StartupScreenText.connecting(
+                elapsed: context.date.timeIntervalSince(connectingSince),
+                tabCount: savedTabCount
+            )
+            VStack(spacing: 16) {
+                ProgressView()
+                    .controlSize(.large)
+                Text(text.headline)
+                    .font(.body.monospaced())
+                    .foregroundStyle(.secondary)
+                if let detail = text.detail {
+                    Text(detail)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 420)
+                }
+                if text.offersLog {
+                    HStack(spacing: 8) {
+                        Button("Show Log") { revealSidecarLog() }
+                        Button("Retry") { Task { await health.refreshNow() } }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Tabs a relaunch restores, read from what the registry persisted. The
+    /// registry itself starts only once the sidecar answers.
+    private var savedTabCount: Int? {
+        let prefix = "marvin.chatTabs."
+        var saved: [String: [String]] = [:]
+        for (key, value) in UserDefaults.standard.dictionaryRepresentation() where key.hasPrefix(prefix) {
+            if let tabs = value as? [String] { saved[String(key.dropFirst(prefix.count))] = tabs }
+        }
+        return StartupScreenText.savedTabCount(saved: saved, activeProjectId: bridge.activeProjectId)
+    }
+
+    /// F-02 — the sidecar log in Finder, or its folder when nothing was written yet.
+    private func revealSidecarLog() {
+        guard let url = SidecarManager.shared.logPath else { return }
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.open(url.deletingLastPathComponent())
         }
     }
 
     @ViewBuilder
     private func offlineView(reason: String) -> some View {
+        let text = StartupScreenText.offline(
+            isBundled: SidecarManager.shared.isBundled,
+            logPath: "~/Library/Logs/MARVIN/sidecar.log"
+        )
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 Circle()
                     .fill(Color.orange)
                     .frame(width: 10, height: 10)
-                Text("Sidecar not reachable")
+                Text(text.headline)
                     .font(.title3.weight(.semibold))
             }
-            Text(reason)
+            Text(text.explanation)
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Text(reason)
+                .font(.callout)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
             MarvinDivider()
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Start the sidecar")
-                    .font(.callout.weight(.semibold))
-                CodeBlock(text: "bin/marvin start")
-                Text("Run from the MARVIN repo root. The Node server bound to port 3030 is what this app talks to.")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+            if !text.steps.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(text.steps, id: \.self) { step in
+                        Text(step)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            if text.showsDeveloperCommand {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Start the sidecar")
+                        .font(.callout.weight(.semibold))
+                    CodeBlock(text: text.developerCommand)
+                    Text("Run from the MARVIN repo root. The Node server bound to port \(ServerConfig.port) is what this app talks to.")
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             HStack(spacing: 8) {
-                Button("Open Terminal") {
-                    openTerminal()
-                }
-                if marvinBinaryPath != nil {
-                    Button("Start Sidecar") {
-                        startSidecar()
+                Button("Show Log") { revealSidecarLog() }
+                if text.showsDeveloperCommand {
+                    Button("Open Terminal") {
+                        openTerminal()
                     }
-                    .help("Spawns bin/marvin start in the background via a login shell")
+                    if marvinBinaryPath != nil {
+                        Button("Start Sidecar") {
+                            startSidecar()
+                        }
+                        .help("Spawns bin/marvin start in the background via a login shell")
+                    }
                 }
                 Spacer()
-                Button("Reconnect") {
+                Button("Retry") {
                     Task { await health.refreshNow() }
                 }
                 .keyboardShortcut("r", modifiers: [.command])
