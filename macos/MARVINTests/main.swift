@@ -6216,6 +6216,38 @@ runner.suite("session-tab-strip") {
     }
 }
 
+runner.suite("session-attention-order") {
+    let t = Date(timeIntervalSince1970: 3_000_000)
+    func c(_ id: String, _ s: SessionRowState, wait: Double? = nil, ended: Double? = nil) -> AttentionCandidate {
+        AttentionCandidate(id: id, state: s, waitingSince: wait.map { t.addingTimeInterval($0) }, endedAt: ended.map { t.addingTimeInterval($0) })
+    }
+    runner.test("a question first, then failed or cut off, then a result nobody has seen, then the longest wait") {
+        let tabs = [c("wait-new", .waiting, wait: -60), c("fin", .finished, ended: -10), c("idle", .idle), c("fail", .failed),
+                    c("ask", .needsYou(1)), c("wait-old", .waiting, wait: -3_000), c("cut", .interrupted), c("work", .working), c("done", .done)]
+        runner.expect(SessionAttentionOrder.ordered(tabs), equals: ["ask", "fail", "cut", "fin", "wait-old", "wait-new"], "priority order; idle, working and done are not on it")
+    }
+    runner.test("inside a tier the strip order holds, except finished (oldest first) and waiting (longest first)") {
+        let tabs = [c("q2", .needsYou(1)), c("q1", .needsYou(3)), c("f-new", .finished, ended: -5), c("f-old", .finished, ended: -500), c("f-none", .finished),
+                    c("w-none", .waiting), c("w-old", .waiting, wait: -900), c("w-new", .waiting, wait: -30)]
+        runner.expect(SessionAttentionOrder.ordered(tabs), equals: ["q2", "q1", "f-old", "f-new", "f-none", "w-old", "w-new", "w-none"], "tiers")
+    }
+    runner.test("one press goes to the next on the list, wraps, and starts at the top from a tab that is not on it") {
+        let tabs = [c("a", .needsYou(1)), c("b", .failed), c("c", .waiting, wait: -100), c("z", .idle)]
+        runner.expect(SessionAttentionOrder.next(after: "a", in: tabs), equals: "b", "next")
+        runner.expect(SessionAttentionOrder.next(after: "b", in: tabs), equals: "c", "next again")
+        runner.expect(SessionAttentionOrder.next(after: "c", in: tabs), equals: "a", "wraps")
+        runner.expect(SessionAttentionOrder.next(after: "z", in: tabs), equals: "a", "from an idle tab: the most urgent")
+        runner.expect(SessionAttentionOrder.next(after: nil, in: tabs), equals: "a", "nothing selected")
+        runner.expect(SessionAttentionOrder.next(after: "gone", in: tabs), equals: "a", "an id that is not a tab")
+    }
+    runner.test("nothing to visit: no list, and the only tab on it being the current one, answer nil") {
+        runner.expect(SessionAttentionOrder.next(after: "a", in: []), equals: nil, "no tabs")
+        runner.expect(SessionAttentionOrder.next(after: nil, in: [c("a", .idle), c("b", .working), c("d", .done)]), equals: nil, "nobody needs anything")
+        runner.expect(SessionAttentionOrder.next(after: "a", in: [c("a", .needsYou(1)), c("b", .idle)]), equals: nil, "already there")
+        runner.expect(SessionAttentionOrder.next(after: "b", in: [c("a", .needsYou(1)), c("b", .idle)]), equals: "a", "from elsewhere")
+    }
+}
+
 runner.suite("session-fleet") {
     let now = Date(timeIntervalSince1970: 2_000_000)
     func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }

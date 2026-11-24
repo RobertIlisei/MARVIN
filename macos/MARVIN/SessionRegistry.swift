@@ -131,6 +131,18 @@ final class SessionRegistry {
     /// Working / waiting / needs-you / total over `fleetSessionIds`.
     var fleet: FleetCounts { SessionFleet.counts(fleetSessionIds.map { rowState($0) }) }
 
+    // MARK: - The next tab that needs the person (M-02)
+
+    /// The open tab one press of "Next Tab That Needs Me" lands on, nil when
+    /// there is none to go to (which also disables the command).
+    var nextTabNeedingMe: String? {
+        let tabs = openTabs.map { id -> AttentionCandidate in
+            let e = ledger[id]
+            return AttentionCandidate(id: id, state: rowState(id), waitingSince: e?.waitSince, endedAt: e?.lastTurnAt)
+        }
+        return SessionAttentionOrder.next(after: MarvinBridge.shared.activeMarvinSessionId, in: tabs)
+    }
+
     // MARK: - Tabs
 
     func isDraft(_ id: String) -> Bool { draftIds.contains(id) }
