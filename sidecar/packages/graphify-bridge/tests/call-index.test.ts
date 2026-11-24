@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { nodeLabelResolver } from "../src/read-graph";
 import {
   AMBIGUITY_THRESHOLD,
   buildCallIndex,
@@ -383,5 +384,68 @@ describe("buildCallIndex — from graph.json calls edges", () => {
     await new Promise((r) => setTimeout(r, 15));
     await graph(nodes, [edge("c1", "t", "src/a.ts", "L1"), edge("c2", "t", "src/a.ts", "L2")]);
     expect(buildCallIndex(workDir).byCallee.get("t")).toHaveLength(2);
+  });
+});
+
+// graphify 0.9.118 changed three things this index reads: the extraction cache
+// writes caller ids as `$graphify-root$_<slug>` (0.9.80, ids no longer leak the
+// checkout path) while graph.json keeps `<slug>`; each overloaded Java method
+// gets its own node whose id ends in a six-hex salt (0.9.112); and graph.json
+// is one line of compact JSON with a `graph: {schema_version, graphify_version}`
+// block (0.9.78 / 0.9.86). Fixtures are cut from a real 0.9.118 build.
+describe("graphify 0.9.118 formats", () => {
+  const graphPath = () => join(workDir, "graphify-out", "graph.json");
+  async function versionedEntry(version: string, name: string, rawCalls: Array<Record<string, unknown>>): Promise<void> {
+    const dir = join(cacheDir, "ast", version);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, name), JSON.stringify({ nodes: [], edges: [], raw_calls: rawCalls }), "utf-8");
+  }
+
+  it("strips the checkout placeholder from cache caller ids so they resolve to graph nodes", async () => {
+    const f = await realFile("Svc.java");
+    await versionedEntry("v0.9.118-s53-g40cd0be4396b", "a.json", [
+      call("$graphify-root$_src_svc_svc_run", "target", f, "L7"),
+    ]);
+    await writeFile(
+      graphPath(),
+      JSON.stringify({
+        nodes: [{ id: "src_svc_svc_run", label: ".run()", source_file: "src/Svc.java" }],
+        links: [{ source: "src_svc_svc_run", target: "src_svc_svc_run", relation: "calls" }],
+      }),
+      "utf-8",
+    );
+    const site = buildCallIndex(workDir).byCallee.get("target")?.[0];
+    expect(site?.callerNid).toBe("src_svc_svc_run");
+    expect(nodeLabelResolver(graphPath())(site?.callerNid ?? "")).toBe(".run()");
+  });
+
+  it("indexes calls from a compact one-line graph whose overloads carry salted ids", async () => {
+    await realFile("Svc.java");
+    await realFile("client.ts");
+    const nodes = [
+      { id: "src_svc_svc_fact_fde3bc", label: ".fact()", source_file: "src/Svc.java", metadata: { arity: 5, signature: "String,String" } },
+      { id: "src_svc_svc_fact_a1b2c3", label: ".fact()", source_file: "src/Svc.java", metadata: { arity: 1, signature: "String" } },
+      { id: "src_client_getapiaccesstoken", label: "getApiAccessToken()", source_file: "src/client.ts" },
+    ];
+    const links = [
+      { source: "src_svc_svc_fact_fde3bc", target: "src_client_getapiaccesstoken", relation: "calls", source_file: "src/Svc.java", source_location: "L12" },
+      { source: "src_svc_svc_fact_a1b2c3", target: "src_client_getapiaccesstoken", relation: "calls", source_file: "src/Svc.java", source_location: "L30" },
+    ];
+    const compact = JSON.stringify({
+      directed: false,
+      multigraph: false,
+      graph: { schema_version: 1, graphify_version: "0.9.118" },
+      nodes,
+      links,
+      hyperedges: [],
+    });
+    expect(compact).not.toContain("\n");
+    await writeFile(graphPath(), compact, "utf-8");
+
+    const sites = buildCallIndex(workDir).byCallee.get("getApiAccessToken") ?? [];
+    expect(sites.map((s) => s.callerNid).sort()).toEqual(["src_svc_svc_fact_a1b2c3", "src_svc_svc_fact_fde3bc"]);
+    const resolve = nodeLabelResolver(graphPath());
+    expect(resolve("src_svc_svc_fact_fde3bc")).toBe(".fact()");
+    expect(callersOf(buildCallIndex(workDir), "getApiAccessToken", 1, resolve).callers).toHaveLength(2);
   });
 });
