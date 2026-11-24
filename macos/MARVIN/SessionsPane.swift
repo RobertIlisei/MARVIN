@@ -27,6 +27,13 @@ import SwiftUI
     @FocusState private var listFocused: Bool
     /// The kept branch a context-menu "Discard branch…" is asking about (audit L12).
     @State private var discardCandidate: String? = nil
+    /// The pane's width, from `onGeometryChange` (never a measuring view, ADR-0062).
+    @State private var paneWidth: CGFloat = 420
+    /// Below this a row's state sentence moves to line 2 so the name keeps line 1:
+    /// at the 260 pt default the sentence, the delegation ring and the name
+    /// together left the name about six characters.
+    private static let compactBelow: CGFloat = 340
+    private var compact: Bool { paneWidth < Self.compactBelow }
 
     var body: some View {
         content
@@ -99,6 +106,7 @@ import SwiftUI
             .padding(.horizontal, 12)
             .padding(.vertical, 12)
         }
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { paneWidth = $0 })
         .focusable()
         .focused($listFocused)
         // The pane keeps keyboard focus for ↑ ↓ ⏎; it must not draw a ring
@@ -397,7 +405,7 @@ import SwiftUI
                         expandedIdle = true
                     } label: {
                         Text("\(partition.collapsed.count) more idle session\(partition.collapsed.count == 1 ? "" : "s")")
-                            .font(.system(size: 10.5))
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -407,7 +415,7 @@ import SwiftUI
                         expandedIdle = false
                     } label: {
                         Text("Collapse idle")
-                            .font(.system(size: 10.5))
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -433,7 +441,7 @@ import SwiftUI
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                             Text(e.tree?.mode == .worktree ? "kept: \(e.tree?.branch ?? "worktree")" : "closed")
-                                .font(.system(size: 9.5))
+                                .font(.system(size: 11))
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                         }
@@ -463,7 +471,7 @@ import SwiftUI
                     Spacer()
                     if let target = registry.integrationTarget {
                         Text("→ \(target)")
-                            .font(.system(size: 9.5, design: .monospaced))
+                            .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -501,7 +509,7 @@ import SwiftUI
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(integrateSubtitle(e, preview: preview))
-                    .font(.system(size: 9.5))
+                    .font(.system(size: 11))
                     .foregroundStyle(preview?.isConflict == true ? Color.orange : MarvinTheme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -597,7 +605,7 @@ import SwiftUI
             // colour carries a glyph (DESIGN.md Outcome Color Rule).
             if conflicts > 0 {
                 Label("\(conflicts) would conflict — Sync first", systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 9.5))
+                    .font(.system(size: 11))
                     .foregroundStyle(.orange)
                     .padding(.horizontal, 14)
                     .fixedSize(horizontal: false, vertical: true)
@@ -623,39 +631,65 @@ import SwiftUI
         let e = row.entry
         let selected = row.id == bridge.activeMarvinSessionId
         let focused = row.id == focusedId
+        let name = title(e)
+        let long = isLongWait(e)
+        let sentence = SessionRowText.stateSentence(row.state, e, now: registry.now)
+        let isTab = registry.isOpenTab(row.id)
+        // ADR-0112 — answer a waiting tab here, without switching to it.
+        // A question (AskUserQuestion) is a form and still opens the tab.
+        // ADR-0127 M6 — an escalation card replaces the inline confirm it
+        // concerns, so the pending item is never shown twice.
+        let covered = Set(supervisorLayout.items(for: row.id).compactMap { $0.linkedConfirm?.toolUseId })
+        let head = e.pendingConfirms.values.sorted(by: { ($0.since ?? "") < ($1.since ?? "") }).first
+        var inline: PendingConfirmInfo?
+        if case .needsYou = row.state, let c = head, !covered.contains(c.toolUseId), c.toolName != "AskUserQuestion" { inline = c }
+        // The inline card says what is asked, so line 2 does not say it twice.
+        let fact = inline == nil ? SessionRowText.keyFact(row.state, e, now: registry.now) : nil
         return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                stateGlyph(row.state, longWait: isLongWait(e))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title(e))
-                        .font(.system(size: 11, weight: selected ? .semibold : .regular))
-                        .foregroundStyle(MarvinTheme.textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if row.state == .waiting, let w = e.waitingOn { waitLine(w) }
-                    Text(subtitle(e, state: row.state))
-                        .font(.system(size: 9.5))
-                        .foregroundStyle(MarvinTheme.textMuted)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+            // R2-11 / W-03 / W-10 — two lines. Line 1: the name, then the state
+            // sentence, which is never cut before the name is. Line 2: the one
+            // fact that matters for that state, and the row's action. Graph,
+            // reads, skills, cost and the rest are on the hover card. In a
+            // narrow pane (the 260 pt default) the state sentence moves to the
+            // front of line 2 so the name keeps the whole of line 1.
+            HStack(alignment: .top, spacing: 6) {
+                stateGlyph(row.state, longWait: long).frame(height: 16)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(name)
+                            .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                            .foregroundStyle(MarvinTheme.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 0)
+                        if !compact { stateText(sentence, state: row.state, long: long) }
+                        delegationChip(row, e, name: name)
+                    }
+                    .frame(minHeight: 16)
+                    HStack(spacing: 6) {
+                        if compact { stateText(sentence, state: row.state, long: long) }
+                        if let fact {
+                            Text(fact)
+                                .font(.system(size: 11))
+                                .foregroundStyle(factTint(row.state, long: long))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        Spacer(minLength: 0)
+                        if !isTab && !compact {
+                            // Short on the row; the hover card says it in full.
+                            Text("no tab")
+                                .font(.system(size: 11))
+                                .foregroundStyle(MarvinTheme.textMuted)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .accessibilityLabel("not open as a tab")
+                        }
+                        action(for: row, isTab: isTab)
+                    }
                 }
-                Spacer(minLength: 4)
-                if supervisor.isEnabled, let sup = e.supervisor {
-                    SupervisorDelegationChip(model: supervisor, sessionId: row.id, tabTitle: title(e),
-                                             level: sup.delegation, sharedCheckout: sup.sharedCheckout ?? (e.mode == .shared),
-                                             lastActAt: sup.lastActAt)
-                }
-                action(for: row)
             }
-            // ADR-0112 — answer a waiting tab here, without switching to it.
-            // A question (AskUserQuestion) is a form and still opens the tab.
-            // ADR-0127 M6 — an escalation card replaces the inline confirm it
-            // concerns, so the pending item is never shown twice.
-            let covered = Set(supervisorLayout.items(for: row.id).compactMap { $0.linkedConfirm?.toolUseId })
-            let head = e.pendingConfirms.values.sorted(by: { ($0.since ?? "") < ($1.since ?? "") }).first
-            if case .needsYou = row.state, let c = head, !covered.contains(c.toolUseId), c.toolName != "AskUserQuestion" {
-                inlineConfirm(c, sessionId: row.id)
-            }
+            if let c = inline { inlineConfirm(c, sessionId: row.id) }
             if supervisor.isEnabled, let c = head, !covered.contains(c.toolUseId), let p = c.supervisorProposal {
                 SupervisorProposalLine(model: supervisor, proposal: p, revealedOnServer: c.proposalRevealed ?? false)
             }
@@ -679,9 +713,9 @@ import SwiftUI
                         .stroke(focused && listFocused ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1)
                 )
         )
-        .help(help(e))
+        .help(hoverCard(e, state: row.state, name: name, isOpenTab: isTab))
         .contextMenu {
-            Button("Switch to") { supervisor.showTab(row.id) }
+            Button(isTab ? "Switch to" : "Open as a tab") { supervisor.showTab(row.id) }
             if e.isLive {
                 Button("Stop") { Task { await registry.stop(row.id) } }
             }
@@ -698,6 +732,26 @@ import SwiftUI
                     }
                 }
             }
+        }
+    }
+
+    /// The state sentence: never cut, never the first thing to give way.
+    private func stateText(_ sentence: String, state: SessionRowState, long: Bool) -> some View {
+        Text(sentence)
+            .font(.system(size: 11, weight: state == .waiting && !long ? .regular : .medium))
+            .foregroundStyle(stateTint(state, long: long))
+            .lineLimit(1)
+            .fixedSize()
+            .layoutPriority(1)
+    }
+
+    /// The supervisor-delegation menu, with its words on hover (R2-11).
+    @ViewBuilder
+    private func delegationChip(_ row: Row, _ e: SessionEntry, name: String) -> some View {
+        if supervisor.isEnabled, let sup = e.supervisor {
+            SupervisorDelegationChip(model: supervisor, sessionId: row.id, tabTitle: name,
+                                     level: sup.delegation, sharedCheckout: sup.sharedCheckout ?? (e.mode == .shared),
+                                     lastActAt: sup.lastActAt)
         }
     }
 
@@ -734,7 +788,7 @@ import SwiftUI
     private func attentionLine(_ a: SessionWatchRowWire.Attention, sessionId: String) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Text(a.excerpt)
-                .font(.system(size: 10))
+                .font(.system(size: 11))
                 .foregroundStyle(MarvinTheme.textMuted)
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -752,7 +806,7 @@ import SwiftUI
     private func inlineConfirm(_ c: PendingConfirmInfo, sessionId: String) -> some View {
         let excerpt = c.excerpt ?? "wants to run"
         let toolBadge = Text(ToolLabel.plain(c.toolName))
-            .font(.system(size: 9.5))
+            .font(.system(size: 11))
             .help(c.toolName)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
@@ -776,7 +830,7 @@ import SwiftUI
                 HStack(spacing: 6) {
                     toolBadge
                     Text(excerpt)
-                        .font(.system(size: 9.5, design: .monospaced))
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .fixedSize()
                     Spacer(minLength: 4)
@@ -786,7 +840,7 @@ import SwiftUI
                 VStack(alignment: .leading, spacing: 3) {
                     toolBadge
                     Text(excerpt)
-                        .font(.system(size: 9.5, design: .monospaced))
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .lineLimit(4)
                         .truncationMode(.tail)
@@ -801,15 +855,18 @@ import SwiftUI
                 }
             }
             if let r = c.reason, !r.isEmpty {
-                Text(r).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(2)
+                Text(r).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(2)
             }
         }
         .padding(.leading, 16)
         .padding(.trailing, 2)
     }
 
+    /// The row's one action. A session that is not open as a tab and has no
+    /// action of its own gets "Open": selecting it opens it as a tab, the same
+    /// path every other "go to this session" takes (R2-01).
     @ViewBuilder
-    private func action(for row: Row) -> some View {
+    private func action(for row: Row, isTab: Bool) -> some View {
         switch row.state {
         case .needsYou:
             smallAction("Answer", role: .primary) { supervisor.showTab(row.id) }
@@ -823,7 +880,10 @@ import SwiftUI
             smallAction("Reviewed", role: .neutral) { registry.markReviewed(row.id) }
                 .help("Mark this as looked at. Opening the tab does the same.")
         case .waiting, .done, .idle, .draft:
-            EmptyView()
+            if !isTab {
+                smallAction(compact ? "Open" : "Open tab", role: .neutral) { supervisor.showTab(row.id) }
+                    .help("This session is not open as a tab. Open it to read the conversation.")
+            }
         }
     }
 
@@ -845,130 +905,39 @@ import SwiftUI
 
     // MARK: - Text
 
+    /// The one name for the session, the same on every surface (R2-02): what the
+    /// tab strip prints, from `SessionRegistry.displayName`. The supervisor
+    /// inbox keeps a title for a tab this pane never loaded.
     private func title(_ e: SessionEntry) -> String {
-        if e.isDraft { return "New chat" }
-        if let t = e.title?.replacingOccurrences(of: "\n", with: " "), !t.trimmingCharacters(in: .whitespaces).isEmpty {
-            return t.count > 40 ? String(t.prefix(38)) + "…" : t
-        }
-        // The inbox snapshots a tab's title, so a tab this pane never loaded keeps its name.
-        if let t = supervisor.inbox.first(where: { $0.sessionId == e.id })?.tabTitle, !t.isEmpty { return t }
-        return String(e.id.prefix(8))
+        registry.displayName(e.id, fallbackTitle: supervisor.inbox.first(where: { $0.sessionId == e.id })?.tabTitle)
     }
 
-    private func subtitle(_ e: SessionEntry, state: SessionRowState) -> String {
-        var parts: [String] = []
-        if let tree = e.tree, tree.mode == .worktree {
-            parts.append("isolated: \(tree.branch ?? "worktree")")
-            if let w = e.worktree, let into = w.mergedInto {
-                parts.append("merged into \(into) — close to reclaim")
-            } else if let w = e.worktree, w.commits > 0 {
-                parts.append("\(w.commits) commit\(w.commits == 1 ? "" : "s")")
-                if let b = w.behind, b > 0 { parts.append("behind by \(b)") }
-            }
-        } else if e.isDraft {
-            parts.append("draft")
-        } else {
-            parts.append("shared")
+    /// Colour for the state sentence: a person wanted and a long wait are warm,
+    /// a result nobody has looked at is the accent, a failure is red.
+    private func stateTint(_ state: SessionRowState, long: Bool) -> Color {
+        switch state {
+        case .needsYou, .interrupted: return .orange
+        case .failed: return GitDecorationColor.deleted
+        case .waiting: return long ? .orange : MarvinTheme.textPrimary.opacity(0.8)
+        case .finished: return Color.accentColor
+        case .working: return MarvinTheme.textPrimary.opacity(0.8)
+        case .done, .idle, .draft: return MarvinTheme.textMuted
         }
-        if let held = registry.claimsBySession[e.id]?.first {
-            parts.append("on: " + (held.count > 34 ? String(held.prefix(32)) + "…" : held))
-        }
-        if let d = e.diff, d.files > 0 { parts.append("+\(d.added) −\(d.removed)") }
-        if let p = e.plan, p.total > 0 { parts.append(planLabel(p, e)) }
-        if let u = e.graphUsage { parts.append(graphUsageLabel(u)) }
-        if let s = e.skills, !s.required.isEmpty { parts.append("skills \(s.used.count)/\(s.required.count)") }
-        if let c = e.costUsd, c > 0 { parts.append(String(format: "$%.2f", c)) }
-        if supervisor.isEnabled, let sup = e.supervisor, sup.delegation != .off {
-            if sup.stoppedByUser == true { parts.append("stopped — supervisor waits for you") }
-            else if let w = sup.waitingOnOwn { parts.append("supervisor waits — tab waiting on its \(w == "job" ? "build" : "wakeup")") }
-        }
-        if case .needsYou = state, let first = e.pendingConfirms.values.first {
-            parts.append("waiting: \(ToolLabel.plain(first.toolName))")
-        } else if let a = e.attention {
-            parts.append(a.kind == "chain-cap" ? "stopped at the chain cap" : "asked you a question")
-        } else if state == .waiting {
-            // The wait itself is the row's own line (`waitLine`); the facts line only follows on.
-            if let at = e.lastTurnAt { parts.append("last turn " + elapsed(at) + " ago") }
-        } else if state == .interrupted {
-            parts.append(e.lastTurnAt.map { "cut off by a restart · \(elapsed($0)) ago" } ?? "cut off by a restart")
-        } else if state == .done || state == .finished {
-            parts.append(e.lastTurnAt.map { "Done · \(elapsed($0)) ago" } ?? "Done")
-        } else if e.isLive, let since = e.liveSince {
-            parts.append("\(e.activityLabel ?? "running") \(elapsed(since))")
-        } else if e.isLive, let label = e.activityLabel {
-            parts.append(label)
-        } else if let at = e.lastTurnAt {
-            parts.append(elapsed(at) + " ago")
-        }
-        return parts.joined(separator: " · ")
     }
 
-    /// ADR-0124 — "3/8 steps · updated 12m ago", with a ⚠︎ when the list has
-    /// stopped moving while the tab kept working.
-    private func planLabel(_ p: SessionPlanProgress, _ e: SessionEntry) -> String {
-        var label = "\(p.done)/\(p.total) steps"
-        if let at = p.lastTodoAt, let d = SessionLedger.parseISO(at) {
-            label += " · updated \(elapsed(d)) ago"
-            let activity = e.isLive ? registry.now : e.lastTurnAt
-            if p.isStale(now: registry.now, lastActivity: activity) { label = "⚠︎ " + label }
-        }
-        return label
+    private func factTint(_ state: SessionRowState, long: Bool) -> Color {
+        state == .waiting ? (long ? .orange : MarvinTheme.textPrimary.opacity(0.8)) : MarvinTheme.textMuted
     }
 
-    /// ADR-0124 — "graph 12 · reads 30 (2.5×)". Reads are Read/Grep and shell
-    /// reads together; the ratio is reads per graph call.
-    private func graphUsageLabel(_ u: SessionGraphUsage) -> String {
-        let reads = u.fileReads + u.bashReads
-        guard let r = u.ratio else { return "graph 0 · reads \(reads)" }
-        return "graph \(u.graphCalls) · reads \(reads) (\(String(format: "%.1f", r))×)"
-    }
-
-    private func help(_ e: SessionEntry) -> String {
-        var lines = [e.id]
-        if let path = e.tree?.path { lines.append(path) }
-        if let u = e.graphUsage {
-            lines.append("graph calls \(u.graphCalls) · Read/Grep \(u.fileReads) · shell reads \(u.bashReads)")
-        }
-        if let p = e.plan, p.seeded == true { lines.append("plan seeded by MARVIN from the brief") }
-        if let s = e.skills, !s.missing.isEmpty { lines.append("skills the brief named that have not run: " + s.missing.joined(separator: ", ")) }
-        if let s = e.skills, let f = s.first, !f.isEmpty { lines.append("start skills (before the first change): " + f.joined(separator: ", ")) }
-        return lines.joined(separator: "\n")
+    /// W-10 — what used to be printed on every row: branch, commits, plan,
+    /// graph and reads, skills, cost, what the tab holds. A measurement of the
+    /// work is not a status, so it waits for a hover.
+    private func hoverCard(_ e: SessionEntry, state: SessionRowState, name: String, isOpenTab: Bool) -> String {
+        SessionRowText.details(state, e, now: registry.now, name: name,
+                               claim: registry.claimsBySession[e.id]?.first, supervisorEnabled: supervisor.isEnabled,
+                               isOpenTab: isOpenTab)
+            .joined(separator: "\n")
     }
 
     private func isLongWait(_ e: SessionEntry) -> Bool { e.isLongWait(now: registry.now) }
-
-    /// W-01 — what the tab waits on and for how long, straight under its title.
-    /// The label (the feed's words) is cut at the END if it must be; the
-    /// duration is its own fixed-size text and never is. Amber past
-    /// `SessionWait.longAfter`.
-    private func waitLine(_ w: SessionWatchRowWire.WaitingOn) -> some View {
-        let since = w.since.flatMap(SessionLedger.parseISO)
-        let long = SessionWait.isLong(since: since, now: registry.now)
-        let label = SessionWait.label(kind: w.kind, label: w.label)
-        let duration = since.map { SessionWait.duration(since: $0, now: registry.now) }
-        let tint: Color = long ? .orange : MarvinTheme.textPrimary.opacity(0.8)
-        return HStack(spacing: 4) {
-            Text(label)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            if let duration {
-                Text("\u{B7} \(duration)")
-                    .lineLimit(1)
-                    .fixedSize()
-                    .layoutPriority(1)
-            }
-        }
-        .font(.system(size: 10.5))
-        .foregroundStyle(tint)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(duration.map { "\(label), waiting \($0)" } ?? label)
-    }
-
-    private func elapsed(_ date: Date) -> String {
-        let s = Int(max(0, registry.now.timeIntervalSince(date)))
-        if s < 60 { return "\(s)s" }
-        if s < 3600 { return "\(s / 60)m" }
-        if s < 86_400 { return "\(s / 3600)h" }
-        return "\(s / 86_400)d"
-    }
 }

@@ -765,7 +765,7 @@ runner.suite("tab-notifications (N-01)") {
     }
     runner.test("a tab's name falls back the way the Sessions pane does") {
         runner.expect(TabNotificationTitle.make(entryTitle: "fix\nlogin", isDraft: false, id: "abcdef123456"), equals: "fix login", "newline folded")
-        runner.expect(TabNotificationTitle.make(entryTitle: String(repeating: "x", count: 60), isDraft: false, id: "i").count, equals: 39, "long titles are cut with an ellipsis")
+        runner.expect(TabNotificationTitle.make(entryTitle: String(repeating: "x", count: 60), isDraft: false, id: "i").count, equals: SessionDisplayName.maxLength, "long titles are cut with an ellipsis, at the tab strip's length (R2-02)")
         runner.expect(TabNotificationTitle.make(entryTitle: "  ", isDraft: false, id: "abcdef123456"), equals: "abcdef12", "id prefix")
         runner.expect(TabNotificationTitle.make(entryTitle: nil, isDraft: true, id: "abcdef123456"), equals: "New chat", "draft")
     }
@@ -6981,6 +6981,287 @@ runner.suite("session-fleet") {
         runner.expect(SessionRowStateDeriver.derive(l["w"]!), equals: SessionRowState.idle, "the feed alone leaves it idle (the bug)")
         l.apply(snapshot: rows, now: Date())
         runner.expect(SessionRowStateDeriver.derive(l["w"]!), equals: SessionRowState.waiting, "the re-read restores it")
+    }
+}
+
+// ─── UX review round 2, group A+B: the fleet, one name, rows a person can scan ───
+
+runner.suite("fleet-members-r2-01") {
+    // The rows the sidecar returned on 2026-11-24 at 20:46 UTC, reduced to what the fleet reads:
+    // 11 persisted open tabs, and sessions the feed reports that are NOT tabs.
+    let feed = """
+    {"rows":[
+     {"marvinSessionId":"java","state":"working","turn":{"turnId":"t1","kind":"machine","startedAt":"2026-11-24T20:45:20.866Z"}},
+     {"marvinSessionId":"select","state":"waiting","waitingOn":{"kind":"job","label":"gated commit","since":"2026-11-24T20:30:00.000Z"}},
+     {"marvinSessionId":"stripe","state":"waiting","waitingOn":{"kind":"job","label":"gated commit","since":"2026-11-24T20:31:00.000Z"}},
+     {"marvinSessionId":"r1","state":"waiting","waitingOn":{"kind":"job","label":"gated commit 3","since":"2026-11-24T20:37:19.000Z"}},
+     {"marvinSessionId":"lane","state":"waiting","waitingOn":{"kind":"job","label":"gated commit","since":"2026-11-24T20:37:07.000Z"}},
+     {"marvinSessionId":"b53a","state":"waiting","waitingOn":{"kind":"job","label":"gated commit rerun","since":"2026-11-24T20:36:00.000Z"}},
+     {"marvinSessionId":"b80","state":"done","lastTurn":{"turnId":"x","endedAt":"2026-11-24T10:00:00.000Z","outcome":"completed","marker":"scope-met"}},
+     {"marvinSessionId":"idle1","state":"idle"},
+     {"marvinSessionId":"gone","state":"waiting","worktree":{"slug":"g","branch":"marvin/tab/g","state":"merged","commits":1,"dirty":false,"closed":true},"waitingOn":{"kind":"job","label":"x","since":"2026-11-24T20:00:00.000Z"}}
+    ]}
+    """
+    let now = SessionLedger.parseISO("2026-11-24T20:46:44.000Z")!
+    var ledger = SessionLedger()
+    ledger.apply(snapshot: SessionWatchRowWire.decodeSnapshot(Data(feed.utf8))!, now: now)
+    let openTabs = ["r1", "lane", "b53a", "idle1"]
+    func state(_ e: SessionEntry) -> SessionRowState { SessionRowStateDeriver.derive(e) }
+
+    runner.test("the old rule (open tabs plus a running turn) lost two of the five waiting sessions") {
+        var old = openTabs
+        for (id, e) in ledger.entries where e.isLive && !old.contains(id) { old.append(id) }
+        let waiting = old.filter { state(ledger[$0]!) == .waiting }.count
+        runner.expect(waiting, equals: 3, "the pane showed 3 waiting while the feed said 5 (the measured failure)")
+    }
+    runner.test("every session that waits, works, needs the person or finished is in the fleet, tab or not") {
+        let ids = SessionFleet.memberIds(openTabs: openTabs, entries: Array(ledger.entries.values), state: state)
+        runner.expect(Array(ids.prefix(4)), equals: openTabs, "open tabs keep their strip order, first")
+        runner.expect(Set(ids), equals: ["r1", "lane", "b53a", "idle1", "java", "select", "stripe"], "the working one and both waiting ones with no tab join; a done one and a closed one do not")
+        runner.expect(ids.filter { !openTabs.contains($0) }, equals: ["java", "select", "stripe"], "sessions with no tab follow in a stable order")
+        let c = SessionFleet.counts(ids.map { state(ledger[$0]!) })
+        runner.expect(c.waiting, equals: 5, "all five waiting sessions are counted")
+        runner.expect(c.working, equals: 1, "and the working one")
+    }
+    runner.test("a session with no tab stays after its turn ends: that is the moment it used to vanish") {
+        var l = ledger
+        l.apply(.ended(sessionId: "java", turnId: "t1", outcome: .completed, costUsd: nil), now: now)
+        l.apply(snapshot: SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"java","state":"waiting","waitingOn":{"kind":"job","label":"gated commit","since":"2026-11-24T20:46:00.000Z"}}]}"#.utf8))!, now: now)
+        let ids = SessionFleet.memberIds(openTabs: openTabs, entries: Array(l.entries.values), state: state)
+        runner.expect(ids.contains("java"), "working to waiting does not drop it")
+    }
+    runner.test("failed, cut off and finished-unreviewed sessions with no tab are kept; idle, done, draft and closed are not") {
+        for (s, keep) in [(SessionRowState.failed, true), (.interrupted, true), (.finished, true), (.needsYou(1), true),
+                          (.idle, false), (.done, false), (.draft, false)] {
+            runner.expect(s.staysInFleetWithoutTab, equals: keep, "\(s)")
+        }
+        var closed = SessionEntry(id: "c")
+        closed.closedAt = now
+        closed.waitingOn = .init(kind: "job")
+        runner.expect(SessionFleet.memberIds(openTabs: [], entries: [closed], state: state), equals: [], "a tab the person closed is history, whatever it waits on")
+    }
+    runner.test("a session the sidecar no longer lists (closed from another client) leaves the fleet instead of waiting forever") {
+        var waiting = SessionEntry(id: "w"); waiting.waitingOn = .init(kind: "job")
+        var live = SessionEntry(id: "l"); live.liveTurnId = "t"
+        var closed = SessionEntry(id: "c"); closed.closedAt = now
+        let tab = SessionEntry(id: "tab")
+        let draft = SessionEntry(id: "d")
+        let gone = SessionFleet.vanished(entries: [waiting, live, closed, tab, draft], openTabs: ["tab"], inSnapshot: [])
+        runner.expect(Set(gone), equals: ["w", "d"], "an unlisted waiting session and a never-listed one; a live turn, a closed one and an open tab stay")
+        runner.expect(SessionFleet.vanished(entries: [waiting], openTabs: [], inSnapshot: ["w"]), equals: [], "listed means present")
+    }
+    runner.test("a session in the fleet that is also a tab is listed once") {
+        let ids = SessionFleet.memberIds(openTabs: ["r1", "r1"], entries: Array(ledger.entries.values), state: state)
+        runner.expect(ids.filter { $0 == "r1" }.count, equals: 1, "once")
+    }
+}
+
+runner.suite("fleet-signals-r2-03") {
+    let t0 = SessionLedger.parseISO("2026-11-24T20:00:00.000Z")!
+    func after(_ minutes: Double) -> Date { t0.addingTimeInterval(minutes * 60) }
+
+    runner.test("counts know how many waits are long and how many results nobody has looked at") {
+        let items = [
+            FleetItem(state: .waiting, waitingSince: t0),
+            FleetItem(state: .waiting, waitingSince: after(10)),
+            FleetItem(state: .waiting, waitingSince: nil),
+            FleetItem(state: .finished), FleetItem(state: .finished), FleetItem(state: .done),
+            FleetItem(state: .needsYou(1)), FleetItem(state: .working), FleetItem(state: .idle),
+        ]
+        let c = SessionFleet.counts(items, now: after(20))
+        runner.expect(c.waiting, equals: 3, "waiting")
+        runner.expect(c.longWaiting, equals: 1, "only the wait that began 20 min ago is long; 10 min and unknown are not")
+        runner.expect(c.finishedUnreviewed, equals: 2, "two finished, not looked at")
+        runner.expect(c.finished, equals: 2, "the older name still reads the same number")
+        runner.expect(c.total, equals: 9, "total")
+        runner.expect(SessionFleet.counts(items, now: after(14)).longWaiting, equals: 0, "14 minutes is ordinary")
+    }
+    runner.test("the summary says how many waits are long; zero says nothing extra") {
+        let c = FleetCounts(total: 6, working: 0, waiting: 5, needsYou: 0, finished: 1, longWaiting: 2)
+        runner.expect(SessionFleet.summary(c, detail: .full), equals: "6 tabs \u{B7} 5 waiting (2 long) \u{B7} 1 finished", "full")
+        runner.expect(SessionFleet.summary(c, detail: .minimal), equals: "5 waiting (2 long)", "minimal")
+        let none = FleetCounts(total: 6, working: 0, waiting: 5, needsYou: 0, finished: 1)
+        runner.expect(SessionFleet.summary(none, detail: .full), equals: "6 tabs \u{B7} 5 waiting \u{B7} 1 finished", "no long ones")
+        runner.expect(SessionFleet.summary(FleetCounts(total: 3, working: 0, waiting: 0, needsYou: 0, finished: 3), detail: .compact), equals: "3 finished", "results reach the compact bar (the minimal one stays about people, as tested before)")
+    }
+    runner.test("the chip is quiet, then amber for a long wait, then orange for a person wanted") {
+        runner.expect(SessionFleet.tone(FleetCounts(total: 4, working: 1, waiting: 2, needsYou: 0, finished: 1)), equals: .quiet, "ordinary waits and results are not alarms")
+        runner.expect(SessionFleet.tone(FleetCounts(total: 4, working: 0, waiting: 2, needsYou: 0, longWaiting: 1)), equals: .longWait, "a long wait")
+        runner.expect(SessionFleet.tone(FleetCounts(total: 4, working: 0, waiting: 2, needsYou: 1, longWaiting: 1)), equals: .needsYou, "needs-you wins")
+    }
+    runner.test("the rail badge counts needs-you, finished-unreviewed and long waits, and needs-you's colour wins") {
+        runner.expect(SessionFleet.badge(FleetCounts(total: 5, working: 1, waiting: 3, needsYou: 0)), equals: nil, "nothing to look at, no badge")
+        let onlyFinished = SessionFleet.badge(FleetCounts(total: 5, working: 0, waiting: 0, needsYou: 0, finished: 3))
+        runner.expect(onlyFinished?.count, equals: 3, "three results")
+        runner.expect(onlyFinished?.tone, equals: .review, "blue family when only results")
+        let mixed = SessionFleet.badge(FleetCounts(total: 9, working: 0, waiting: 4, needsYou: 1, finished: 2, longWaiting: 3))
+        runner.expect(mixed?.count, equals: 6, "1 + 2 + 3")
+        runner.expect(mixed?.tone, equals: .urgent, "needs-you wins")
+        let longOnly = SessionFleet.badge(FleetCounts(total: 9, working: 0, waiting: 4, needsYou: 0, finished: 0, longWaiting: 2))
+        runner.expect(longOnly?.tone, equals: .urgent, "a long wait is urgent, not a result")
+        runner.expect(mixed?.help, equals: "1 needs you \u{B7} 2 finished, not reviewed \u{B7} 3 long waits", "the tooltip names every part")
+        runner.expect(longOnly?.help, equals: "2 long waits", "and only the parts that are there")
+    }
+    runner.test("the chip's tooltip says what the colours and counts mean") {
+        let c = FleetCounts(total: 6, working: 0, waiting: 5, needsYou: 0, finished: 1, longWaiting: 2)
+        let help = SessionFleet.help(c)
+        runner.expect(help.contains("6 tabs"), "starts with the summary")
+        runner.expect(help.contains("15 minutes"), "names the line for a long wait")
+        runner.expect(help.contains("not been opened"), "says what finished means")
+        runner.expect(help.contains("Click to open Sessions"), "and what a click does")
+    }
+}
+
+runner.suite("session-display-name-r2-02") {
+    runner.test("a name repeated in a heading is said once") {
+        runner.expect(SessionTabTitle.display("# B53a B53a: v3.1 batch from the backlog status of 22.11", maxLength: 40), equals: "B53a: v3.1 batch from the backlog\u{2026}", "the measured case")
+        runner.expect(SessionTabTitle.display("GATE-LANE GATE-LANE width", maxLength: 40), equals: "GATE-LANE width", "an identifier-like repeat")
+        runner.expect(SessionTabTitle.display("b53a B53A done", maxLength: 40), equals: "B53A done", "case does not hide a repeat")
+        runner.expect(SessionTabTitle.display("it had had a fix", maxLength: 40), equals: "it had had a fix", "ordinary words that repeat are left alone")
+        runner.expect(SessionTabTitle.display("V2 then V2", maxLength: 40), equals: "V2 then V2", "only neighbours collapse")
+    }
+    runner.test("one name from what the tab was opened with, then its title, then its branch, then its id") {
+        let msg = "# B53a B53a: v3.1 batch from the backlog status of 22.11\n\nOwner, verbatim"
+        runner.expect(SessionDisplayName.make(id: "2f7d3e37-456b", isDraft: false, firstMessage: msg, title: "briefs/v31/b53a-security-hardening-left.md", branch: "marvin/tab/x"),
+                      equals: "B53a: v3.1 batch from the backlog\u{2026}", "the first message wins, as on the tab strip")
+        runner.expect(SessionDisplayName.make(id: "2f7d3e37-456b", isDraft: false, firstMessage: nil, title: "briefs/v31/b53a-security-hardening-left.md", branch: nil),
+                      equals: "b53a security hardening left", "a file path is never a name")
+        runner.expect(SessionDisplayName.make(id: "2f7d3e37-456b", isDraft: false, firstMessage: "  ", title: nil, branch: "marvin/tab/fix-the-thing"),
+                      equals: "fix the thing", "the branch, humanised")
+        runner.expect(SessionDisplayName.make(id: "2f7d3e37-456b", isDraft: false, firstMessage: nil, title: nil, branch: nil), equals: "2f7d3e37", "the id prefix is the last resort")
+        runner.expect(SessionDisplayName.make(id: "x", isDraft: true, firstMessage: "# hi", title: nil, branch: nil), equals: "New chat", "a draft")
+        runner.expect(SessionDisplayName.make(id: "x", isDraft: false, firstMessage: "@/Users/a/b.png @/Users/a/c.png Fix the login bug", title: nil, branch: nil), equals: "Fix the login bug", "attachment mentions are dropped")
+    }
+    runner.test("the notification title is the same name") {
+        runner.expect(TabNotificationTitle.make(entryTitle: "briefs/v31/b53a-security-hardening-left.md", isDraft: false, id: "2f7d3e37-456b"), equals: "b53a security hardening left", "a path title")
+        runner.expect(TabNotificationTitle.make(entryTitle: "briefs/v31/b53a-security-hardening-left.md", isDraft: false, id: "2f7d3e37-456b",
+                                                firstMessage: "# B53a B53a: v3.1 batch from the backlog status of 22.11"), equals: "B53a: v3.1 batch from the backlog\u{2026}", "with the first message, the tab strip's name")
+    }
+    runner.test("the restart banner names the tabs with the same short names") {
+        runner.expect(SessionRestartTrace.message(titles: ["B53a: v3.1 batch\u{2026}", "R1 RELEASE-V31"]), equals: "A restart cut off 2 turns: B53a: v3.1 batch\u{2026}, R1 RELEASE-V31.", "unchanged shape")
+    }
+}
+
+runner.suite("session-row-text-r2-11") {
+    let t0 = SessionLedger.parseISO("2026-11-24T20:00:00.000Z")!
+    func at(_ minutes: Double) -> Date { t0.addingTimeInterval(minutes * 60) }
+    func entry(_ build: (inout SessionEntry) -> Void) -> SessionEntry {
+        var e = SessionEntry(id: "2f7d3e37-456b")
+        e.tree = SessionTreeWire(mode: .worktree, path: "/p/.marvin/worktrees/tab-x", branch: "marvin/tab/fix-the-thing")
+        e.diff = SessionDiffSummary(added: 3411, removed: 76, files: 53)
+        e.plan = SessionPlanProgress(done: 4, total: 5)
+        e.graphUsage = SessionGraphUsage(graphCalls: 9, fileReads: 0, bashReads: 14, ratio: 1.6)
+        e.skills = SessionSkills(required: ["ponytail", "pr-review"], used: ["pr-review"], missing: ["ponytail"])
+        e.costUsd = 4.21
+        build(&e)
+        return e
+    }
+
+    runner.test("the state sentence is short, starts with the state, and carries its own time") {
+        runner.expect(SessionRowText.stateSentence(.needsYou(1), entry { _ in }, now: at(5)), equals: "Needs you", "needs you")
+        runner.expect(SessionRowText.stateSentence(.needsYou(3), entry { _ in }, now: at(5)), equals: "Needs you (3)", "several")
+        let w = entry { $0.waitingOn = .init(kind: "job", label: "gated commit", since: "2026-11-24T20:00:00.000Z") }
+        runner.expect(SessionRowText.stateSentence(.waiting, w, now: at(12)), equals: "Waiting 12 min", "waiting, from the feed's own start")
+        runner.expect(SessionRowText.stateSentence(.waiting, entry { _ in }, now: at(12)), equals: "Waiting", "no start, no invented time")
+        let run = entry { $0.liveSince = t0 }
+        runner.expect(SessionRowText.stateSentence(.working, run, now: at(4)), equals: "Working 4m", "working")
+        let ended = entry { $0.lastTurnAt = t0 }
+        runner.expect(SessionRowText.stateSentence(.finished, ended, now: at(6)), equals: "Finished 6m ago", "finished")
+        runner.expect(SessionRowText.stateSentence(.done, ended, now: at(130)), equals: "Done 2h ago", "done")
+        runner.expect(SessionRowText.stateSentence(.idle, ended, now: at(6)), equals: "Idle 6m", "idle")
+        runner.expect(SessionRowText.stateSentence(.idle, entry { _ in }, now: at(6)), equals: "Idle", "idle with no turn")
+        runner.expect(SessionRowText.stateSentence(.failed, ended, now: at(6)), equals: "Failed 6m ago", "failed")
+        runner.expect(SessionRowText.stateSentence(.interrupted, ended, now: at(6)), equals: "Cut off", "cut off")
+        runner.expect(SessionRowText.stateSentence(.draft, entry { _ in }, now: at(6)), equals: "New", "draft")
+    }
+    runner.test("ages read the way the rest of the pane reads them") {
+        runner.expect(SessionRowText.ago(t0, now: at(0.5)), equals: "30s", "seconds")
+        runner.expect(SessionRowText.ago(t0, now: at(59)), equals: "59m", "minutes")
+        runner.expect(SessionRowText.ago(t0, now: at(60 * 25)), equals: "1d", "days")
+        runner.expect(SessionRowText.ago(t0, now: at(-3)), equals: "0s", "a clock that ran ahead is not negative")
+    }
+    runner.test("line two is the one fact for the state, and never a metric") {
+        let w = entry { $0.waitingOn = .init(kind: "job", label: " gated commit rerun after restart: baseline\n", since: "2026-11-24T20:00:00.000Z") }
+        runner.expect(SessionRowText.keyFact(.waiting, w, now: at(12)), equals: "gated commit rerun after restart: baseline", "what it waits on, in the feed's words")
+        runner.expect(SessionRowText.keyFact(.waiting, entry { $0.waitingOn = .init(kind: "job") }, now: at(1)), equals: "Waiting on a job", "no label, plain fallback")
+        let c = entry { $0.pendingConfirms["u"] = PendingConfirmInfo(turnId: "t", toolUseId: "u", toolName: "Bash", excerpt: "git push origin main") }
+        runner.expect(SessionRowText.keyFact(.needsYou(1), c, now: at(1)), equals: "Shell command: git push origin main", "what it asks to run")
+        let q = entry { $0.attention = .init(kind: "prose-question", excerpt: "Shall I merge?") }
+        runner.expect(SessionRowText.keyFact(.needsYou(1), q, now: at(1)), equals: "asked you a question", "a closing question")
+        let cap = entry { $0.attention = .init(kind: "chain-cap", excerpt: "x") }
+        runner.expect(SessionRowText.keyFact(.needsYou(1), cap, now: at(1)), equals: "stopped at the chain cap", "chain cap")
+        let live = entry { $0.liveTurnId = "t"; $0.activity = .tool; $0.activityTool = "Bash" }
+        runner.expect(SessionRowText.keyFact(.working, live, now: at(1)), equals: "using Bash", "what a working tab is doing")
+        runner.expect(SessionRowText.keyFact(.working, entry { $0.liveTurnId = "t" }, now: at(1)), equals: "running", "no activity yet")
+        runner.expect(SessionRowText.keyFact(.finished, entry { _ in }, now: at(1)), equals: "53 files \u{B7} +3411 \u{2212}76", "what to review")
+        let merged = entry { $0.worktree = .init(slug: "s", branch: "marvin/tab/x", state: "session", commits: 3, dirty: false, mergedInto: "main") }
+        runner.expect(SessionRowText.keyFact(.done, merged, now: at(1)), equals: "merged into main; close the tab to reclaim the branch", "nothing to review once merged")
+        runner.expect(SessionRowText.keyFact(.interrupted, entry { _ in }, now: at(1)), equals: "a restart cut off its last turn", "interrupted")
+        runner.expect(SessionRowText.keyFact(.failed, entry { _ in }, now: at(1)), equals: "its last turn ended with an error", "failed")
+        runner.expect(SessionRowText.keyFact(.idle, entry { _ in }, now: at(1)), equals: "4/5 steps", "idle shows its plan")
+        runner.expect(SessionRowText.keyFact(.idle, entry { $0.plan = nil }, now: at(1)), equals: "53 files \u{B7} +3411 \u{2212}76", "or its changes")
+        runner.expect(SessionRowText.keyFact(.idle, entry { $0.plan = nil; $0.diff = nil }, now: at(1)), equals: "own branch fix-the-thing", "or where it works")
+        runner.expect(SessionRowText.keyFact(.idle, SessionEntry(id: "z"), now: at(1)), equals: "shared checkout", "no tree facts, still a fact")
+        runner.expect(SessionRowText.keyFact(.draft, entry { _ in }, now: at(1)), equals: "no message sent yet", "draft")
+        for s in [SessionRowState.waiting, .working, .finished, .done, .idle, .failed, .interrupted, .needsYou(1)] {
+            let text = SessionRowText.keyFact(s, entry { $0.waitingOn = .init(kind: "job"); $0.liveTurnId = "t" }, now: at(1)) ?? ""
+            runner.expect(!text.contains("graph") && !text.contains("skills") && !text.contains("$") && !text.contains("reads"), "no metric on the row for \(s)")
+        }
+    }
+    runner.test("the hover card holds what left the row, and says own branch, not isolated") {
+        let e = entry {
+            $0.worktree = .init(slug: "s", branch: "marvin/tab/fix-the-thing", state: "session", commits: 21, dirty: true, behind: 2)
+            $0.plan = SessionPlanProgress(done: 4, total: 5, lastTodoAt: "2026-11-24T19:00:00.000Z", seeded: true)
+        }
+        let lines = SessionRowText.details(.waiting, e, now: at(5), name: "Fix the thing", claim: "Finish the gate", supervisorEnabled: false)
+        let text = lines.joined(separator: "\n")
+        runner.expect(lines.first, equals: "Fix the thing", "the full name first")
+        runner.expect(text.contains("graph 9 \u{B7} reads 14 (1.6\u{D7})"), "graph and reads")
+        runner.expect(text.contains("skills 1/2 used"), "skills")
+        runner.expect(text.contains("not run: ponytail"), "which skill did not run")
+        runner.expect(text.contains("$4.21"), "cost")
+        runner.expect(text.contains("21 commits") && text.contains("behind by 2"), "commits and behind")
+        runner.expect(text.contains("4/5 steps"), "plan")
+        runner.expect(text.contains("53 files"), "diff")
+        runner.expect(text.contains("Finish the gate"), "the backlog item it holds")
+        runner.expect(text.contains("own branch marvin/tab/fix-the-thing"), "own branch")
+        runner.expect(!text.contains("isolated"), "one word per concept")
+        runner.expect(text.contains("2f7d3e37-456b"), "the id stays reachable")
+        let notOpen = SessionRowText.details(.waiting, SessionEntry(id: "abc"), now: at(1), name: "abc", claim: nil, supervisorEnabled: false, isOpenTab: false)
+        runner.expect(notOpen.contains("Not open as a tab. Open it to read the conversation."), "a session with no tab says so on its card")
+        let bare = SessionRowText.details(.idle, SessionEntry(id: "abc"), now: at(1), name: "abc", claim: nil, supervisorEnabled: false)
+        runner.expect(bare, equals: ["abc", "abc", "shared checkout"], "a session with nothing known prints only what is known")
+    }
+}
+
+runner.suite("status-bar-text-r2-14") {
+    runner.test("the context figure states its limit") {
+        runner.expect(StatusBarText.windowLabel(1_000_000), equals: "1M", "a million")
+        runner.expect(StatusBarText.windowLabel(200_000), equals: "200K", "two hundred thousand")
+        runner.expect(StatusBarText.windowLabel(1_500_000), equals: "1.5M", "a fraction of a million")
+        runner.expect(StatusBarText.windowLabel(1_048_576), equals: "1M", "binary million reads as a million")
+        runner.expect(StatusBarText.context(residentTokens: 196_400, window: 1_000_000, full: true), equals: "ctx 196K / 1M", "full")
+        runner.expect(StatusBarText.context(residentTokens: 196_400, window: 1_000_000, full: false), equals: "196K/1M", "compact")
+        runner.expect(StatusBarText.context(residentTokens: 4_000, window: 0, full: true), equals: "ctx 4K", "no known window, no invented limit")
+    }
+    runner.test("the cost figure says what period it is") {
+        runner.expect(StatusBarText.costChip("\u{2248}$431.27", full: true), equals: "today \u{2248}$431.27", "full")
+        runner.expect(StatusBarText.costChip("\u{2248}$431.27", full: false), equals: "\u{2248}$431.27", "compact keeps the figure alone")
+    }
+    runner.test("the sync figure says what it counts, in plain numbers") {
+        let help = StatusBarText.syncHelp(ahead: 2171, behind: 0, upstream: "origin/feature/x")
+        runner.expect(help.contains("2171 commits not pushed"), "ahead, without a thousands separator that reads as a decimal")
+        runner.expect(help.contains("origin/feature/x"), "names the upstream")
+        runner.expect(help.contains("Click to pull, then push"), "and what a click does")
+        runner.expect(StatusBarText.syncHelp(ahead: 1, behind: 3, upstream: "origin/main").contains("1 commit not pushed"), "singular")
+        runner.expect(StatusBarText.syncHelp(ahead: 1, behind: 3, upstream: "origin/main").contains("3 commits to pull"), "behind")
+        runner.expect(StatusBarText.syncHelp(ahead: 0, behind: 0, upstream: "origin/main").contains("Up to date"), "nothing to move")
+    }
+    runner.test("the graph and reads counter is explained as how MARVIN worked, not as an error") {
+        let text = StatusBarText.graphReadsHelp(graph: 164, reads: 273, hint: "Reads outpace graph lookups")
+        runner.expect(text.contains("164 graph lookups") && text.contains("273 file reads"), "both numbers in words")
+        runner.expect(text.contains("not an error"), "and the word that stops it reading as one")
+        runner.expect(text.contains("Reads outpace graph lookups"), "the existing hint stays")
     }
 }
 

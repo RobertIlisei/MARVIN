@@ -43,6 +43,17 @@ public enum SessionRowState: Equatable, Sendable {
 
     /// `done` collapses with idle rows; `waiting` stays visible (it has a clock running).
     public var isIdle: Bool { self == .idle || self == .done }
+
+    /// R2-01 — a session that is NOT open as a tab is still part of the fleet
+    /// while it is in a state somebody supervising must see: working, waiting,
+    /// wanting the person, failed, cut off, or finished and not looked at.
+    /// Idle, done (already looked at) and a draft say nothing a person must act on.
+    public var staysInFleetWithoutTab: Bool {
+        switch self {
+        case .needsYou, .working, .interrupted, .failed, .waiting, .finished: return true
+        case .done, .idle, .draft: return false
+        }
+    }
 }
 
 public enum SessionRowStateDeriver {

@@ -14,28 +14,131 @@ public struct FleetCounts: Equatable, Sendable {
     public let needsYou: Int
     /// W-08 — turns that ended with a result and have not been looked at.
     public let finished: Int
-    public init(total: Int, working: Int, waiting: Int, needsYou: Int, finished: Int = 0) {
+    /// R2-03 — of the `waiting` sessions, those whose wait has run `SessionWait.longAfter`.
+    public let longWaiting: Int
+    public init(total: Int, working: Int, waiting: Int, needsYou: Int, finished: Int = 0, longWaiting: Int = 0) {
         self.total = total; self.working = working; self.waiting = waiting; self.needsYou = needsYou
-        self.finished = finished
+        self.finished = finished; self.longWaiting = longWaiting
+    }
+    /// The same number as `finished`, under the name the signals outside the pane use: a
+    /// `.finished` row IS "finished, not yet looked at" (a looked-at one is `.done`).
+    public var finishedUnreviewed: Int { finished }
+}
+
+/// One session as the fleet counts it: its state, and when its wait began.
+public struct FleetItem: Equatable, Sendable {
+    public let state: SessionRowState
+    public let waitingSince: Date?
+    public init(state: SessionRowState, waitingSince: Date? = nil) {
+        self.state = state; self.waitingSince = waitingSince
     }
 }
+
+public enum FleetTone: Equatable, Sendable { case quiet, longWait, needsYou }
+
+public struct FleetBadge: Equatable, Sendable {
+    public enum Tone: Equatable, Sendable { case urgent, review }
+    public let count: Int
+    public let tone: Tone
+    public let help: String
+    public init(count: Int, tone: Tone, help: String) { self.count = count; self.tone = tone; self.help = help }
+}
+
 
 public enum SessionFleet {
     /// One state per tab (or live session). Interrupted and failed rows are
     /// NOT counted as needing you: they are history with a Resume chip, and a
     /// stale error would keep the rail badge lit for days.
     public static func counts(_ states: [SessionRowState]) -> FleetCounts {
-        var working = 0, waiting = 0, needsYou = 0, finished = 0
-        for s in states {
-            switch s {
+        counts(states.map { FleetItem(state: $0) }, now: Date())
+    }
+
+    /// As above, and `longWaiting` counts the waiting sessions whose own start
+    /// time is `SessionWait.longAfter` or more ago (R2-03). A wait with no
+    /// start time is never called long: nothing is invented.
+    public static func counts(_ items: [FleetItem], now: Date) -> FleetCounts {
+        var working = 0, waiting = 0, needsYou = 0, finished = 0, longWaiting = 0
+        for item in items {
+            switch item.state {
             case .working: working += 1
-            case .waiting: waiting += 1
+            case .waiting:
+                waiting += 1
+                if SessionWait.isLong(since: item.waitingSince, now: now) { longWaiting += 1 }
             case .needsYou: needsYou += 1
             case .finished: finished += 1
             default: break
             }
         }
-        return FleetCounts(total: states.count, working: working, waiting: waiting, needsYou: needsYou, finished: finished)
+        return FleetCounts(total: items.count, working: working, waiting: waiting, needsYou: needsYou,
+                           finished: finished, longWaiting: longWaiting)
+    }
+
+    /// R2-01 — the sessions the fleet is made of: every open tab, in strip
+    /// order, then every other session of the project that the feed reports as
+    /// working, waiting, needing the person, failed, cut off or finished and not
+    /// yet looked at. Until 2026-11-24 the second half was "has a running turn",
+    /// so a session started elsewhere vanished from the pane, the status bar and
+    /// the badge at the moment it began to wait, which is the state a person who
+    /// supervises many tabs most wants to see. A tab the person closed is
+    /// history whatever it waits on; a live turn is shown regardless, as before.
+    public static func memberIds(openTabs: [String], entries: [SessionEntry], state: (SessionEntry) -> SessionRowState) -> [String] {
+        var ids: [String] = []
+        var seen = Set<String>()
+        for id in openTabs where seen.insert(id).inserted { ids.append(id) }
+        let extra = entries
+            .filter { e in
+                !seen.contains(e.id) && e.closedAt == nil
+                    && (e.worktree?.closed != true || e.isLive)
+                    && state(e).staysInFleetWithoutTab
+            }
+            .map(\.id)
+            .sorted()
+        return ids + extra
+    }
+
+    /// Sessions the ledger holds that are not a tab, were not closed here, have
+    /// no running turn and that a snapshot of the whole fleet no longer lists.
+    /// The sidecar leaves a closed session out of that snapshot, and the
+    /// snapshot only ever adds or updates rows: without this a session closed
+    /// from another client kept its last known wait on screen until the next
+    /// launch. The caller marks them closed (they then read as history).
+    public static func vanished(entries: [SessionEntry], openTabs: Set<String>, inSnapshot: Set<String>) -> [String] {
+        entries
+            .filter { !openTabs.contains($0.id) && !inSnapshot.contains($0.id) && $0.closedAt == nil && !$0.isLive && !$0.isDraft }
+            .map(\.id)
+            .sorted()
+    }
+
+    /// How loudly the status-bar chip speaks. A person wanted is orange; a wait
+    /// that has run long is the same warm colour with its own words; the rest is quiet.
+    public static func tone(_ c: FleetCounts) -> FleetTone {
+        if c.needsYou > 0 { return .needsYou }
+        if c.longWaiting > 0 { return .longWait }
+        return .quiet
+    }
+
+    /// The Sessions rail badge: needs-you + finished-unreviewed + long waits.
+    /// Needs-you's colour wins; a long wait is as urgent as a person wanted;
+    /// results alone are the calmer "review" tone. nil when there is nothing to look at.
+    public static func badge(_ c: FleetCounts) -> FleetBadge? {
+        let count = c.needsYou + c.finishedUnreviewed + c.longWaiting
+        guard count > 0 else { return nil }
+        var parts: [String] = []
+        if c.needsYou > 0 { parts.append("\(c.needsYou) need\(c.needsYou == 1 ? "s" : "") you") }
+        if c.finishedUnreviewed > 0 { parts.append("\(c.finishedUnreviewed) finished, not reviewed") }
+        if c.longWaiting > 0 { parts.append("\(c.longWaiting) long wait\(c.longWaiting == 1 ? "" : "s")") }
+        return FleetBadge(count: count, tone: c.needsYou > 0 || c.longWaiting > 0 ? .urgent : .review,
+                          help: parts.joined(separator: " \u{B7} "))
+    }
+
+    /// The status-bar chip's tooltip: the summary, then what its colours and counts mean.
+    public static func help(_ c: FleetCounts) -> String {
+        [
+            summary(c, detail: .full),
+            "A wait turns orange after \(Int(SessionWait.longAfter / 60)) minutes.",
+            "Finished means the last turn ended and the tab has not been opened since.",
+            "Click to open Sessions.",
+        ].joined(separator: "\n")
     }
 
     /// How much the status-bar segment says. The bar drops detail before it
@@ -48,7 +151,7 @@ public enum SessionFleet {
         guard c.total > 0 else { return "" }
         var parts: [String] = []
         if c.working > 0 { parts.append("\(c.working) working") }
-        if c.waiting > 0 { parts.append("\(c.waiting) waiting") }
+        if c.waiting > 0 { parts.append(waitingText(c)) }
         if c.needsYou > 0 { parts.append("\(c.needsYou) needs you") }
         if c.finished > 0 { parts.append("\(c.finished) finished") }
         let tabs = "\(c.total) tab\(c.total == 1 ? "" : "s")"
@@ -59,9 +162,13 @@ public enum SessionFleet {
             return parts.isEmpty ? tabs : parts.joined(separator: " \u{B7} ")
         case .minimal:
             if c.needsYou > 0 { return "\(c.needsYou) needs you" }
-            if c.waiting > 0 { return "\(c.waiting) waiting" }
+            if c.waiting > 0 { return waitingText(c) }
             return ""
         }
+    }
+
+    private static func waitingText(_ c: FleetCounts) -> String {
+        c.longWaiting > 0 ? "\(c.waiting) waiting (\(c.longWaiting) long)" : "\(c.waiting) waiting"
     }
 }
 

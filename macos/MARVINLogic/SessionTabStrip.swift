@@ -40,7 +40,32 @@ public enum SessionTabTitle {
         let words = s.split(whereSeparator: { $0 == " " || $0 == "\t" }).map { word -> String in
             looksLikePath(word) ? basename(word) : String(word)
         }
-        return words.joined(separator: " ")
+        return dropRepeatedNames(words).joined(separator: " ")
+    }
+
+    /// R2-02 — "B53a B53a: v3.1 batch" says its name twice (a brief that opens
+    /// with its own heading). A name that is repeated right after itself is said
+    /// once, the later spelling kept. Only identifier-like words count (a digit,
+    /// a hyphen or underscore, or all capitals): "that that" and "had had" are English.
+    private static func dropRepeatedNames(_ words: [String]) -> [String] {
+        var out: [String] = []
+        for word in words {
+            if let last = out.last, isName(word), key(last) == key(word) { out.removeLast() }
+            out.append(word)
+        }
+        return out
+    }
+
+    private static func key(_ word: String) -> String {
+        word.lowercased().trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+    }
+
+    private static func isName(_ word: String) -> Bool {
+        let k = key(word)
+        guard !k.isEmpty else { return false }
+        let letters = word.filter(\.isLetter)
+        return word.contains(where: \.isNumber) || word.contains("-") || word.contains("_")
+            || (letters.count >= 2 && letters.allSatisfy(\.isUppercase))
     }
 
     private static func looksLikePath(_ word: Substring) -> Bool {
