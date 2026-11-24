@@ -6515,6 +6515,252 @@ runner.suite("session-restart-trace") {
     }
 }
 
+// MARK: - Chat column, group C (UX review round 2: R2-05..09, R2-18, R2-19, S-02, S-05)
+
+runner.suite("chat-status-strip") {
+    func item(_ k: ChatStatusKind, _ line: String = "x", attention: Bool = false) -> ChatStatusItem {
+        ChatStatusItem(kind: k, line: line, attention: attention)
+    }
+    runner.test("the kinds that ask something of the person are never folded") {
+        for k in [ChatStatusKind.confirm, .interrupted, .approvePlan, .decision, .pausedPlan, .scopeMet] {
+            runner.expect(k.needsUser, "\(k) needs the user")
+        }
+        for k in [ChatStatusKind.plan, .job, .files, .backlog, .resetArmed] {
+            runner.expect(!k.needsUser, "\(k) can fold")
+        }
+    }
+    runner.test("split keeps needs-you items open in the order given, folds the rest in summary order") {
+        let s = ChatStatusStrip.split([item(.backlog), item(.scopeMet), item(.files), item(.confirm), item(.job), item(.plan)])
+        runner.expect(s.open.map(\.kind), equals: [.scopeMet, .confirm], "open, as given")
+        runner.expect(s.folded.map(\.kind), equals: [.plan, .job, .files, .backlog], "folded: plan, job, files, backlog")
+    }
+    runner.test("a long wait leads the folded items so it is the first thing the summary says") {
+        let s = ChatStatusStrip.split([item(.plan), item(.job, attention: true), item(.backlog)])
+        runner.expect(s.folded.map(\.kind), equals: [.job, .plan, .backlog], "attention first")
+    }
+    runner.test("the summary is one line of the folded items' own words") {
+        let folded = [item(.plan, "4/5 steps"), item(.job, "waiting on gate 3 min"), item(.files, "2 files"), item(.backlog, "325 parked")]
+        runner.expect(ChatStatusStrip.summary(folded), equals: "4/5 steps \u{B7} waiting on gate 3 min \u{B7} 2 files \u{B7} 325 parked", "joined")
+        runner.expect(ChatStatusStrip.summary([]), equals: "", "nothing folded")
+    }
+    runner.test("line wording: plan, job, files, backlog") {
+        runner.expect(ChatStatusStrip.planLine(done: 4, total: 5), equals: "4/5 steps", "plan")
+        runner.expect(ChatStatusStrip.planLine(done: 5, total: 5), equals: "plan complete", "complete")
+        runner.expect(ChatStatusStrip.filesLine(1), equals: "1 file", "one file")
+        runner.expect(ChatStatusStrip.filesLine(2), equals: "2 files", "files")
+        runner.expect(ChatStatusStrip.backlogLine(325), equals: "325 parked", "backlog")
+        let now = Date(timeIntervalSince1970: 3_000_000)
+        runner.expect(ChatStatusStrip.jobLine(label: "gated commit", since: now.addingTimeInterval(-3 * 60), now: now), equals: "waiting on gated commit \u{B7} 3 min", "with a start")
+        runner.expect(ChatStatusStrip.jobLine(label: "gated commit", since: nil, now: now), equals: "waiting on gated commit", "no start")
+        runner.expect(ChatStatusStrip.jobLine(label: "Waiting on a job", since: now.addingTimeInterval(-3 * 60), now: now), equals: "waiting on a job \u{B7} 3 min", "the feed fallback label")
+        let long = String(repeating: "word ", count: 20)
+        let line = ChatStatusStrip.jobLine(label: long, since: nil, now: now)
+        runner.expect(line.count <= 48, "a long label is cut: \(line.count)")
+        runner.expect(line.hasSuffix("\u{2026}"), "and says so")
+    }
+    runner.test("collapsed by default once the stack would take a real share of the column; the person's choice wins") {
+        runner.expect(ChatStatusStrip.startsCollapsed(columnHeight: 1030, foldedCount: 4), "four cards in a 1030 pt column")
+        runner.expect(ChatStatusStrip.startsCollapsed(columnHeight: 1030, foldedCount: 3), "three cards")
+        runner.expect(!ChatStatusStrip.startsCollapsed(columnHeight: 1030, foldedCount: 1), "one card fits")
+        runner.expect(ChatStatusStrip.startsCollapsed(columnHeight: 500, foldedCount: 2), "short column")
+        runner.expect(ChatStatusStrip.startsCollapsed(columnHeight: 0, foldedCount: 1), "unmeasured: collapsed")
+        runner.expect(ChatStatusStrip.isExpanded(userChoice: true, columnHeight: 1030, foldedCount: 5), "opened by the person")
+        runner.expect(!ChatStatusStrip.isExpanded(userChoice: false, columnHeight: 1600, foldedCount: 1), "closed by the person")
+        runner.expect(!ChatStatusStrip.isExpanded(userChoice: nil, columnHeight: 1030, foldedCount: 5), "no choice: the default")
+        runner.expect(!ChatStatusStrip.isExpanded(userChoice: nil, columnHeight: 1030, foldedCount: 0), "nothing to expand")
+    }
+}
+
+runner.suite("scope-met-bar") {
+    runner.test("Mark reviewed is the primary action; Review changes sits beside it only when there is a diff") {
+        let withDiff = ScopeMetBar.layout(hasChanges: true)
+        runner.expect(withDiff.primary, equals: [.markReviewed, .reviewChanges], "with a diff")
+        let without = ScopeMetBar.layout(hasChanges: false)
+        runner.expect(without.primary, equals: [.markReviewed], "no diff")
+    }
+    runner.test("the housekeeping chips move to the menu in both layouts") {
+        runner.expect(ScopeMetBar.layout(hasChanges: true).menu, equals: [.saveNote, .startFresh, .auditSession], "menu")
+        runner.expect(ScopeMetBar.layout(hasChanges: false).menu, equals: [.saveNote, .startFresh, .auditSession], "menu, no diff")
+    }
+    runner.test("Scope met is the state word; reviewed says so") {
+        runner.expect(ScopeMetBar.title(reviewed: false), equals: "Scope met", "open")
+        runner.expect(ScopeMetBar.title(reviewed: true), equals: "Scope met \u{B7} reviewed", "reviewed")
+    }
+}
+
+runner.suite("plan-step-title") {
+    runner.test("a bold lead is the title") {
+        runner.expect(PlanStepTitle.lead("**Make the lane's width a setting.** Default 1, read where the waiting is reaped."), equals: "Make the lane's width a setting.", "bold lead")
+    }
+    runner.test("otherwise the first sentence, not the paragraph") {
+        runner.expect(PlanStepTitle.lead("Keep every protection the single lane gave. Two suites must not share a build directory."), equals: "Keep every protection the single lane gave.", "first sentence")
+        runner.expect(PlanStepTitle.lead("Tests first\nseen failing"), equals: "Tests first", "first line")
+    }
+    runner.test("a sentence is not cut at a dot inside a name or a number") {
+        runner.expect(PlanStepTitle.lead("Edit session-watch.ts and add 3.5 s to the budget. Then run it."), equals: "Edit session-watch.ts and add 3.5 s to the budget.", "dots in names")
+    }
+    runner.test("a long title is cut at a word with an ellipsis") {
+        let t = PlanStepTitle.lead(String(repeating: "alpha ", count: 40), maxLength: 40)
+        runner.expect(t.count <= 40, "length \(t.count)")
+        runner.expect(t.hasSuffix("\u{2026}"), "ellipsis")
+        runner.expect(!t.dropLast().hasSuffix("alph"), "not mid-word")
+    }
+    runner.test("short text is unchanged") {
+        runner.expect(PlanStepTitle.lead("Wire the gate"), equals: "Wire the gate", "short")
+    }
+}
+
+runner.suite("machine-message") {
+    let wakeup = "[scheduled wakeup \u{2014} background job done: gated docs commit]\n\nA background job you started earlier has finished.\n\nCommand: `git commit -m x`\nResult: exit code 0\n\nLast output:\n```\nrc=0\n```\n\nIt succeeded \u{2014} continue the work that depended on it, or report completion to the user."
+    runner.test("a finished background job is labelled system, not you, with its exit code") {
+        let m = MachineMessage.classify(wakeup)
+        runner.expect(m?.label, equals: "system \u{B7} job finished", "label")
+        runner.expect(m?.headline, equals: "gated docs commit \u{B7} exit code 0", "headline")
+        runner.expect(m?.detail.contains("Last output") == true, "the full text stays available")
+    }
+    runner.test("a failed job says failed") {
+        let failed = "[scheduled wakeup \u{2014} background job done: tests]\n\nA background job you started earlier has finished.\n\nCommand: `mvn test`\nResult: exit code 1\n\nIt did NOT succeed \u{2014} read the output."
+        let m = MachineMessage.classify(failed)
+        runner.expect(m?.label, equals: "system \u{B7} job failed", "label")
+        runner.expect(m?.headline, equals: "tests \u{B7} exit code 1", "headline")
+        let killed = "[scheduled wakeup \u{2014} background job done: build]\n\nA background job you started earlier has finished.\n\nCommand: `x`\nResult: killed by signal SIGKILL\n\nIt did NOT succeed"
+        runner.expect(MachineMessage.classify(killed)?.headline, equals: "build \u{B7} killed by signal SIGKILL", "signal")
+    }
+    runner.test("stopped and cut-off jobs, and a plain wakeup") {
+        runner.expect(MachineMessage.classify("[scheduled wakeup \u{2014} background job stopped: build]\n\nA background job you started earlier was stopped before it finished.")?.label, equals: "system \u{B7} job stopped", "stopped")
+        runner.expect(MachineMessage.classify("[scheduled wakeup \u{2014} background job interrupted: build]\n\nA background job you started earlier was cut off when MARVIN restarted.")?.label, equals: "system \u{B7} job cut off", "cut off")
+        let plain = MachineMessage.classify("[scheduled wakeup \u{2014} check the CI run]\n\nCheck whether the pipeline is green.")
+        runner.expect(plain?.label, equals: "system \u{B7} wakeup", "wakeup")
+        runner.expect(plain?.headline, equals: "check the CI run", "reason")
+    }
+    runner.test("a job report without the wakeup prefix is still a machine line") {
+        runner.expect(MachineMessage.classify("A background job you started earlier has finished.\n\nCommand: `x`\nResult: exit code 0")?.label, equals: "system \u{B7} job finished", "bare")
+    }
+    runner.test("what the person typed is never classified") {
+        runner.expect(MachineMessage.classify("please run the tests") == nil, "plain")
+        runner.expect(MachineMessage.classify("[queued while you were working] fix the typo") == nil, "queued user text is theirs")
+        runner.expect(MachineMessage.classify("\u{25B6} Continuing") == nil, "a control action")
+        runner.expect(MachineMessage.classify("Can you explain what [scheduled wakeup \u{2014} x] means?") == nil, "mid-sentence")
+    }
+}
+
+runner.suite("friendly-date") {
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(identifier: "UTC")!
+    let now = ISO8601DateFormatter().date(from: "2026-11-24T20:30:00Z")!
+    runner.test("the sidecar's fractional seconds parse (R2-19: this returned the raw string)") {
+        runner.expect(FriendlyDate.parse("2026-11-24T16:30:45.057Z") != nil, "with .057Z")
+        runner.expect(FriendlyDate.parse("2026-11-24T16:30:45Z") != nil, "without")
+        runner.expect(FriendlyDate.parse("2026-11-24T16:30:45.057+02:00") != nil, "offset")
+        runner.expect(FriendlyDate.parse("not a date") == nil, "garbage")
+    }
+    runner.test("short: time today, month/day before, raw only when it cannot parse") {
+        runner.expect(FriendlyDate.short("2026-11-24T16:30:45.057Z", now: now, calendar: utc), equals: "16:30", "today")
+        runner.expect(FriendlyDate.short("2026-11-23T16:30:45.057Z", now: now, calendar: utc), equals: "11/23", "yesterday")
+        runner.expect(FriendlyDate.short("garbage", now: now, calendar: utc), equals: "garbage", "raw")
+    }
+    runner.test("last active reads as a time and an age, never an ISO string") {
+        runner.expect(FriendlyDate.lastActive("2026-11-24T16:30:45.057Z", now: now, calendar: utc), equals: "16:30 (3 h 59 min ago)", "today")
+        runner.expect(FriendlyDate.lastActive("2026-11-24T20:29:50.000Z", now: now, calendar: utc), equals: "20:29 (<1 min ago)", "just now")
+        runner.expect(FriendlyDate.lastActive("2026-11-22T10:00:00.000Z", now: now, calendar: utc), equals: "11/22 (2 d 10 h ago)", "days")
+        runner.expect(!FriendlyDate.lastActive("2026-11-24T16:30:45.057Z", now: now, calendar: utc).contains("T16"), "no raw")
+    }
+}
+
+runner.suite("tab-strip-scroll") {
+    // 8 tabs of 128 pt, 4 pt apart, 8 pt inset; a viewport of 520 pt.
+    func reveal(_ i: Int, offset: CGFloat, viewport: CGFloat = 520) -> TabStripScroll.Reveal {
+        TabStripScroll.reveal(index: i, tabWidth: 128, spacing: 4, leadingInset: 8, contentOffset: offset, viewportWidth: viewport)
+    }
+    runner.test("a tab that is fully visible does not move the strip (R2-18: the strip slid under the pointer)") {
+        runner.expect(reveal(0, offset: 0), equals: .none, "first")
+        runner.expect(reveal(2, offset: 0), equals: .none, "third, fully inside")
+    }
+    runner.test("a tab cut off on the right is brought in from the right edge, by the least needed") {
+        runner.expect(reveal(3, offset: 0), equals: .trailing, "cut on the right")
+        runner.expect(reveal(6, offset: 0), equals: .trailing, "far right")
+    }
+    runner.test("a tab cut off on the left is brought in from the left edge") {
+        runner.expect(reveal(0, offset: 100), equals: .leading, "first, scrolled past")
+        runner.expect(reveal(1, offset: 141), equals: .leading, "one point of the second hidden")
+    }
+    runner.test("a tab exactly in view stays; a hair of tolerance is not a scroll") {
+        runner.expect(reveal(3, offset: 12), equals: .none, "right edge exactly at 532 = 12 + 520")
+        runner.expect(reveal(1, offset: 140), equals: .none, "left edge exactly at 140")
+    }
+    runner.test("no measured viewport, no scroll") {
+        runner.expect(reveal(5, offset: 0, viewport: 0), equals: .none, "unmeasured")
+    }
+}
+
+runner.suite("tab-strip-glyph") {
+    let now = Date(timeIntervalSince1970: 4_000_000)
+    runner.test("a waiting tab turns amber at the pane's threshold, not before") {
+        let justUnder = now.addingTimeInterval(-(SessionWait.longAfter - 1))
+        let atIt = now.addingTimeInterval(-SessionWait.longAfter)
+        runner.expect(TabStripGlyph.tone(.waiting, waitingSince: justUnder, now: now), equals: .neutral, "14 min 59 s")
+        runner.expect(TabStripGlyph.tone(.waiting, waitingSince: atIt, now: now), equals: .amber, "15 min")
+        runner.expect(TabStripGlyph.tone(.waiting, waitingSince: nil, now: now), equals: .neutral, "no start known")
+    }
+    runner.test("finished-not-reviewed is blue; done is quiet; the rest keep their hue") {
+        runner.expect(TabStripGlyph.tone(.finished, waitingSince: nil, now: now), equals: .blue, "finished")
+        runner.expect(TabStripGlyph.tone(.done, waitingSince: nil, now: now), equals: .muted, "done")
+        runner.expect(TabStripGlyph.tone(.needsYou(1), waitingSince: nil, now: now), equals: .amber, "needs you")
+        runner.expect(TabStripGlyph.tone(.failed, waitingSince: nil, now: now), equals: .failed, "failed")
+        runner.expect(TabStripGlyph.tone(.working, waitingSince: nil, now: now), equals: .working, "working")
+        runner.expect(TabStripGlyph.tone(.draft, waitingSince: nil, now: now), equals: .draft, "draft")
+    }
+}
+
+runner.suite("chip-text") {
+    runner.test("a chip label is cut at a word with an ellipsis, never mid-word (S-05)") {
+        let label = "own branch \u{B7} docs security b54 read of the unopened c"
+        let fit = ChipText.fit(label, maxLength: 32)
+        runner.expect(fit.count <= 32, "length \(fit.count)")
+        runner.expect(fit.hasSuffix("\u{2026}"), "ellipsis")
+        runner.expect(!fit.contains("unopened c\u{2026}"), "not mid-word")
+        runner.expect(ChipText.fit("shared", maxLength: 32), equals: "shared", "short is unchanged")
+        runner.expect(ChipText.fit(String(repeating: "x", count: 60), maxLength: 20).count <= 20, "one long word is still cut")
+    }
+}
+
+runner.suite("chat-header-state") {
+    let now = Date(timeIntervalSince1970: 5_000_000)
+    runner.test("a tab waiting on a job reads as waiting, with the label and the age (R2-06: the orb said idle)") {
+        let i = ChatHeaderState.indicator(row: .waiting, waitLabel: "gated commit", waitingSince: now.addingTimeInterval(-12 * 60), now: now)
+        runner.expect(i.kind, equals: .waiting, "kind")
+        runner.expect(i.label, equals: "Waiting on gated commit \u{B7} 12 min", "label")
+        runner.expect(!i.animates, "waiting is still")
+    }
+    runner.test("every row state has its own word") {
+        func k(_ s: SessionRowState) -> ChatHeaderState.Indicator { ChatHeaderState.indicator(row: s, waitLabel: nil, waitingSince: nil, now: now) }
+        runner.expect(k(.working).kind, equals: .working, "working")
+        runner.expect(k(.working).animates, "working may animate")
+        runner.expect(k(.needsYou(2)).label, equals: "Needs you (2)", "needs you")
+        runner.expect(k(.finished).label, equals: "Finished, not reviewed", "finished")
+        runner.expect(k(.failed).kind, equals: .failed, "failed")
+        runner.expect(k(.interrupted).label, equals: "Cut off, can resume", "interrupted")
+        runner.expect(k(.idle).label, equals: "Idle", "idle")
+        runner.expect(k(.done).kind, equals: .idle, "done is quiet")
+        runner.expect(k(.waiting).label, equals: "Waiting", "waiting with nothing known")
+    }
+    runner.test("the optional large orb's caption agrees with the row: waiting says waiting, a working tab says the brain's word") {
+        let wait = ChatHeaderState.orbCaption(row: .waiting, brainName: "idle", waitLabel: "gated commit", waitingSince: nil, now: now)
+        runner.expect(wait, equals: "waiting on gated commit", "waiting wins over the brain's idle")
+        runner.expect(ChatHeaderState.orbCaption(row: .working, brainName: "thinking", waitLabel: nil, waitingSince: nil, now: now), equals: "thinking", "working: the brain's word")
+        runner.expect(ChatHeaderState.orbCaption(row: .idle, brainName: "idle", waitLabel: nil, waitingSince: nil, now: now), equals: "idle", "idle")
+        runner.expect(ChatHeaderState.orbCaption(row: .finished, brainName: "idle", waitLabel: nil, waitingSince: nil, now: now), equals: "finished, not reviewed", "finished")
+    }
+    runner.test("the large orb is off by default, once: an old saved layout is switched off a single time, then respected") {
+        let first = BrainOrbDefault.migrate(brainOn: true, alreadyMigrated: false)
+        runner.expect(first.brainOn, equals: false, "switched off")
+        runner.expect(first.migrated, equals: true, "recorded")
+        let later = BrainOrbDefault.migrate(brainOn: true, alreadyMigrated: true)
+        runner.expect(later.brainOn, equals: true, "a person who turned it back on keeps it")
+        runner.expect(BrainOrbDefault.migrate(brainOn: false, alreadyMigrated: false).brainOn, equals: false, "already off")
+    }
+}
+
 runner.suite("session-fleet") {
     let now = Date(timeIntervalSince1970: 2_000_000)
     func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
