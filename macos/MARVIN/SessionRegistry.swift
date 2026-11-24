@@ -71,6 +71,7 @@ final class SessionRegistry {
         openTabs = []
         draftIds.removeAll()
         reviewedAt = [:]
+        dismissedCutOffs = []
         ledger = SessionLedger()
     }
 
@@ -130,6 +131,21 @@ final class SessionRegistry {
 
     /// Working / waiting / needs-you / total over `fleetSessionIds`.
     var fleet: FleetCounts { SessionFleet.counts(fleetSessionIds.map { rowState($0) }) }
+
+    // MARK: - A restart leaves a trace (R-01)
+
+    /// Interrupted sessions the person has dismissed from the banner. In
+    /// memory only: a relaunch that still finds them cut off says so again.
+    private var dismissedCutOffs: Set<String> = []
+
+    var interruptedTabIds: [String] { fleetSessionIds.filter { rowState($0) == .interrupted } }
+
+    /// Sessions a restart cut off that the banner still names.
+    var restartCutOffs: [String] {
+        SessionRestartTrace.pending(interrupted: interruptedTabIds, acknowledged: dismissedCutOffs)
+    }
+
+    func dismissRestartBanner() { dismissedCutOffs.formUnion(interruptedTabIds) }
 
     // MARK: - The next tab that needs the person (M-02)
 
@@ -229,6 +245,7 @@ final class SessionRegistry {
             guard let rows = await ChatService.shared.fetchSessionWatch(projectId: pid, ids: ids),
                   self.projectId == pid else { return }
             self.ledger.apply(snapshot: rows, now: Date())
+            self.dismissedCutOffs = SessionRestartTrace.stillAcknowledged(self.dismissedCutOffs, interrupted: self.interruptedTabIds)
             // ADR-0108 — a tab restored from disk has no local posture, but
             // the sidecar recorded one on its last turn. Seed from that so a
             // reopened session comes back in the mode it was left in rather

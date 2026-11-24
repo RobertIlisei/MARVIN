@@ -60,6 +60,7 @@ import SwiftUI
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
                 header
+                restartBanner
                 // Brief §13.7 — one line; the settings, the log and the
                 // conversation live in the Supervisor workspace it opens.
                 if bridge.activeProjectId != nil, let line = SupervisorPaneLine.make(supervisorStrip) {
@@ -297,6 +298,20 @@ import SwiftUI
     }
 
     // MARK: - Sections
+
+    /// R-01 — one sentence naming the tabs a restart cut off, until dismissed
+    /// or until they run again. The rows themselves say it too (`subtitle`).
+    @ViewBuilder
+    private var restartBanner: some View {
+        let ids = registry.restartCutOffs
+        if !ids.isEmpty {
+            let titles = ids.map { title(registry.entry($0) ?? SessionEntry(id: $0)) }
+            PaneNoticeStrip(
+                notice: PaneNotice(kind: .warning, text: SessionRestartTrace.message(titles: titles)),
+                onDismiss: { registry.dismissRestartBanner() }
+            )
+        }
+    }
 
     private var header: some View {
         PaneHeader(title: "Sessions", symbol: "rectangle.stack") {
@@ -874,6 +889,8 @@ import SwiftUI
         } else if state == .waiting {
             // The wait itself is the row's own line (`waitLine`); the facts line only follows on.
             if let at = e.lastTurnAt { parts.append("last turn " + elapsed(at) + " ago") }
+        } else if state == .interrupted {
+            parts.append(e.lastTurnAt.map { "cut off by a restart · \(elapsed($0)) ago" } ?? "cut off by a restart")
         } else if state == .done || state == .finished {
             parts.append(e.lastTurnAt.map { "Done · \(elapsed($0)) ago" } ?? "Done")
         } else if e.isLive, let since = e.liveSince {

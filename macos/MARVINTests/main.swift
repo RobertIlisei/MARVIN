@@ -6248,6 +6248,26 @@ runner.suite("session-attention-order") {
     }
 }
 
+runner.suite("session-restart-trace") {
+    runner.test("the banner lists the interrupted sessions nobody has dismissed, in order") {
+        runner.expect(SessionRestartTrace.pending(interrupted: ["a", "b", "c"], acknowledged: []), equals: ["a", "b", "c"], "all of them")
+        runner.expect(SessionRestartTrace.pending(interrupted: ["a", "b", "c"], acknowledged: ["b"]), equals: ["a", "c"], "one dismissed")
+        runner.expect(SessionRestartTrace.pending(interrupted: [], acknowledged: ["b"]), equals: [], "nothing interrupted, nothing to say")
+        runner.expect(SessionRestartTrace.pending(interrupted: ["a", "a"], acknowledged: []), equals: ["a"], "a session is named once")
+    }
+    runner.test("a dismissal lasts only while the session stays interrupted") {
+        runner.expect(SessionRestartTrace.stillAcknowledged(["a", "b"], interrupted: ["b", "c"]), equals: ["b"], "a has run again, so a new cut-off of a shows")
+        runner.expect(SessionRestartTrace.stillAcknowledged([], interrupted: ["a"]), equals: [], "nothing to keep")
+    }
+    runner.test("the sentence counts, names and shortens") {
+        runner.expect(SessionRestartTrace.message(titles: ["Gate lane width"]), equals: "A restart cut off 1 turn: Gate lane width.", "one")
+        runner.expect(SessionRestartTrace.message(titles: ["A", "B", "C"]), equals: "A restart cut off 3 turns: A, B, C.", "several")
+        runner.expect(SessionRestartTrace.message(titles: ["A", "B", "C", "D", "E", "F"]), equals: "A restart cut off 6 turns: A, B, C, D and 2 more.", "past the limit")
+        runner.expect(SessionRestartTrace.message(titles: ["A", "B", "C", "D"]), equals: "A restart cut off 4 turns: A, B, C, D.", "exactly the limit")
+        runner.expect(SessionRestartTrace.message(titles: []), equals: "", "nothing to say")
+    }
+}
+
 runner.suite("session-fleet") {
     let now = Date(timeIntervalSince1970: 2_000_000)
     func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
