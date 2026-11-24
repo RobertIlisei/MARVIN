@@ -879,6 +879,7 @@ import SwiftUI
         }
         if let p = e.plan, p.seeded == true { lines.append("plan seeded by MARVIN from the brief") }
         if let s = e.skills, !s.missing.isEmpty { lines.append("skills the brief named that have not run: " + s.missing.joined(separator: ", ")) }
+        if let s = e.skills, let f = s.first, !f.isEmpty { lines.append("start skills (before the first change): " + f.joined(separator: ", ")) }
         return lines.joined(separator: "\n")
     }
 
