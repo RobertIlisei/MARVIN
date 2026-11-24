@@ -387,9 +387,10 @@ refresh does not lower its priority the way the project watchdog does.
    .`) is unaffected.
 
 **Roll back.** `uv tool install --force graphifyy==0.9.73` (the receipt of the
-current install). 0.9.73 reads a 0.9.118 graph.json; to be safe, restore the
-step 2 copy, or delete `graphify-out/graph.json`, `manifest.json` and `cache/`
-and let the next `graphify update .` rebuild. No MARVIN change needs reverting.
+current install). Measured: 0.9.73 answers `query` on a 0.9.118 graph.json, and
+its `update` over a 0.9.118-built `graphify-out` ran to exit 0 in 268 s at 7.6 GB
+(a full rebuild; it added the Markdown nodes back, 151,619 in all). To go back
+without that rebuild, restore the step 2 copy. No MARVIN change needs reverting.
 
 **Not verified.** The real upgrade on the live project (a project with a
 curated `.graphify_labels.json` may keep taking a daily snapshot); the first
