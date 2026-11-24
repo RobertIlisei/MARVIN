@@ -37,6 +37,7 @@ Four things stopped MARVIN from enforcing the rest, each checked in the code:
 
 - A tab that names skills now spends one continuation at the close when it skipped one. Its cost is bounded: two blocks, then through.
 - A failed `Skill` call (for example an unknown skill) is still recorded at the PreToolUse boundary, the same as the review skills have always been. The extractor ignores failed calls, so the two can disagree; the gate errs towards letting a close through.
+- The recording point does not tell a subagent's `Skill` call from the main session's (it never did, for the review skills either), so a scout that runs a skill counts for the session. The extractor reads own calls only, so it can report a miss the gate let through.
 - A shared checkout keys the in-memory record by tree, so two sessions on one tree share it for the path rules; the close check reads the session's own persisted list and does not.
 - The Practice pane lists rules created through the route and edits tier, status and message, but has no form to create one yet; creation is the route only.
 - A skill named in a brief that the SDK's catalog lacks (not installed, not enabled) is reported unavailable and does not block; whether the brief should then have named it is a question for the person.
