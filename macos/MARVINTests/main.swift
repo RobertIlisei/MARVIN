@@ -3294,9 +3294,12 @@ runner.suite("session-ledger") {
     }
     runner.test("ADR-0138 — a snapshot carries the skills the brief named; a row without them clears the field") {
         var l = SessionLedger()
-        let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"idle","skills":{"required":["ponytail","pr-review"],"used":["pr-review"],"missing":["ponytail"]}}]}"#.utf8))!
+        let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"idle","skills":{"required":["ponytail","pr-review"],"used":["pr-review"],"missing":["ponytail"],"first":["ponytail"]}}]}"#.utf8))!
         l.apply(snapshot: rows, now: t0, graceSeconds: 5)
-        runner.expect(l["s"]?.skills, equals: SessionSkills(required: ["ponytail", "pr-review"], used: ["pr-review"], missing: ["ponytail"]), "skills land")
+        runner.expect(l["s"]?.skills, equals: SessionSkills(required: ["ponytail", "pr-review"], used: ["pr-review"], missing: ["ponytail"], first: ["ponytail"]), "skills land, with the start skills")
+        let older = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"idle","skills":{"required":["a"],"used":[],"missing":["a"]}}]}"#.utf8))!
+        l.apply(snapshot: older, now: t0, graceSeconds: 5)
+        runner.expect(l["s"]?.skills, equals: SessionSkills(required: ["a"], used: [], missing: ["a"]), "a row without start skills still decodes")
         let again = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"idle"}]}"#.utf8))!
         l.apply(snapshot: again, now: t0, graceSeconds: 5)
         runner.expect(l["s"]?.skills == nil, "an older sidecar's row clears it")

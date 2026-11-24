@@ -337,6 +337,7 @@ export const BUILTIN_RULE_IDS = [
   "builtin:go-ahead",
   "builtin:prose-question",
   "builtin:skills-named",
+  "builtin:skills-first",
 ] as const;
 export type BuiltinRuleId = (typeof BUILTIN_RULE_IDS)[number];
 
@@ -406,6 +407,15 @@ const BUILTIN_SEEDS: Record<BuiltinRuleId, { title: string; fingerprint: string;
       "A scope-met close in a tab whose brief carried a `Skills:` line is refused while a named skill never ran this " +
       "session, unless the final message says `Skill not used: <name> — <reason>` or the skill is not installed " +
       "(ADR-0138). Two refusals, then the close is allowed and the bypass logged.",
+  },
+  "builtin:skills-first": {
+    title: "Run the start skills before the first change",
+    fingerprint: "skill.named.unused",
+    message:
+      "In a tab whose brief marks a skill `first` (or whose project lists it under `first` in .marvin/skills.json and " +
+      "the brief names it), an Edit / Write / NotebookEdit inside the checkout and a git commit are refused until that " +
+      "skill has run (ADR-0138 addendum). Reads, searches, graph calls and TodoWrite are never refused. Two refusals " +
+      "a session, then the call is allowed and the bypass logged.",
   },
   "builtin:prose-question": {
     title: "A closing question reaches the user",

@@ -136,8 +136,10 @@ public struct SessionSkills: Codable, Equatable, Sendable {
     public let required: [String]
     public let used: [String]
     public let missing: [String]
-    public init(required: [String], used: [String], missing: [String]) {
-        self.required = required; self.used = used; self.missing = missing
+    /// The start skills the brief (or the project) marked to run before the first change; nil on an older sidecar.
+    public let first: [String]?
+    public init(required: [String], used: [String], missing: [String], first: [String]? = nil) {
+        self.required = required; self.used = used; self.missing = missing; self.first = first
     }
 }
 

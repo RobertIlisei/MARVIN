@@ -51,6 +51,10 @@ interface SkillsJson {
   enabled?: string[];
   source?: "auto" | "user";
   decidedAt?: string;
+  /** Skills that belong at the start of a session when the brief names them
+   *  (ADR-0138 addendum). Read and validated by `readProjectFirstSkills`
+   *  (skill-brief.ts); kept as is across a Skills-pane write. */
+  first?: unknown;
 }
 
 function skillsJsonPath(workDir: string): string {
@@ -80,6 +84,13 @@ export function setEnabledSkills(workDir: string, enabled: string[]): void {
     source: "user",
     decidedAt: new Date().toISOString(),
   };
+  // `first` is the project's own setting, not the pane's: a toggle must not erase it.
+  try {
+    const prior = JSON.parse(readFileSync(skillsJsonPath(workDir), "utf-8")) as SkillsJson | null;
+    if (prior && Array.isArray(prior.first)) payload.first = prior.first;
+  } catch {
+    /* no prior file, or unreadable: nothing to keep */
+  }
   writeFileSync(skillsJsonPath(workDir), JSON.stringify(payload, null, 2) + "\n", "utf-8");
 }
 
