@@ -822,6 +822,7 @@ import SwiftUI
         if let d = e.diff, d.files > 0 { parts.append("+\(d.added) −\(d.removed)") }
         if let p = e.plan, p.total > 0 { parts.append(planLabel(p, e)) }
         if let u = e.graphUsage { parts.append(graphUsageLabel(u)) }
+        if let s = e.skills, !s.required.isEmpty { parts.append("skills \(s.used.count)/\(s.required.count)") }
         if let c = e.costUsd, c > 0 { parts.append(String(format: "$%.2f", c)) }
         if supervisor.isEnabled, let sup = e.supervisor, sup.delegation != .off {
             if sup.stoppedByUser == true { parts.append("stopped — supervisor waits for you") }
@@ -877,6 +878,7 @@ import SwiftUI
             lines.append("graph calls \(u.graphCalls) · Read/Grep \(u.fileReads) · shell reads \(u.bashReads)")
         }
         if let p = e.plan, p.seeded == true { lines.append("plan seeded by MARVIN from the brief") }
+        if let s = e.skills, !s.missing.isEmpty { lines.append("skills the brief named that have not run: " + s.missing.joined(separator: ", ")) }
         return lines.joined(separator: "\n")
     }
 

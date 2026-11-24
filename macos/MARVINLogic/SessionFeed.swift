@@ -131,6 +131,16 @@ public struct SessionGraphUsage: Codable, Equatable, Sendable {
     }
 }
 
+/// ADR-0138 — the skills a session's brief named, which ran, which did not (`skills` on a watch row).
+public struct SessionSkills: Codable, Equatable, Sendable {
+    public let required: [String]
+    public let used: [String]
+    public let missing: [String]
+    public init(required: [String], used: [String], missing: [String]) {
+        self.required = required; self.used = used; self.missing = missing
+    }
+}
+
 /// What a session's live turn is doing now (ADR-0107 addendum). The same
 /// three states the brain renders; `tool` carries the tool's name.
 public enum SessionActivityState: String, Codable, Sendable, Equatable {
@@ -321,6 +331,8 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
     public let plan: SessionPlanProgress?
     /// ADR-0124 — nil from an older sidecar or a session that never read anything.
     public let graphUsage: SessionGraphUsage?
+    /// ADR-0138 — nil from an older sidecar, or when the brief named no skills.
+    public let skills: SessionSkills?
     public let lastTurn: LastTurn?
     /// ADR-0130 — nil from an older sidecar, or when the session waits on nothing.
     public let waitingOn: WaitingOn?

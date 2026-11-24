@@ -62,6 +62,7 @@ import { hasSeededPlan, seededOpenSteps } from "./plan-seed";
 import { readPlanState } from "./plan-state";
 import { PROJECT_SKILLS_PLUGIN } from "./project-skills-plugin";
 import { slugifyWorkDir } from "./projects";
+import { normaliseSkillName, noteSkillRun } from "./skill-brief";
 
 /**
  * Hooks only ever return a deny PermissionResult (or null). We narrow the
@@ -404,6 +405,14 @@ export function recordAllowedTool(
   // staged in the main checkout (a merge in flight there: 50 files and another
   // tab's migration for a one-file docs commit), and one tab's review covered
   // every other tab's commit.
+  // ADR-0138 — every Skill run is recorded, not only the two review skills, so
+  // a practice rule and a brief's `Skills:` line can ask "did it run?" of any
+  // skill. For a non-review skill "this session" means once is enough.
+  const ran = skillRunOf(toolName, toolInput);
+  if (ran) {
+    shipReviewTreeState(ctx.sessionCwd).ran[ran] = { seq: nextShipSeq(), turnId: ctx.turnId };
+    if (ctx.spineSession) noteSkillRun(ctx.spineSession.projectId, ctx.spineSession.sessionId, ran);
+  }
   const reviewSkill = shipReviewSkillOf(toolName, toolInput);
   if (reviewSkill) {
     shipReviewTreeState(ctx.sessionCwd).reviews[reviewSkill] = { seq: nextShipSeq(), turnId: ctx.turnId };
@@ -1750,6 +1759,7 @@ export function checkPracticeRules(
   toolName: string,
   toolInput: Record<string, unknown>,
   measure: boolean,
+  collect: (cwd: string, parsed: CommitCommand) => ShipDiff | null = collectCommitDiff,
 ): RuleEvalResult {
   let result: RuleEvalResult;
   try {
@@ -1763,17 +1773,18 @@ export function checkPracticeRules(
         novelFilesSinceGraph: ctx.novelFilesSinceGraph,
         editedFiles: ctx.editedFilesThisTurn.size,
       },
-      hasSkillRun: (skill) => {
-        const st = shipReviewByTree.get(ctx.sessionCwd);
-        const mark = st?.reviews[skill as ShipReviewSkill];
-        if (!mark) return false;
-        return mark.turnId === ctx.turnId || !st?.lastCommit || mark.seq > st.lastCommit.seq;
+      hasSkillRun: (skill) => hasSkillRunInTree(ctx, skill),
+      commitFiles: () => {
+        const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+        const parsed = parseCommitCommand(cmd);
+        if (!parsed) return null;
+        return collect(ctx.sessionCwd, parsed)?.files ?? null;
       },
       boundaryHit: () => {
         const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
         const parsed = parseCommitCommand(cmd);
         if (!parsed) return false;
-        const diff = collectCommitDiff(ctx.sessionCwd, parsed);
+        const diff = collect(ctx.sessionCwd, parsed);
         if (!diff) return false;
         return classifyShipDiff(diff).some((n) => n.skill === "security-audit");
       },
@@ -1831,6 +1842,8 @@ interface ShipReviewMark {
 
 interface ShipReviewTreeState {
   reviews: Partial<Record<ShipReviewSkill, ShipReviewMark>>;
+  /** ADR-0138 — every skill run in this checkout, by normalised name. */
+  ran: Record<string, ShipReviewMark>;
   lastCommit?: ShipReviewMark;
 }
 
@@ -1845,10 +1858,46 @@ function nextShipSeq(): number {
 function shipReviewTreeState(cwd: string): ShipReviewTreeState {
   let st = shipReviewByTree.get(cwd);
   if (!st) {
-    st = { reviews: {} };
+    st = { reviews: {}, ran: {} };
     shipReviewByTree.set(cwd, st);
   }
   return st;
+}
+
+/** The normalised name of the skill a `Skill` call runs (`ponytail:ponytail` →
+ *  `ponytail`), or null when the call is not one. */
+export function skillRunOf(toolName: string, toolInput: Record<string, unknown>): string | null {
+  if (toolName !== "Skill") return null;
+  const raw = typeof toolInput.skill === "string" ? normaliseSkillName(toolInput.skill) : "";
+  return raw || null;
+}
+
+/**
+ * Has `skill` run in this turn's checkout? The two review skills keep ADR-0104's
+ * freshness rule (a review older than the last commit does not cover a later
+ * turn); every other skill is run once the session has run it (ADR-0138).
+ */
+export function hasSkillRunInTree(ctx: DesignTurnContext, skill: string): boolean {
+  const name = normaliseSkillName(skill);
+  const st = shipReviewByTree.get(ctx.sessionCwd);
+  if (name === "pr-review" || name === "security-audit") {
+    const mark = st?.reviews[name];
+    if (!mark) return false;
+    return mark.turnId === ctx.turnId || !st?.lastCommit || mark.seq > st.lastCommit.seq;
+  }
+  return !!st?.ran[name];
+}
+
+/** Restore what a persisted session already ran (a MARVIN restart emptied the
+ *  in-memory record). Review skills are not restored: their freshness depends
+ *  on the commit order, which a restart also forgot. */
+export function hydrateSkillRuns(ctx: DesignTurnContext, names: readonly string[]): void {
+  const st = shipReviewTreeState(ctx.sessionCwd);
+  for (const raw of names) {
+    const name = normaliseSkillName(raw);
+    if (!name || name === "pr-review" || name === "security-audit" || st.ran[name]) continue;
+    st.ran[name] = { seq: nextShipSeq(), turnId: ctx.turnId };
+  }
 }
 /** Test isolation. */
 export function resetShipReviewState(): void {

@@ -2,6 +2,7 @@ import { areasOfTitle, type ProjectAreas } from "@marvin/graphify-bridge";
 
 import { bashSearchTarget, classifyBashSourceAccess, isInsideCwd, isSourceFile } from "./bash-search";
 import { matchShipBoundary } from "./design-hooks";
+import { normaliseSkillName, parseSkillsLine, parseSkillWaivers } from "./skill-brief";
 import { hasScopeMet, statesScopeNotMet } from "./workflow-guard";
 
 /**
@@ -98,6 +99,9 @@ export const FINGERPRINT_KINDS = [
   // areas, discovered from its graph — MARVIN assumes none.
   "plan.horizontal",
   "plan.vertical",
+  // 2026-11-24 (ADR-0138): the brief named a skill, the session closed
+  // scope-met, and the skill never ran and was never waived.
+  "skill.named.unused",
 ] as const;
 export type FingerprintKind = (typeof FINGERPRINT_KINDS)[number];
 
@@ -120,6 +124,7 @@ export const POLARITY: Record<FingerprintKind, Polarity> = {
   "plan.stale": "failure",
   "plan.horizontal": "failure",
   "plan.vertical": "success",
+  "skill.named.unused": "failure",
   "command.retried": "failure",
   "turn.overbudget": "failure",
   "skill.invoked": "success",
@@ -158,6 +163,7 @@ export const COST_UNITS: Record<FingerprintKind, string> = {
   "plan.stale": "turns",
   "plan.horizontal": "plans",
   "plan.vertical": "plans",
+  "skill.named.unused": "sessions",
   "command.retried": "retries",
   "turn.overbudget": "USD",
   "skill.invoked": "turns",
@@ -1065,6 +1071,40 @@ const turnOverbudget: Extractor = (s) => {
   return out;
 };
 
+/**
+ * ADR-0138 — the skills a brief named against the skills the session ran.
+ * Measured on the first scope-met close only (a skill still to come is not a
+ * miss yet), against the skills run anywhere up to and including that turn, and
+ * a `Skill not used: <name> — <reason>` line in the closing message is a stated
+ * choice, not a miss. Per skill (`skill.named.unused:<name>`), so a rate can be
+ * read for the one skill the loop keeps losing. Own calls only: a subagent's
+ * Skill call is not the session's. A failed call did not run the skill.
+ */
+const skillNamedUnused: Extractor = (s) => {
+  const first = s.turns[0];
+  const required = first && !first.machine ? parseSkillsLine(first.message) : null;
+  if (!required) return [];
+  const ran = new Set<string>();
+  for (const turn of s.turns) {
+    for (const call of ownCalls(turn)) {
+      if (call.name === "Skill" && !call.isError && typeof call.input.skill === "string") ran.add(normaliseSkillName(call.input.skill));
+    }
+    if (!hasScopeMet(turn.lastText)) continue;
+    const waived = parseSkillWaivers(turn.lastText);
+    return required
+      .filter((n) => !ran.has(n) && !waived.has(n))
+      .map((name) => ({
+        fingerprint: `skill.named.unused:${name}`,
+        sessionId: s.sessionId,
+        turnId: turn.turnId,
+        at: turn.startedAt,
+        cost: 1,
+        detail: `the brief named \`${name}\` and the session closed scope-met without running it or saying why not`,
+      }));
+  }
+  return [];
+};
+
 export const EXTRACTORS: Record<FingerprintKind, Extractor> = {
   "ship.unreviewed": shipUnreviewed,
   "graph.first.skipped": graphFirstSkipped,
@@ -1088,12 +1128,15 @@ export const EXTRACTORS: Record<FingerprintKind, Extractor> = {
   "command.adapted": commandAdapted,
   "plan.horizontal": planHorizontal,
   "plan.vertical": planVertical,
+  "skill.named.unused": skillNamedUnused,
 };
 
 /** Bump when an extractor's definition changes; the ledger records it per
  *  finding so a count produced by an older definition is never compared
  *  against one from a newer definition as if they were the same measurement. */
-export const EXTRACTOR_VERSION = 8;
+export const EXTRACTOR_VERSION = 9;
+// v9 (2026-11-24): the new kind skill.named.unused (ADR-0138). No existing kind changed; the bump
+//   makes the next run re-read the transcripts it has already seen, which the new kind needs
 // v8 (2026-10-31): ship.* judges a commit's paths by the ship-review gate's own list
 //   (matchShipBoundary) — CI directories and secrets/ count, a test or spec file no longer does
 // v7 (2026-09-09): a call a gate refused is not a read, a failed command or a commit; a

@@ -25,6 +25,7 @@ import { dirname, join } from "node:path";
 import { discoverAreas, type ProjectAreas } from "@marvin/graphify-bridge";
 
 import { marvinPaths } from "./paths";
+import { matchesAnyGlob, sanitizeGlobs } from "./path-glob";
 import {
   COST_UNITS,
   classifyPlanShape,
@@ -136,6 +137,7 @@ export const RELIABILITY: Record<FingerprintKind, number> = {
   "command.adapted": 1,
   "plan.horizontal": 0.8, // a lexical match against the project's own area vocabulary
   "plan.vertical": 0.8,
+  "skill.named.unused": 1, // a brief's `Skills:` line against the Skill calls: both exact
 };
 
 // ---------------------------------------------------------------------------
@@ -162,8 +164,13 @@ export interface RuleTrigger {
   /** Only when the call is a TodoWrite whose `[N]` steps classify as this
    *  shape against the project's discovered areas. */
   planShape?: "horizontal";
-  /** The discharge path a `deny` needs: any of these skills run this session. */
+  /** The discharge path a `deny` needs: any of these skills run this session.
+   *  Any skill name works (ADR-0138); compared on the last `:` segment, so
+   *  `ponytail` matches the plugin skill `ponytail:ponytail`. */
   requireSkillThisSession?: string[];
+  /** ADR-0138 — only when the call is a commit and at least one file of its
+   *  diff matches one of these globs (`db/migrations/**`, `*.sql`, a directory). */
+  paths?: string[];
   conditions?: RuleCondition[];
 }
 
@@ -309,6 +316,9 @@ export const RULE_TEMPLATES: Record<FingerprintKind, RuleTemplate | null> = {
       "verification — then widen each area in the later milestones.",
   },
   "plan.vertical": null,
+  // ADR-0138: the fix is the sidecar's own gate (`builtin:skills-named`), not a rule a finding
+  // can template. The kind exists to measure whether that gate holds ("Mark fixed" in the pane).
+  "skill.named.unused": null,
 };
 
 export const TIER_ORDER: RuleTier[] = ["prompt", "nudge", "deny"];
@@ -326,6 +336,7 @@ export const BUILTIN_RULE_IDS = [
   "builtin:plan-spine",
   "builtin:go-ahead",
   "builtin:prose-question",
+  "builtin:skills-named",
 ] as const;
 export type BuiltinRuleId = (typeof BUILTIN_RULE_IDS)[number];
 
@@ -387,6 +398,14 @@ const BUILTIN_SEEDS: Record<BuiltinRuleId, { title: string; fingerprint: string;
       "In an Agent-mode tab whose plan MARVIN seeded from the brief, a turn that ends on \"Shall I go ahead with step " +
       "1?\" (one go-ahead question, no alternative offered, no AskUserQuestion) is blocked once and continues in the " +
       "same request (ADR-0132, ADR-0067). Ships at nudge; promote to deny here.",
+  },
+  "builtin:skills-named": {
+    title: "Run the skills the brief names",
+    fingerprint: "skill.named.unused",
+    message:
+      "A scope-met close in a tab whose brief carried a `Skills:` line is refused while a named skill never ran this " +
+      "session, unless the final message says `Skill not used: <name> — <reason>` or the skill is not installed " +
+      "(ADR-0138). Two refusals, then the close is allowed and the bypass logged.",
   },
   "builtin:prose-question": {
     title: "A closing question reaches the user",
@@ -672,8 +691,41 @@ interface RulesFile {
   rules: PracticeRule[];
 }
 
+/** Skill names a rule may carry: the shape a skill is installed under. */
+const SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/;
+const RULE_SKILLS_MAX = 10;
+
+/** The lists of a trigger that reach a matcher, clamped. The rules file is
+ *  user data (and a project can influence it): bounded count and length, no
+ *  entry that is not the right shape. Everything else on the rule is read as
+ *  before. Exported for tests. */
+export function sanitizeTrigger(t: RuleTrigger | null): RuleTrigger | null {
+  if (!t || typeof t !== "object") return t;
+  const out: RuleTrigger = { ...t };
+  // A list the user wrote that has nothing valid left must not widen the rule
+  // (a `paths` rule with no paths would fire on every commit): it never fires.
+  const NEVER = "(?!)";
+  if ("paths" in t) {
+    const paths = sanitizeGlobs(t.paths);
+    delete out.paths;
+    if (paths.length > 0) out.paths = paths;
+    else out.tool = NEVER;
+  }
+  if ("requireSkillThisSession" in t) {
+    const raw: unknown = t.requireSkillThisSession;
+    const skills = Array.isArray(raw)
+      ? raw.filter((s): s is string => typeof s === "string" && SKILL_NAME.test(s)).slice(0, RULE_SKILLS_MAX)
+      : [];
+    delete out.requireSkillThisSession;
+    if (skills.length > 0) out.requireSkillThisSession = skills;
+    else if (Array.isArray(raw) && raw.length > 0) out.tool = NEVER;
+  }
+  return out;
+}
+
 export function readRules(): PracticeRule[] {
-  return readJson<RulesFile>(practicePaths.rules(), { version: 1, rules: [] }).rules;
+  const rules = readJson<RulesFile>(practicePaths.rules(), { version: 1, rules: [] }).rules;
+  return Array.isArray(rules) ? rules.map((r) => (r?.trigger ? { ...r, trigger: sanitizeTrigger(r.trigger) } : r)) : [];
 }
 
 export function writeRules(rules: PracticeRule[]): void {
@@ -1279,6 +1331,69 @@ export function approveFinding(
   return { ok: true, rule };
 }
 
+export interface NewSkillRule {
+  /** Skills any of which discharges the rule (names as the brief writes them). */
+  skills: string[];
+  /** Globs against the commit's files; empty = every commit. */
+  paths?: string[];
+  tier?: "nudge" | "deny";
+  title?: string;
+  message?: string;
+  global?: boolean;
+}
+
+/**
+ * ADR-0138 — create a rule that asks for a skill on a commit, optionally only
+ * when the commit touches given paths. The trigger is built here, not taken
+ * from the caller, so the route cannot be used to plant an arbitrary regex.
+ * A rule made this way is the user's own, not a finding's, so it has no
+ * ledger entry to verify; its fire / bypass counters still travel with it.
+ */
+export function createSkillRule(
+  projectId: string,
+  spec: NewSkillRule,
+): { ok: true; rule: PracticeRule } | { ok: false; error: string } {
+  const skills = Array.isArray(spec.skills)
+    ? [...new Set(spec.skills.filter((s): s is string => typeof s === "string" && SKILL_NAME.test(s.trim())).map((s) => s.trim()))].slice(0, RULE_SKILLS_MAX)
+    : [];
+  if (skills.length === 0) return { ok: false, error: "name at least one skill" };
+  const paths = sanitizeGlobs(spec.paths ?? []);
+  if (Array.isArray(spec.paths) && spec.paths.length > 0 && paths.length === 0) return { ok: false, error: "no usable path pattern" };
+  const tier = spec.tier === "nudge" ? "nudge" : "deny";
+  const where = paths.length > 0 ? ` touching ${paths.join(", ")}` : "";
+  const names = skills.map((s) => `\`${s}\``).join(" or ");
+  const now = new Date().toISOString();
+  const rule: PracticeRule = {
+    id: newRuleId(),
+    fingerprint: `manual:skill:${skills.join("+")}`.slice(0, 120),
+    title: (spec.title?.trim() || `Run ${skills.join(" or ")} before a commit${where}`).slice(0, 200),
+    tier,
+    trigger: {
+      tool: "^Bash$",
+      field: "command",
+      pattern: "\\bgit\\b[^|;&\\n]*\\bcommit\\b",
+      ...(paths.length > 0 ? { paths } : {}),
+      requireSkillThisSession: skills,
+    },
+    message: (
+      spec.message?.trim() ||
+      `practice rule: this commit${where} needs ${names}, and it has not run this session. ` +
+        `Run ${skills.map((s) => `\`Skill { skill: "${s}" }\``).join(" or ")} first, act on what it says, then commit.`
+    ).slice(0, 1200),
+    status: "active",
+    scope: { projectId: spec.global ? null : projectId },
+    provenance: { findingId: "manual", distinctSessions: 0, costTotal: 0, value: 0 },
+    metrics: { fired: 0, lastFiredAt: null, bypasses: 0 },
+    createdAt: now,
+    acceptedAt: now,
+    updatedAt: now,
+  };
+  const rules = readRules();
+  rules.push(rule);
+  writeRules(rules);
+  return { ok: true, rule };
+}
+
 /** "I changed MARVIN's code for this." Starts the same verification clock a
  *  rule gets, without a rule: the fix must hold across `verifyWindow`
  *  sessions or the finding comes back as `regressed`. */
@@ -1440,6 +1555,9 @@ export interface RuleEvalContext {
   hasSkillRun: (skill: string) => boolean;
   /** Lazily computed by the caller — only invoked when a rule needs it. */
   boundaryHit: () => boolean;
+  /** ADR-0138 — the files the call's commit would seal, lazily; null when the
+   *  call is not a commit or its diff could not be read. Only a `paths` rule asks. */
+  commitFiles?: () => string[] | null;
   /** The project's discovered areas, lazily — only a `planShape` rule asks. */
   areas?: () => ProjectAreas | null;
   /** Denies already issued this turn, per rule id. Mutated. */
@@ -1474,6 +1592,10 @@ function triggerMatches(t: RuleTrigger, ctx: RuleEvalContext): boolean {
     if (t.conditions && !t.conditions.every((c) => conditionHolds(c, ctx.counters))) return false;
     if (t.requireSkillThisSession && t.requireSkillThisSession.some((s) => ctx.hasSkillRun(s))) return false;
     if (t.boundaryPaths && !ctx.boundaryHit()) return false;
+    if (t.paths && t.paths.length > 0) {
+      const files = ctx.commitFiles?.();
+      if (!files || !files.some((f) => matchesAnyGlob(f, t.paths ?? []))) return false;
+    }
     if (t.planShape) {
       const steps = planStepsOf(ctx.input.todos);
       if (steps.length < PLAN_SHAPE_MIN_STEPS) return false;

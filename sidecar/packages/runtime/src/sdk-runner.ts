@@ -66,6 +66,7 @@ import {
   ADVISOR_SUBAGENT_TYPE,
   clearTurnDesignContext,
   createTurnDesignContext,
+  hydrateSkillRuns,
   type DesignTurnContext,
   logDesignTurnSummary,
   makeDesignHooksPreToolUse,
@@ -94,6 +95,7 @@ import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import type { ChainCapRefusal } from "./session-attention";
 import { readSessionMeta, type SessionTree } from "./session-meta";
+import { noteSkillBlock, seedTurnSkills, skillCloseFacts, skillsRunOf } from "./skill-brief";
 import { saveSlashCommands } from "./slash-commands";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
 import { backlogCloseCandidates, makeTurnCloseStopHook } from "./turn-close-hook";
@@ -2352,6 +2354,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const spineSession =
     input.projectId && input.marvinSessionId ? { projectId: input.projectId, sessionId: input.marvinSessionId } : undefined;
   const designCtx = createTurnDesignContext(turnId, workDir, { sessionCwd: cwd, spineSession });
+  // ADR-0138 — a brief that names skills gets its list recorded by the sidecar,
+  // and what the session already ran (before a restart) is restored, so a rule
+  // or the close check never asks again for a skill that ran.
+  if (spineSession) {
+    seedTurnSkills({ projectId: spineSession.projectId, sessionId: spineSession.sessionId, message, turnId });
+    hydrateSkillRuns(designCtx, skillsRunOf(spineSession.projectId, spineSession.sessionId));
+  }
   // ADR-0124 C — the watch feed reads this turn's graph/file counts live.
   if (input.projectId && input.marvinSessionId) {
     registerLiveGraphUsage(input.projectId, input.marvinSessionId, () => ({
@@ -2408,6 +2417,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // holds, and open items that name a file this turn edited.
     backlog: async () =>
       backlogCloseCandidates(await listBacklog(workDir), input.marvinSessionId ?? "", [...designCtx.editedFilesThisTurn]),
+    // ADR-0138 — the skills the brief named, and what this session ran.
+    skills: () => (spineSession ? skillCloseFacts(spineSession.projectId, spineSession.sessionId, workDir) : null),
+    onSkillBlock: () => {
+      if (spineSession) noteSkillBlock(spineSession.projectId, spineSession.sessionId);
+    },
     onFired: () => {
       /* telemetry lives in the hook; nothing else to record per turn */
     },
