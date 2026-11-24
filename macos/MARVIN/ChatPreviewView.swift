@@ -2844,44 +2844,54 @@ final class ChatPreviewModel {
             GeometryReader { geo in
                 let ids = model.openTabSessionIds
                 let count = max(1, ids.count + (model.loadedSessionId == nil ? 1 : 0))
-                let available = max(0, geo.size.width - 16)
-                let tabWidth = min(190, max(84, floor(available / CGFloat(count)) - 4))
-                ScrollViewReader { proxy in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 4) {
-                            // A brand-new chat (nothing loaded yet) shows as its
-                            // own active "New chat" tab until the first turn mints
-                            // a session id that joins the open tabs.
-                            if model.loadedSessionId == nil {
-                                chatTab(title: "New chat", systemImage: "bubble.left.fill",
-                                        active: true, width: tabWidth,
-                                        onSelect: {}, onClose: nil)
+                // W-07 — tabs compress to a readable minimum, then scroll.
+                let metrics = TabStripLayout.metrics(tabCount: count, available: geo.size.width - 16)
+                let tabWidth = metrics.tabWidth
+                // A tab that needs the person must not scroll out of sight: it
+                // is repeated beside the strip while the strip scrolls.
+                let pinned = TabStripLayout.pinned(
+                    ids.map { (id: $0, state: SessionRegistry.shared.rowState($0)) },
+                    fitsAll: metrics.fitsAll
+                )
+                HStack(spacing: 4) {
+                    ScrollViewReader { proxy in
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 4) {
+                                // A brand-new chat (nothing loaded yet) shows as its
+                                // own active "New chat" tab until the first turn mints
+                                // a session id that joins the open tabs.
+                                if model.loadedSessionId == nil {
+                                    chatTab(title: "New chat", systemImage: "bubble.left.fill",
+                                            active: true, width: tabWidth,
+                                            onSelect: {}, onClose: nil)
+                                }
+                                ForEach(ids, id: \.self) { sid in
+                                    chatTab(
+                                        title: tabTitle(forSessionId: sid),
+                                        systemImage: "bubble.left",
+                                        active: sid == model.loadedSessionId,
+                                        state: SessionRegistry.shared.rowState(sid),
+                                        longWait: SessionRegistry.shared.entry(sid)?
+                                            .isLongWait(now: SessionRegistry.shared.now) ?? false,
+                                        width: tabWidth,
+                                        onSelect: {
+                                            model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
+                                        },
+                                        onClose: { requestCloseTab(sid) }
+                                    )
+                                    .id(sid)
+                                }
                             }
-                            ForEach(ids, id: \.self) { sid in
-                                chatTab(
-                                    title: tabTitle(forSessionId: sid),
-                                    systemImage: "bubble.left",
-                                    active: sid == model.loadedSessionId,
-                                    state: SessionRegistry.shared.rowState(sid),
-                                    longWait: SessionRegistry.shared.entry(sid)?
-                                        .isLongWait(now: SessionRegistry.shared.now) ?? false,
-                                    width: tabWidth,
-                                    onSelect: {
-                                        model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
-                                    },
-                                    onClose: { requestCloseTab(sid) }
-                                )
-                                .id(sid)
+                            .padding(.horizontal, 8)
+                        }
+                        .onChange(of: model.loadedSessionId) { _, sid in
+                            guard let sid else { return }
+                            MarvinMotion.with(MarvinTheme.transition) {
+                                proxy.scrollTo(sid, anchor: .center)
                             }
                         }
-                        .padding(.horizontal, 8)
                     }
-                    .onChange(of: model.loadedSessionId) { _, sid in
-                        guard let sid else { return }
-                        MarvinMotion.with(MarvinTheme.transition) {
-                            proxy.scrollTo(sid, anchor: .center)
-                        }
-                    }
+                    ForEach(pinned, id: \.self) { sid in pinnedChip(sid) }
                 }
             }
             .frame(height: 32)
@@ -3254,7 +3264,8 @@ final class ChatPreviewModel {
                 Button {
                     model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
                 } label: {
-                    Label(overflowTitle(sid), systemImage: sid == model.loadedSessionId ? "checkmark" : "bubble.left")
+                    // W-07 — the list that exists to find a tab shows what each one is doing.
+                    Label(overflowTitle(sid), systemImage: SessionStateLabel.symbol(SessionRegistry.shared.rowState(sid)))
                 }
             }
         } label: {
@@ -3273,11 +3284,38 @@ final class ChatPreviewModel {
     }
 
     private func overflowTitle(_ sid: String) -> String {
+        let registry = SessionRegistry.shared
         var t = tabTitle(forSessionId: sid)
-        if let b = SessionRegistry.shared.entry(sid)?.tree?.branch, b.hasPrefix("marvin/tab/") {
+        if let b = registry.entry(sid)?.tree?.branch, b.hasPrefix("marvin/tab/") {
             t += "  ·  " + SessionTitle.humanised(branch: b)
         }
+        t += "  —  " + SessionStateLabel.caption(registry.rowState(sid), waitingSince: registry.entry(sid)?.waitSince, now: registry.now)
+        if sid == model.loadedSessionId { t += "  (open)" }
         return t
+    }
+
+    /// A tab that needs the person, kept in view while the strip scrolls (W-07).
+    private func pinnedChip(_ sid: String) -> some View {
+        let title = SessionTabTitle.display(baseTabTitle(forSessionId: sid), maxLength: 14)
+        return Button {
+            model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: SessionStateLabel.symbol(.needsYou(1)))
+                    .font(.system(size: 9))
+                Text(title.isEmpty ? "Needs you" : title)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Color.black.opacity(0.85))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.orange))
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .help("Needs you: \(tabTitle(forSessionId: sid))")
+        .accessibilityLabel("Open the tab that needs you: \(tabTitle(forSessionId: sid))")
     }
 
     /// ADR-0107 — one tint per session state, shared with the Sessions pane.
@@ -3321,7 +3359,10 @@ final class ChatPreviewModel {
         // by the attachment's path; the words after it are the title.
         if let raw = s.firstUserMessage?.replacingOccurrences(of: "\n", with: " ") {
             let msg = SessionTitle.stripAttachmentMentions(raw)
-            if !msg.isEmpty { return msg.count > 26 ? String(msg.prefix(24)) + "…" : msg }
+            // W-07 — a brief opens with "# NAME" or a path; the words that
+            // identify the tab are what is left once that is stripped.
+            let short = SessionTabTitle.display(msg, maxLength: 40)
+            if !short.isEmpty { return short }
         }
         if let branch = SessionRegistry.shared.entry(sid)?.worktree?.branch, branch.hasPrefix("marvin/tab/") {
             return SessionTitle.humanised(branch: branch)

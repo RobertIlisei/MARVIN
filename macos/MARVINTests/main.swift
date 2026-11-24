@@ -6162,6 +6162,60 @@ runner.suite("session-finished-review") {
     }
 }
 
+runner.suite("session-tab-strip") {
+    runner.test("a heading, emphasis and list marks are not part of a title") {
+        runner.expect(SessionTabTitle.display("# GATE-LANE-WIDTH \u{2014} gate lane width more than one full suite", maxLength: 24), equals: "GATE-LANE-WIDTH \u{2014} gate\u{2026}", "heading, cut at a word")
+        runner.expect(SessionTabTitle.display("Fix the login bug"), equals: "Fix the login bug", "short stays")
+        runner.expect(SessionTabTitle.display("> **Fix** the `thing`"), equals: "Fix the thing", "quote, bold, code")
+        runner.expect(SessionTabTitle.display("## 1. Plan the release"), equals: "Plan the release", "heading and number")
+        runner.expect(SessionTabTitle.display("- [ ] write tests"), equals: "write tests", "checkbox")
+    }
+    runner.test("the first line with words names the tab") {
+        runner.expect(SessionTabTitle.display("\n\n# Title\nbody text"), equals: "Title", "blank lines skipped")
+        runner.expect(SessionTabTitle.display("---\n===\nreal words"), equals: "real words", "rules are not words")
+        runner.expect(SessionTabTitle.display("###"), equals: "", "nothing to name it by")
+        runner.expect(SessionTabTitle.display(""), equals: "", "empty")
+    }
+    runner.test("a path is its file name; other slashes are left alone") {
+        runner.expect(SessionTabTitle.display("briefs/v31/ux-public-pages.md"), equals: "ux public pages", "relative path")
+        runner.expect(SessionTabTitle.display("Read briefs/v31/gate-lane-width.md and do it", maxLength: 60), equals: "Read gate lane width and do it", "inside a sentence")
+        runner.expect(SessionTabTitle.display("/Users/someone/proj/docs/plans/supervisor.md please"), equals: "supervisor please", "absolute path")
+        runner.expect(SessionTabTitle.display("~/notes.md"), equals: "notes", "home path")
+        runner.expect(SessionTabTitle.display("choose and/or either"), equals: "choose and/or either", "and/or is not a path")
+        runner.expect(SessionTabTitle.display("see https://example.com/a/b now", maxLength: 60), equals: "see https://example.com/a/b now", "a URL is not a path")
+    }
+    runner.test("a cut lands on a word, drops dangling separators, and never exceeds the limit") {
+        runner.expect(SessionTabTitle.display("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", maxLength: 10), equals: "aaaaaaaaa\u{2026}", "one long word is cut hard")
+        runner.expect(SessionTabTitle.display("alpha beta \u{2014} gamma delta", maxLength: 13), equals: "alpha beta\u{2026}", "no dash left hanging")
+        runner.expect(SessionTabTitle.display("exactly ten", maxLength: 11), equals: "exactly ten", "fits exactly")
+    }
+    runner.test("tabs share the width, never get narrower than the minimum, and say when they run past the edge") {
+        runner.expect(TabStripLayout.metrics(tabCount: 3, available: 800), equals: TabStripLayout.Metrics(tabWidth: 190, fitsAll: true), "few tabs are capped")
+        runner.expect(TabStripLayout.metrics(tabCount: 5, available: 800), equals: TabStripLayout.Metrics(tabWidth: 156, fitsAll: true), "shared")
+        runner.expect(TabStripLayout.metrics(tabCount: 14, available: 754), equals: TabStripLayout.Metrics(tabWidth: 128, fitsAll: false), "fourteen tabs scroll at the minimum")
+        runner.expect(TabStripLayout.metrics(tabCount: 0, available: 500).fitsAll, "no tabs fit")
+        runner.expect(TabStripLayout.metrics(tabCount: 4, available: 0), equals: TabStripLayout.Metrics(tabWidth: 128, fitsAll: false), "no width yet")
+    }
+    runner.test("only tabs that need the person are pinned, only when the strip scrolls, and in strip order") {
+        let tabs: [(id: String, state: SessionRowState)] = [("a", .idle), ("b", .needsYou(1)), ("c", .working), ("d", .needsYou(2)), ("e", .failed), ("f", .needsYou(1)), ("g", .needsYou(1))]
+        runner.expect(TabStripLayout.pinned(tabs, fitsAll: true), equals: [], "everything is visible already")
+        runner.expect(TabStripLayout.pinned(tabs, fitsAll: false), equals: ["b", "d", "f"], "needs-you only, capped at three")
+        runner.expect(TabStripLayout.pinned(tabs, fitsAll: false, limit: 5), equals: ["b", "d", "f", "g"], "limit is a parameter")
+        runner.expect(TabStripLayout.pinned([("x", .failed), ("y", .waiting)], fitsAll: false), equals: [], "none needs the person")
+    }
+    runner.test("every state has a symbol and words, and a wait says how long") {
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        let states: [SessionRowState] = [.needsYou(1), .working, .interrupted, .failed, .waiting, .finished, .done, .idle, .draft]
+        runner.expect(Set(states.map { SessionStateLabel.symbol($0) }).count, equals: states.count, "one symbol per state")
+        runner.expect(states.allSatisfy { !SessionStateLabel.symbol($0).isEmpty && !SessionStateLabel.caption($0, waitingSince: nil, now: now).isEmpty }, "none is blank")
+        runner.expect(SessionStateLabel.caption(.waiting, waitingSince: now.addingTimeInterval(-46 * 60), now: now), equals: "waiting 46 min", "wait with age")
+        runner.expect(SessionStateLabel.caption(.waiting, waitingSince: nil, now: now), equals: "waiting", "wait without a start")
+        runner.expect(SessionStateLabel.caption(.needsYou(1), waitingSince: nil, now: now), equals: "needs you", "one")
+        runner.expect(SessionStateLabel.caption(.needsYou(3), waitingSince: nil, now: now), equals: "needs you (3)", "several")
+        runner.expect(SessionStateLabel.caption(.finished, waitingSince: nil, now: now), equals: "finished, not reviewed", "finished")
+    }
+}
+
 runner.suite("session-fleet") {
     let now = Date(timeIntervalSince1970: 2_000_000)
     func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
