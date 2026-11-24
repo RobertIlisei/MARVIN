@@ -1404,6 +1404,22 @@ describe("ship-review gate (ADR-0104)", () => {
     expect(checkShipReview(ctx, "Bash", { command: "git commit -m x" }, collect)).toBeNull();
   });
 
+  // ADR-0135: 134 commits in 95 sessions of one project sealed a boundary path
+  // with no review; the tab took the two refusals and committed on the third.
+  it("never lets a boundary-path commit through on the cap: the review is the only way", () => {
+    const ctx = createTurnDesignContext("t-0135-a", cwd);
+    const collect = diffOf([".env"]);
+    for (let i = 0; i < SHIP_REVIEW_MAX_DENIES + 3; i++) {
+      expect(checkShipReview(ctx, "Bash", { command: "git commit -m x" }, collect)?.behavior).toBe("deny");
+    }
+    const past = checkShipReview(ctx, "Bash", { command: "git commit -m x" }, collect);
+    expect(past?.message).toContain("stop and tell the user");
+    expect(past?.message).not.toContain("the commit is allowed");
+    recordAllowedTool(ctx, "Skill", { skill: "security-audit" });
+    recordAllowedTool(ctx, "Skill", { skill: "pr-review" });
+    expect(checkShipReview(ctx, "Bash", { command: "git commit -m x" }, collect)).toBeNull();
+  });
+
   it("fails open when the diff cannot be read, and ignores non-commit shell", () => {
     const ctx = createTurnDesignContext("t-0104-d", cwd);
     expect(checkShipReview(ctx, "Bash", { command: "git commit -m x" }, () => null)).toBeNull();

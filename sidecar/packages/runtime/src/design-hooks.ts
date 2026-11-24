@@ -176,7 +176,8 @@ export interface DesignTurnContext {
   /** ADR-0104 — ship-review denies fired this turn, per skill. Capped at
    *  `SHIP_REVIEW_MAX_DENIES`: two refusals carry the instruction; a third
    *  would only stall a turn whose skill call is failing for some other
-   *  reason, so the commit is then allowed and the bypass logged. */
+   *  reason, so the commit is then allowed and the bypass logged. ADR-0135:
+   *  not on a security-boundary diff, which is refused every time. */
   shipReviewDenies: Partial<Record<ShipReviewSkill, number>>;
   /** ADR-0121 — commits refused this turn for want of `graph_change_impact`
    *  (capped like the review skills). */
@@ -2040,6 +2041,9 @@ export function matchShipBoundary(rel: string): string | null {
 export interface ShipReviewNeed {
   skill: ShipReviewSkill;
   reason: string;
+  /** ADR-0135 — the diff touches a security boundary: the per-turn cap does
+   *  not apply, the review is the only way through. */
+  boundary?: boolean;
 }
 
 /**
@@ -2063,8 +2067,8 @@ export function classifyShipDiff(diff: ShipDiff): ShipReviewNeed[] {
     const more = boundary.length > 4 ? ` and ${boundary.length - 4} more` : "";
     const reason = `touches ${named}${more}`;
     return [
-      { skill: "security-audit", reason },
-      { skill: "pr-review", reason },
+      { skill: "security-audit", reason, boundary: true },
+      { skill: "pr-review", reason, boundary: true },
     ];
   }
   if (files.length > SHIP_REVIEW_PR_FILES || diff.changedLines > SHIP_REVIEW_PR_LINES) {
@@ -2114,7 +2118,16 @@ export function checkShipReview(
   const unmet = needs.filter((n) => !shipReviewSatisfied(st, n.skill, ctx.turnId));
   if (unmet.length === 0) return null;
 
-  const stillDeniable = unmet.filter((n) => (ctx.shipReviewDenies[n.skill] ?? 0) < SHIP_REVIEW_MAX_DENIES);
+  // ADR-0135 — the cap exists so a failing skill call cannot stall a turn. On
+  // a boundary path it was the way round the gate: 134 commits in 95 sessions
+  // of one project took two refusals and committed on the third. A boundary
+  // need is refused every time; past the cap the message changes from "run
+  // it" to "stop and tell the user", who still holds the tier in the Practice
+  // pane and MARVIN_DESIGN_HOOKS=measure.
+  const stillDeniable = unmet.filter(
+    (n) => n.boundary || (ctx.shipReviewDenies[n.skill] ?? 0) < SHIP_REVIEW_MAX_DENIES,
+  );
+  const pastCap = stillDeniable.some((n) => (ctx.shipReviewDenies[n.skill] ?? 0) >= SHIP_REVIEW_MAX_DENIES);
   if (stillDeniable.length === 0) {
     logDesignHookEvent({
       kind: "ship.review.bypass",
@@ -2145,9 +2158,17 @@ export function checkShipReview(
       `${calls}\n\n` +
       "then act on its findings and re-run the commit. A review this turn covers every " +
       "commit this turn; one from an earlier turn holds until the next commit. Docs-only " +
-      "and lockfile-only commits are exempt. (MARVIN_DESIGN_HOOKS=measure logs instead of " +
-      `denying; after ${SHIP_REVIEW_MAX_DENIES} refusals in one turn the commit is allowed and ` +
-      "the bypass is logged.)",
+      "and lockfile-only commits are exempt. " +
+      (stillDeniable.some((n) => n.boundary)
+        ? pastCap
+          ? "This diff touches a security boundary, so the refusal does not lift by repetition. " +
+            "If the review skill cannot run, stop and tell the user: they can run the review, commit " +
+            "themselves, or lower this gate in the Practice pane."
+          : "This diff touches a security boundary: the review is the only way through, however " +
+            "many times the commit is retried."
+        : "(MARVIN_DESIGN_HOOKS=measure logs instead of " +
+          `denying; after ${SHIP_REVIEW_MAX_DENIES} refusals in one turn the commit is allowed and ` +
+          "the bypass is logged.)"),
     interrupt: false,
   };
 }
