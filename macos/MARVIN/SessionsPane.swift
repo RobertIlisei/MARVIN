@@ -7,8 +7,13 @@
 // registry or the bridge's one-shot tab request. One transcript stays on
 // screen; this pane tells you which one deserves it next.
 //
-// Sections follow attention: Needs you, Working, Interrupted, Failed, Idle
-// (collapsing after a timeout, like Claude Code's agent panel), Recent.
+// Groups follow attention: Needs you, Working, Waiting, Finished, Ready to
+// integrate, Idle (collapsing after a timeout, like Claude Code's agent panel),
+// History. Every group folds from a disclosure header that keeps its count
+// visible, the fold is remembered per project, and the keyboard walks headers
+// and rows together (left/right fold, Space and Return on a header, up/down
+// move). Finished is quiet by default: five rows, "Show all", one bulk "Mark
+// all reviewed" with an Undo (`FinishedPolicy`, `ReviewMarks`).
 
 import AppKit
 import MARVINLogic
@@ -21,6 +26,13 @@ import SwiftUI
     /// harness mount the pane with a model it filled itself.
     var supervisor: SupervisorModel = .shared
     @State private var expandedIdle = false
+    /// "Show all N" in Finished. Per launch: the quiet view is the default one.
+    @State private var showAllFinished: Bool
+
+    init(supervisor: SupervisorModel? = nil, showAllFinished: Bool = false) {
+        self.supervisor = supervisor ?? .shared
+        _showAllFinished = State(initialValue: showAllFinished)
+    }
     @Namespace private var escalationRotor
     /// ADR-0112 — keyboard focus in the list: ↑ ↓ move, ⏎ switches.
     @State private var focusedId: String? = nil
@@ -68,6 +80,7 @@ import SwiftUI
             LazyVStack(alignment: .leading, spacing: 10) {
                 header
                 restartBanner
+                reviewUndoStrip
                 // Brief §13.7 — one line; the settings, the log and the
                 // conversation live in the Supervisor workspace it opens.
                 if bridge.activeProjectId != nil, let line = SupervisorPaneLine.make(supervisorStrip) {
@@ -92,9 +105,9 @@ import SwiftUI
                     // Needs you: both mean a human is required, and each keeps
                     // its own glyph.
                     needsYouSection
-                    section("Working", rows(where: { $0 == .working }), tint: GitDecorationColor.modified)
-                    finishedSection
+                    workingSection
                     waitingSection
+                    finishedSection
                     integrateSection
                     idleSection
                     recentSection
@@ -117,13 +130,32 @@ import SwiftUI
         .onKeyPress(.upArrow) { moveFocus(-1); return .handled }
         .onKeyPress(.downArrow) { moveFocus(1); return .handled }
         .onKeyPress(.return) {
+            if let g = focusedGroup { toggle(g); return .handled }
             guard let id = focusedId, !id.hasPrefix("sup:") else { return .ignored }
             supervisor.showTab(id)
             return .handled
         }
-        // Space expands or collapses the focused row's escalation card — how an
-        // outward act's chip becomes available. Never a consent (§9.1).
+        // Source-list behaviour: right opens a folded group (then steps into
+        // it), left folds an open one, and from a row goes to its group's header.
+        .onKeyPress(.rightArrow) {
+            guard let g = focusedGroup else { return .ignored }
+            if registry.isGroupCollapsed(g) { registry.setGroup(g, collapsed: false) } else { moveFocus(1) }
+            return .handled
+        }
+        .onKeyPress(.leftArrow) {
+            if let g = focusedGroup {
+                if !registry.isGroupCollapsed(g) { registry.setGroup(g, collapsed: true) }
+                return .handled
+            }
+            guard let id = focusedId, let g = groups.first(where: { $0.rowIds.contains(id) }) else { return .ignored }
+            focusedId = Self.headerId(g.id)
+            return .handled
+        }
+        // Space folds the focused header; on a row it expands or collapses the
+        // row's escalation card — how an outward act's chip becomes
+        // available. Never a consent (§9.1).
         .onKeyPress(.space) {
+            if let g = focusedGroup { toggle(g); return .handled }
             guard let item = focusedEscalation else { return .ignored }
             toggleCard(item.id)
             return .handled
@@ -191,15 +223,78 @@ import SwiftUI
         let escalated = Set(supervisorLayout.sessionIds)
         return rows.filter { match($0.state) && !escalated.contains($0.id) }
     }
-    /// ADR-0112 — the order the keyboard walks: as displayed.
+    // MARK: - Groups, as displayed
+
+    /// One group as the pane draws it: its count (header) and the rows the
+    /// keyboard can land on, in display order (a folded group offers none).
+    private struct GroupModel {
+        let id: SessionGroupId
+        let count: Int
+        let rowIds: [String]
+    }
+
+    static func headerId(_ id: SessionGroupId) -> String { "grp:" + id.rawValue }
+
+    private var focusedGroup: SessionGroupId? {
+        guard let f = focusedId, f.hasPrefix("grp:") else { return nil }
+        return SessionGroupId(rawValue: String(f.dropFirst(4)))
+    }
+
+    private func toggle(_ id: SessionGroupId) {
+        focusedId = Self.headerId(id)
+        listFocused = true
+        registry.toggleGroup(id)
+    }
+
+    private var workingRows: [Row] { rows(where: { $0 == .working }).sorted { $0.state.sortRank < $1.state.sortRank } }
+    private var waitingRows: [Row] { SessionWait.oldestFirst(rows(where: { $0 == .waiting })) { $0.entry.waitSince } }
+    private var finishedRows: [Row] { rows(where: { $0 == .finished }) }
+    private var finishedPlan: FinishedPolicy.Plan {
+        FinishedPolicy.plan(finishedRows.map {
+            FinishedPolicy.Row(id: $0.id, endedAt: $0.entry.lastTurnAt, hasTab: registry.isOpenTab($0.id), merged: $0.entry.isMergedOrGone)
+        }, showAll: showAllFinished)
+    }
+    private var idleRows: [Row] { rows(where: { $0 == .idle || $0 == .draft || $0 == .done }) }
+    private var idlePartition: SessionIdleCollapse.Partition {
+        SessionIdleCollapse.partition(
+            idleRows.map { SessionIdleCollapse.Row(id: $0.id, state: $0.state, idleSince: $0.entry.lastTurnAt) },
+            selected: bridge.activeMarvinSessionId,
+            now: registry.now,
+            expanded: expandedIdle
+        )
+    }
+
+    /// Every group with something in it, in `SessionGroupId.displayOrder`. The
+    /// drawing and the keyboard both read this, so they cannot disagree.
+    private var groups: [GroupModel] {
+        SessionGroupId.displayOrder.compactMap { id -> GroupModel? in
+            let open = !registry.isGroupCollapsed(id)
+            func model(_ count: Int, _ ids: @autoclosure () -> [String]) -> GroupModel? {
+                count > 0 ? GroupModel(id: id, count: count, rowIds: open ? ids() : []) : nil
+            }
+            switch id {
+            case .needsYou:
+                let tabless = supervisorLayout.tabless
+                guard !needsYouRows.isEmpty || !tabless.isEmpty else { return nil }
+                let plain = needsYouRows.filter { supervisorLayout.byTab[$0.id] == nil }.count
+                let sorted = needsYouRows.sorted { $0.state.sortRank < $1.state.sortRank }
+                return GroupModel(id: id, count: supervisorLayout.total + plain,
+                                  rowIds: open ? tabless.map { "sup:" + $0.id } + sorted.map(\.id) : [])
+            case .working: return model(workingRows.count, workingRows.map(\.id))
+            case .waiting: return model(waitingRows.count, waitingRows.map(\.id))
+            case .finished: return model(finishedRows.count, finishedPlan.shown)
+            case .integrate: return model(registry.readyEntries.count, registry.readyEntries.map(\.id))
+            case .idle:
+                let partition = idlePartition
+                return model(idleRows.count, idleRows.filter { partition.visible.contains($0.id) }.map(\.id))
+            case .history: return model(recent.count, [])
+            }
+        }
+    }
+
+    /// ADR-0112 — the order the keyboard walks: as displayed, headers included.
     private var keyboardOrder: [String] {
-        supervisorLayout.tabless.map { "sup:" + $0.id } + needsYouRows.map(\.id)
-            + rows.filter { r in !needsYouRows.contains { $0.id == r.id } }
-                .sorted { a, b in
-                    if a.state.sortRank != b.state.sortRank { return a.state.sortRank < b.state.sortRank }
-                    // The Waiting group shows oldest first; the keyboard walks it the same way.
-                    return (a.entry.waitSince ?? .distantFuture) < (b.entry.waitSince ?? .distantFuture)
-                }.map(\.id)
+        groups.flatMap { [Self.headerId($0.id)] + $0.rowIds }
     }
     private func moveFocus(_ delta: Int) {
         let ids = keyboardOrder
@@ -246,9 +341,7 @@ import SwiftUI
         let tabless = supervisorLayout.tabless
         if !tabRows.isEmpty || !tabless.isEmpty {
             let plain = tabRows.filter { supervisorLayout.byTab[$0.id] == nil }.count
-            VStack(alignment: .leading, spacing: 4) {
-                sectionHeader("Needs you", count: supervisorLayout.total + plain, tint: .orange)
-                    .accessibilityAddTraits(.isHeader)
+            group(.needsYou, count: supervisorLayout.total + plain, tint: .orange) {
                 ForEach(tabless) { item in
                     SupervisorInboxRow(model: supervisor, item: item, enabled: itemsEnabled,
                                        focused: focusedId == "sup:" + item.id && listFocused)
@@ -325,7 +418,7 @@ import SwiftUI
         PaneHeader(title: "Sessions", symbol: "rectangle.stack") {
             if !registry.feedConnected, bridge.activeProjectId != nil {
                 Image(systemName: "wifi.exclamationmark")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(.orange)
                     .help("Live feed disconnected — reconnecting")
             }
@@ -347,39 +440,86 @@ import SwiftUI
     }
 
     @ViewBuilder
-    private func section(_ title: String, _ items: [Row], tint: Color) -> some View {
-        if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                sectionHeader(title, count: items.count, tint: tint)
-                ForEach(items.sorted { $0.state.sortRank < $1.state.sortRank }) { row in
-                    sessionRow(row)
-                }
+    private var workingSection: some View {
+        let working = workingRows
+        if !working.isEmpty {
+            group(.working, count: working.count, tint: GitDecorationColor.modified) {
+                ForEach(working) { row in sessionRow(row) }
             }
         }
     }
 
     /// W-08 — a turn that ended with a result and has not been looked at stays
-    /// here until it has (selecting the tab counts), then follows the idle rules.
-    /// The one that has been waiting for a review longest comes first.
+    /// here until it has (selecting the tab counts). Quiet by default: the five
+    /// most recent, merged ones behind "Show all", and one bulk action in the
+    /// header that writes reviewed marks and nothing else. A result nobody can
+    /// select (no tab) leaves by itself, `FinishedPolicy`.
     @ViewBuilder
     private var finishedSection: some View {
-        let finished = SessionWait.oldestFirst(rows(where: { $0 == .finished })) { $0.entry.lastTurnAt }
-        if !finished.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                sectionHeader("Finished", count: finished.count, tint: Color.accentColor)
-                ForEach(finished) { row in sessionRow(row) }
+        let all = finishedRows
+        if !all.isEmpty {
+            let plan = finishedPlan
+            let byId = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            group(.finished, count: all.count, tint: Color.accentColor, trailing: {
+                if all.count > 1 {
+                    ViewThatFits(in: .horizontal) {
+                        markAllChip("Mark all reviewed", all)
+                        markAllChip("Mark all", all)
+                    }
+                }
+            }) {
+                ForEach(plan.shown.compactMap { byId[$0] }) { row in sessionRow(row) }
+                if plan.hiddenCount > 0 {
+                    disclosureLink("Show all \(all.count)") { showAllFinished = true }
+                } else if showAllFinished, all.count > FinishedPolicy.quietLimit {
+                    disclosureLink("Show fewer") { showAllFinished = false }
+                }
             }
         }
     }
 
-    /// W-04 — its own group above Idle, never folded behind "N more", oldest
+    private func markAllChip(_ label: String, _ rows: [Row]) -> some View {
+        Button(label) { registry.markAllReviewed(rows.map(\.id)) }
+            .rowChip(.neutral)
+            .fixedSize()
+            .help("Mark all \(rows.count) finished sessions as reviewed. Nothing is closed or deleted, and Undo stays for a few seconds.")
+            .accessibilityLabel("Mark all \(rows.count) finished sessions as reviewed")
+    }
+
+    /// "Show all 45", "Show fewer", "3 more idle sessions": the quiet text
+    /// button under a group that holds some rows back.
+    private func disclosureLink(_ text: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(minHeight: 22, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 14)
+    }
+
+    /// After "Mark all reviewed": what was done and the way back, for a few
+    /// seconds. Above the groups, because the group it came from may be gone.
+    @ViewBuilder
+    private var reviewUndoStrip: some View {
+        if let pending = registry.reviewUndo {
+            PaneNoticeStrip(
+                notice: PaneNotice(kind: .success, text: "Marked \(pending.count) as reviewed."),
+                actionTitle: "Undo",
+                onAction: { registry.undoMarkAllReviewed() }
+            )
+        }
+    }
+
+    /// W-04 — its own group above Finished, never folded behind "N more", oldest
     /// wait first: the one that has waited longest is the one most likely stuck.
     @ViewBuilder
     private var waitingSection: some View {
-        let waiting = SessionWait.oldestFirst(rows(where: { $0 == .waiting })) { $0.entry.waitSince }
+        let waiting = waitingRows
         if !waiting.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                sectionHeader("Waiting", count: waiting.count, tint: MarvinTheme.textMuted)
+            group(.waiting, count: waiting.count, tint: MarvinTheme.textMuted) {
                 ForEach(waiting) { row in sessionRow(row) }
             }
         }
@@ -387,39 +527,17 @@ import SwiftUI
 
     @ViewBuilder
     private var idleSection: some View {
-        let idle = rows(where: { $0 == .idle || $0 == .draft || $0 == .done })
+        let idle = idleRows
         if !idle.isEmpty {
-            let partition = SessionIdleCollapse.partition(
-                idle.map { SessionIdleCollapse.Row(id: $0.id, state: $0.state, idleSince: $0.entry.lastTurnAt) },
-                selected: bridge.activeMarvinSessionId,
-                now: registry.now,
-                expanded: expandedIdle
-            )
-            VStack(alignment: .leading, spacing: 4) {
-                sectionHeader("Idle", count: idle.count, tint: MarvinTheme.textMuted)
+            let partition = idlePartition
+            group(.idle, count: idle.count, tint: MarvinTheme.textMuted) {
                 ForEach(idle.filter { partition.visible.contains($0.id) }) { row in
                     sessionRow(row)
                 }
                 if !partition.collapsed.isEmpty {
-                    Button {
-                        expandedIdle = true
-                    } label: {
-                        Text("\(partition.collapsed.count) more idle session\(partition.collapsed.count == 1 ? "" : "s")")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.leading, 14)
+                    disclosureLink("\(partition.collapsed.count) more idle session\(partition.collapsed.count == 1 ? "" : "s")") { expandedIdle = true }
                 } else if expandedIdle, idle.count > SessionIdleCollapse.alwaysVisibleIdle {
-                    Button {
-                        expandedIdle = false
-                    } label: {
-                        Text("Collapse idle")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.leading, 14)
+                    disclosureLink("Show fewer") { expandedIdle = false }
                 }
             }
         }
@@ -429,8 +547,7 @@ import SwiftUI
     private var recentSection: some View {
         let items = recent
         if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                sectionHeader("History", count: items.count, tint: .secondary)
+            group(.history, count: items.count, tint: MarvinTheme.textMuted) {
                 ForEach(items) { e in
                     HStack(spacing: 6) {
                         Circle().fill(Color.secondary.opacity(0.5)).frame(width: 6, height: 6)
@@ -465,29 +582,26 @@ import SwiftUI
     private var integrateSection: some View {
         let items = registry.readyEntries
         if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    sectionHeader("Ready to integrate", count: items.count, tint: GitDecorationColor.added)
-                    Spacer()
-                    if let target = registry.integrationTarget {
-                        Text("→ \(target)")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Button {
-                        registry.refreshIntegrationPreview()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 9, weight: .medium))
-                            .frame(width: 20, height: 20)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Re-run the dry-run preview")
-                    .accessibilityLabel("Re-run the preview")
+            group(.integrate, count: items.count, tint: GitDecorationColor.added, trailing: {
+                if let target = registry.integrationTarget {
+                    Text("→ \(target)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
+                Button {
+                    registry.refreshIntegrationPreview()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Re-run the dry-run preview")
+                .accessibilityLabel("Re-run the preview")
+            }) {
                 ForEach(items) { e in integrateRow(e) }
                 integrateFooter(items)
             }
@@ -619,10 +733,28 @@ import SwiftUI
         }
     }
 
-    /// This pane's own shape, now the shared one: it was the most legible of
-    /// the five that existed, so `PaneSectionHeader` is it (ADR-0114).
-    private func sectionHeader(_ title: String, count: Int, tint: Color) -> some View {
-        PaneSectionHeader(title, count: count, tint: tint)
+    /// A group: a disclosure header that carries the count (visible folded
+    /// or open), then its rows unless the person folded it. The fold is the
+    /// registry's, so it is remembered per project.
+    @ViewBuilder
+    private func group<Content: View, Trailing: View>(
+        _ id: SessionGroupId, count: Int, tint: Color,
+        @ViewBuilder trailing: @escaping () -> Trailing, @ViewBuilder content: () -> Content
+    ) -> some View {
+        let folded = registry.isGroupCollapsed(id)
+        VStack(alignment: .leading, spacing: 4) {
+            PaneDisclosureHeader(
+                title: id.title, count: count, tint: tint, collapsed: folded,
+                focused: focusedId == Self.headerId(id) && listFocused,
+                onToggle: { toggle(id) }, trailing: trailing
+            )
+            if !folded { content() }
+        }
+    }
+
+    @ViewBuilder
+    private func group<Content: View>(_ id: SessionGroupId, count: Int, tint: Color, @ViewBuilder content: () -> Content) -> some View {
+        group(id, count: count, tint: tint, trailing: { EmptyView() }, content: content)
     }
 
     // MARK: - Row
@@ -633,7 +765,7 @@ import SwiftUI
         let focused = row.id == focusedId
         let name = title(e)
         let long = isLongWait(e)
-        let sentence = SessionRowText.stateSentence(row.state, e, now: registry.now)
+        let sentence = compact ? SessionRowText.narrowSentence(row.state, e, now: registry.now) : SessionRowText.stateSentence(row.state, e, now: registry.now)
         let isTab = registry.isOpenTab(row.id)
         // ADR-0112 — answer a waiting tab here, without switching to it.
         // A question (AskUserQuestion) is a form and still opens the tab.
@@ -666,26 +798,16 @@ import SwiftUI
                         delegationChip(row, e, name: name)
                     }
                     .frame(minHeight: 16)
-                    HStack(spacing: 6) {
-                        if compact { stateText(sentence, state: row.state, long: long) }
-                        if let fact {
-                            Text(fact)
-                                .font(.system(size: 11))
-                                .foregroundStyle(factTint(row.state, long: long))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
+                    // A measurement (changes, plan, where it works) on a finished or
+                    // idle row is the first thing to give way in a narrow pane: whole
+                    // or not at all, never "5…". A wait's own label stays and truncates.
+                    if compact, row.state == .finished || row.state == .idle || row.state == .done, fact != nil {
+                        ViewThatFits(in: .horizontal) {
+                            secondLine(row, sentence: sentence, fact: fact, long: long, isTab: isTab, factFixed: true)
+                            secondLine(row, sentence: sentence, fact: nil, long: long, isTab: isTab)
                         }
-                        Spacer(minLength: 0)
-                        if !isTab && !compact {
-                            // Short on the row; the hover card says it in full.
-                            Text("no tab")
-                                .font(.system(size: 11))
-                                .foregroundStyle(MarvinTheme.textMuted)
-                                .lineLimit(1)
-                                .fixedSize()
-                                .accessibilityLabel("not open as a tab")
-                        }
-                        action(for: row, isTab: isTab)
+                    } else {
+                        secondLine(row, sentence: sentence, fact: fact, long: long, isTab: isTab)
                     }
                 }
             }
@@ -715,7 +837,10 @@ import SwiftUI
         )
         .help(hoverCard(e, state: row.state, name: name, isOpenTab: isTab))
         .contextMenu {
-            Button(isTab ? "Switch to" : "Open as a tab") { supervisor.showTab(row.id) }
+            Button(isTab ? "Switch to" : "Open tab") { supervisor.showTab(row.id) }
+            if row.state == .finished {
+                Button("Mark reviewed") { registry.markReviewed(row.id) }
+            }
             if e.isLive {
                 Button("Stop") { Task { await registry.stop(row.id) } }
             }
@@ -732,6 +857,33 @@ import SwiftUI
                     }
                 }
             }
+        }
+    }
+
+    /// Line 2 of a row: the state sentence (narrow panes only), the one fact,
+    /// "no tab", and the row's one action.
+    private func secondLine(_ row: Row, sentence: String, fact: String?, long: Bool, isTab: Bool, factFixed: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            if compact { stateText(sentence, state: row.state, long: long) }
+            if let fact {
+                Text(fact)
+                    .font(.system(size: 11))
+                    .foregroundStyle(factTint(row.state, long: long))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: factFixed, vertical: false)
+            }
+            Spacer(minLength: 0)
+            if !isTab && !compact {
+                // Short on the row; the hover card says it in full.
+                Text("no tab")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MarvinTheme.textMuted)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .accessibilityLabel("not open as a tab")
+            }
+            action(for: row, isTab: isTab)
         }
     }
 
@@ -760,25 +912,25 @@ import SwiftUI
     private func stateGlyph(_ state: SessionRowState, longWait: Bool = false) -> some View {
         switch state {
         case .working:
-            ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+            ProgressView().controlSize(.mini).frame(width: 12, height: 12)
         case .needsYou:
-            Image(systemName: "hand.raised.fill").font(.system(size: 9)).foregroundStyle(.orange).frame(width: 10)
+            Image(systemName: "hand.raised.fill").font(.system(size: 11)).foregroundStyle(.orange).frame(width: 12)
         case .interrupted:
-            Image(systemName: "arrow.clockwise").font(.system(size: 9, weight: .semibold)).foregroundStyle(.orange).frame(width: 10)
+            Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold)).foregroundStyle(.orange).frame(width: 12)
         case .failed:
-            Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(GitDecorationColor.deleted).frame(width: 10)
+            Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(GitDecorationColor.deleted).frame(width: 12)
         case .waiting:
-            Image(systemName: "clock").font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(ChatPreviewView.tabTint(state, longWait: longWait)).frame(width: 10)
+            Image(systemName: "clock").font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ChatPreviewView.tabTint(state, longWait: longWait)).frame(width: 12)
                 .accessibilityLabel(longWait ? "Waiting for a long time" : "Waiting")
         case .done:
-            Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 10)
+            Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 12)
         case .finished:
-            Image(systemName: "checkmark.circle.fill").font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 10)
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ChatPreviewView.tabTint(state)).frame(width: 12)
                 .accessibilityLabel("Finished, not reviewed")
         case .idle, .draft:
-            Circle().fill(ChatPreviewView.tabTint(state)).frame(width: 6, height: 6).frame(width: 10)
+            Circle().fill(ChatPreviewView.tabTint(state)).frame(width: 6, height: 6).frame(width: 12)
         }
     }
 

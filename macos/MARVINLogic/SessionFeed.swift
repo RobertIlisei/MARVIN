@@ -35,9 +35,12 @@ public struct SessionTreeWire: Codable, Equatable, Sendable {
     /// Branch HEAD was on when the worktree was cut — what `base` is a sha of.
     public let baseRef: String?
     public let lane: [String]?
+    /// False when the sidecar found the checkout gone from disk; absent from older sidecars.
+    public let present: Bool?
 
     public init(mode: SessionMode, slug: String? = nil, path: String? = nil, branch: String? = nil,
-                base: String? = nil, baseRef: String? = nil, lane: [String]? = nil) {
+                base: String? = nil, baseRef: String? = nil, lane: [String]? = nil, present: Bool? = nil) {
+        self.present = present
         self.mode = mode
         self.slug = slug
         self.path = path

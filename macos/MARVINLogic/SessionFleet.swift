@@ -16,9 +16,12 @@ public struct FleetCounts: Equatable, Sendable {
     public let finished: Int
     /// R2-03 — of the `waiting` sessions, those whose wait has run `SessionWait.longAfter`.
     public let longWaiting: Int
-    public init(total: Int, working: Int, waiting: Int, needsYou: Int, finished: Int = 0, longWaiting: Int = 0) {
+    /// Failed or cut-off sessions a person can still act on: those with an open
+    /// tab, and tabless ones whose turn ended within `FinishedPolicy.tablessAfter`.
+    public let attention: Int
+    public init(total: Int, working: Int, waiting: Int, needsYou: Int, finished: Int = 0, longWaiting: Int = 0, attention: Int = 0) {
         self.total = total; self.working = working; self.waiting = waiting; self.needsYou = needsYou
-        self.finished = finished; self.longWaiting = longWaiting
+        self.finished = finished; self.longWaiting = longWaiting; self.attention = attention
     }
     /// The same number as `finished`, under the name the signals outside the pane use: a
     /// `.finished` row IS "finished, not yet looked at" (a looked-at one is `.done`).
@@ -29,8 +32,13 @@ public struct FleetCounts: Equatable, Sendable {
 public struct FleetItem: Equatable, Sendable {
     public let state: SessionRowState
     public let waitingSince: Date?
-    public init(state: SessionRowState, waitingSince: Date? = nil) {
-        self.state = state; self.waitingSince = waitingSince
+    /// Whether the session is open as a tab. A session with none has nobody who
+    /// can "select" it, so its result is history, not a review waiting.
+    public let hasTab: Bool
+    /// When its last turn ended.
+    public let endedAt: Date?
+    public init(state: SessionRowState, waitingSince: Date? = nil, hasTab: Bool = true, endedAt: Date? = nil) {
+        self.state = state; self.waitingSince = waitingSince; self.hasTab = hasTab; self.endedAt = endedAt
     }
 }
 
@@ -47,8 +55,8 @@ public struct FleetBadge: Equatable, Sendable {
 
 public enum SessionFleet {
     /// One state per tab (or live session). Interrupted and failed rows are
-    /// NOT counted as needing you: they are history with a Resume chip, and a
-    /// stale error would keep the rail badge lit for days.
+    /// counted apart (`attention`), and only while a person can still act on
+    /// them: a stale error with no tab would keep the rail badge lit for days.
     public static func counts(_ states: [SessionRowState]) -> FleetCounts {
         counts(states.map { FleetItem(state: $0) }, now: Date())
     }
@@ -57,20 +65,26 @@ public enum SessionFleet {
     /// time is `SessionWait.longAfter` or more ago (R2-03). A wait with no
     /// start time is never called long: nothing is invented.
     public static func counts(_ items: [FleetItem], now: Date) -> FleetCounts {
-        var working = 0, waiting = 0, needsYou = 0, finished = 0, longWaiting = 0
+        var working = 0, waiting = 0, needsYou = 0, finished = 0, longWaiting = 0, attention = 0
         for item in items {
             switch item.state {
+            case .failed, .interrupted:
+                // A failure a person can still act on: its tab is open, or it
+                // just happened. Weeks of tabless failures are history.
+                if item.hasTab || item.endedAt.map({ now.timeIntervalSince($0) < FinishedPolicy.tablessAfter }) == true { attention += 1 }
             case .working: working += 1
             case .waiting:
                 waiting += 1
                 if SessionWait.isLong(since: item.waitingSince, now: now) { longWaiting += 1 }
             case .needsYou: needsYou += 1
-            case .finished: finished += 1
+            case .finished:
+                // A tabless result is history: nobody can select it to look at it.
+                if item.hasTab { finished += 1 }
             default: break
             }
         }
         return FleetCounts(total: items.count, working: working, waiting: waiting, needsYou: needsYou,
-                           finished: finished, longWaiting: longWaiting)
+                           finished: finished, longWaiting: longWaiting, attention: attention)
     }
 
     /// R2-01 — the sessions the fleet is made of: every open tab, in strip
@@ -117,17 +131,19 @@ public enum SessionFleet {
         return .quiet
     }
 
-    /// The Sessions rail badge: needs-you + finished-unreviewed + long waits.
+    /// The Sessions rail badge: what needs a person. Needs-you + failed or cut off
+    /// + finished-unreviewed (with an open tab) + long waits.
     /// Needs-you's colour wins; a long wait is as urgent as a person wanted;
     /// results alone are the calmer "review" tone. nil when there is nothing to look at.
     public static func badge(_ c: FleetCounts) -> FleetBadge? {
-        let count = c.needsYou + c.finishedUnreviewed + c.longWaiting
+        let count = c.needsYou + c.attention + c.finishedUnreviewed + c.longWaiting
         guard count > 0 else { return nil }
         var parts: [String] = []
         if c.needsYou > 0 { parts.append("\(c.needsYou) need\(c.needsYou == 1 ? "s" : "") you") }
+        if c.attention > 0 { parts.append("\(c.attention) failed or cut off") }
         if c.finishedUnreviewed > 0 { parts.append("\(c.finishedUnreviewed) finished, not reviewed") }
         if c.longWaiting > 0 { parts.append("\(c.longWaiting) long wait\(c.longWaiting == 1 ? "" : "s")") }
-        return FleetBadge(count: count, tone: c.needsYou > 0 || c.longWaiting > 0 ? .urgent : .review,
+        return FleetBadge(count: count, tone: c.needsYou > 0 || c.attention > 0 || c.longWaiting > 0 ? .urgent : .review,
                           help: parts.joined(separator: " \u{B7} "))
     }
 
@@ -153,6 +169,7 @@ public enum SessionFleet {
         if c.working > 0 { parts.append("\(c.working) working") }
         if c.waiting > 0 { parts.append(waitingText(c)) }
         if c.needsYou > 0 { parts.append("\(c.needsYou) needs you") }
+        if c.attention > 0 { parts.append("\(c.attention) failed") }
         if c.finished > 0 { parts.append("\(c.finished) finished") }
         let tabs = "\(c.total) tab\(c.total == 1 ? "" : "s")"
         switch detail {
