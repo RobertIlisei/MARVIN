@@ -90,6 +90,8 @@ final class SourceControlPreviewModel {
 @MainActor struct SourceControlPreviewView: View {
     let model: SourceControlPreviewModel
     let name: String
+    /// What the pane can spare for the diff below the header; the plan decides, not this view.
+    var maxBodyHeight: CGFloat = 150
     let onOpen: () -> Void
     let onClose: () -> Void
 
@@ -163,7 +165,7 @@ final class SourceControlPreviewModel {
                     }
                 }
             }
-            .frame(maxHeight: 150)
+            .frame(maxHeight: maxBodyHeight)
         }
     }
 }

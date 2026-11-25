@@ -270,7 +270,11 @@ private struct LeftPaneWidthKey: PreferenceKey {
                             .frame(maxHeight: .infinity)
                         toolsDivider
                         ProjectToolsPanel(openSections: $toolsOpenSections)
-                            .frame(height: max(toolsHeight, toolsMinHeight))
+                            // Nothing open: the three headers and no more. The height the
+                            // user dragged to is kept and comes back when a section opens,
+                            // but a band of empty grey under three folded headers is the
+                            // defect in pane-standard.md 2.12.
+                            .frame(height: toolsOpenSections == 0 ? toolsMinHeight : max(toolsHeight, toolsMinHeight))
                     },
                     active: tab == .files
                 )

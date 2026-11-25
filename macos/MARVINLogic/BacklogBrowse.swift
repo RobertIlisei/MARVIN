@@ -96,16 +96,20 @@ public struct BacklogFilter: Equatable, Sendable {
     public var severities: Set<String> = ["high", "med", "low"]
     public var hiddenKinds: Set<String> = []
     public var blocked: BacklogBlockedFilter = .all
+    /// Status facets (BacklogStatusFilter.swift): narrow within the scope, joined by OR.
+    public var statuses: Set<BacklogStatusFacet> = []
     /// Items a groom review flagged; nil = not narrowing to them.
     public var onlyIds: Set<String>? = nil
 
     public init(scope: BacklogScope = .open, query: String = "", severities: Set<String> = ["high", "med", "low"],
-                hiddenKinds: Set<String> = [], blocked: BacklogBlockedFilter = .all, onlyIds: Set<String>? = nil) {
+                hiddenKinds: Set<String> = [], blocked: BacklogBlockedFilter = .all,
+                statuses: Set<BacklogStatusFacet> = [], onlyIds: Set<String>? = nil) {
         self.scope = scope
         self.query = query
         self.severities = severities
         self.hiddenKinds = hiddenKinds
         self.blocked = blocked
+        self.statuses = statuses
         self.onlyIds = onlyIds
     }
 
@@ -118,6 +122,7 @@ public struct BacklogFilter: Equatable, Sendable {
         if severities.count < 3 { n += 1 }
         if !hiddenKinds.isEmpty { n += 1 }
         if blocked != .all { n += 1 }
+        if !activeStatuses.isEmpty { n += 1 }
         if onlyIds != nil { n += 1 }
         return n
     }
@@ -209,6 +214,8 @@ public enum BacklogBrowse {
             case .hide: if item.isBlocked { return false }
             case .only: if !item.isBlocked { return false }
             }
+            let facets = f.activeStatuses
+            if !facets.isEmpty, !facets.contains(where: { $0.matches(item) }) { return false }
             if let only = f.onlyIds, !only.contains(item.id) { return false }
             return matches(item, query: f.query)
         }
@@ -318,25 +325,31 @@ public enum BacklogAge {
 // MARK: - Row text and actions
 
 public enum BacklogRowText {
-    /// The one secondary line under a row's title:
-    /// `severity · kind · age · what it waits on`. Only what is known is
-    /// printed. "What it waits on" is the most load-bearing part for an item
-    /// that cannot be acted on, so it is never dropped.
+    /// The one secondary line under a row:
+    /// `where it stands · severity · kind · age`. Where it stands comes FIRST and
+    /// only when it is not a plain open item ("In progress · tab: fix-it",
+    /// "Blocked · waits on the lawyer"): it is what a person scanning for work
+    /// that is moving, or stuck, is looking for, and at the end of the line it was
+    /// the part a narrow list truncated. Only what is known is printed, and what
+    /// it waits on is never dropped.
     public static func secondary(_ item: BacklogItem, now: Date = Date()) -> String {
-        var parts: [String] = [BacklogBrowse.severityTitle(item.severity)]
-        if item.kindOrUnspecified != "unspecified" { parts.append(item.kindOrUnspecified) }
-        if let age = BacklogAge.label(created: item.created, now: now) { parts.append(age) }
+        var parts: [String] = []
         switch item.status {
-        case "doing": parts.append(item.holderLabel.map { "in progress · \($0)" } ?? "in progress")
-        case "provisional": parts.append("auto-captured")
-        case "done": parts.append("done")
-        case "dismissed": parts.append("dismissed")
+        case "doing": parts.append("In progress")
+            if let holder = item.holderLabel { parts.append(holder) }
+        case "provisional": parts.append("Auto-captured")
+        case "done": parts.append("Done")
+        case "dismissed": parts.append("Dismissed")
         default: break
         }
         if item.isBlocked {
+            parts.append("Blocked")
             let on = item.blockedOn?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            parts.append(on.isEmpty ? "blocked" : "waits on \(on)")
+            if !on.isEmpty { parts.append("waits on \(on)") }
         }
+        parts.append(BacklogBrowse.severityTitle(item.severity))
+        if item.kindOrUnspecified != "unspecified" { parts.append(item.kindOrUnspecified) }
+        if let age = BacklogAge.label(created: item.created, now: now) { parts.append(age) }
         return parts.joined(separator: " · ")
     }
 }

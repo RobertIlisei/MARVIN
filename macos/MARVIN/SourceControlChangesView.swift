@@ -38,7 +38,9 @@ import SwiftUI
 
     @FocusState private var listFocused: Bool
     @FocusState private var composerFocused: Bool
-    private let graphHeight: CGFloat = 200
+    /// The height of the band under the composer, measured (never a fixed number):
+    /// the list, the preview and the history share it by `PaneBandPlan`.
+    @State private var bandHeight: CGFloat = 0
 
     // MARK: Rows
 
@@ -81,13 +83,12 @@ import SwiftUI
                 .frame(width: 12)
                 .padding(.top, 1)
             Text(target.viewingLine)
-                .font(.system(size: 10.5))
+                .font(PaneFont.secondary)
                 .foregroundStyle(MarvinTheme.textMuted)
-                .lineLimit(3)
-                .truncationMode(.tail)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
+                .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .help(target.path)
+                .help("\(target.viewingLine)\n\(target.path)")
             if target.canPin {
                 Button { pin = target.isPinned ? .followTab : .project } label: {
                     Image(systemName: target.isPinned ? "pin.fill" : "pin")
@@ -201,9 +202,11 @@ import SwiftUI
                 }
                 composer
                 filterField
-                list
-                previewPanel
-                history
+                band(sections: dirtySections) { heights in
+                    list.frame(height: heights["list"] ?? 0)
+                    previewPanel(bodyHeight: heights["preview"] ?? 0)
+                    history(bodyHeight: heights["history"] ?? 0)
+                }
             }
         } else if model.lastError != nil && !model.isLoading {
             // The fetch failed and nothing is retrying — the banner says why. A
@@ -218,18 +221,37 @@ import SwiftUI
         }
     }
 
+    /// A clean tree is one line, not a poster: the History under it is what a person
+    /// came for, and it takes every point the line and the button leave.
     private var clean: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                PaneEmptyView(state: PaneEmptyState(
-                    headline: "Working tree clean",
-                    hint: "Nothing to commit \(target.actionPhrase).",
-                    symbol: "checkmark.circle"))
-                if model.isDiverged || !model.hasUpstream {
-                    primaryAction.padding(.horizontal, 10)
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: PaneSpace.compact) {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: PaneSpace.hairline) {
+                    Text("Working tree clean")
+                        .font(PaneFont.emptyHeadline)
+                        .foregroundStyle(MarvinTheme.textMuted)
+                    Text("Nothing to commit \(target.actionPhrase).")
+                        .font(PaneFont.hint)
+                        .foregroundStyle(MarvinTheme.textMuted)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
                 }
-                if !model.stashes.isEmpty { stashes }
-                history
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, PaneSpace.gutter)
+            .padding(.vertical, PaneSpace.standard)
+            .accessibilityElement(children: .combine)
+            if model.isDiverged || !model.hasUpstream {
+                primaryAction
+                    .padding(.horizontal, PaneSpace.gutter)
+                    .padding(.bottom, PaneSpace.compact)
+            }
+            band(sections: cleanSections) { heights in
+                if !model.stashes.isEmpty { stashes(bodyHeight: heights["stashes"] ?? 0) }
+                history(bodyHeight: heights["history"] ?? 0)
             }
         }
     }
@@ -260,7 +282,7 @@ import SwiftUI
                             row: row, selected: selection == row.id, busy: busy(row), handlers: handlers)
                             .id(row.id)
                     }
-                    if !model.stashes.isEmpty && !isFiltering { stashes }
+                    if !model.stashes.isEmpty && !isFiltering { stashes(bodyHeight: nil) }
                 }
                 .padding(.bottom, 8)
             }
@@ -376,48 +398,142 @@ import SwiftUI
     }
 
     @ViewBuilder
-    private var previewPanel: some View {
+    private func previewPanel(bodyHeight: CGFloat) -> some View {
         if let item = preview.item, selection == "\(item.group.rawValue)|f|\(item.path)" {
             SourceControlPreviewView(
-                model: preview, name: item.path,
+                model: preview, name: item.path, maxBodyHeight: bodyHeight,
                 onOpen: { openDiff(item) },
                 onClose: { selection = nil })
+            .frame(height: Self.previewChrome + bodyHeight, alignment: .top)
         }
     }
 
-    // MARK: Stashes + history
+    // MARK: The band: list, preview, stashes, history
 
-    private var stashes: some View {
+    private static let rowHeight: CGFloat = 22
+    private static let groupRowHeight: CGFloat = 26
+    private static let stashRowHeight: CGFloat = 26
+    private static let graphRowHeight: CGFloat = 24
+    /// A group header (`PaneSectionHeader`'s 28 pt floor) and the divider above History's.
+    private static let headerHeight: CGFloat = 28
+    private static let dividerHeight: CGFloat = 1
+    private static let previewBodyMax: CGFloat = 150
+    private static let previewChrome: CGFloat = 27
+
+    private var historyOpen: Bool { !collapsed.contains("section.history") }
+    private var stashesOpen: Bool { !collapsed.contains("section.stashes") }
+
+    private var historyNatural: Double {
+        graphModel.rows.isEmpty ? 40 : Double(graphModel.rows.count) * Double(Self.graphRowHeight)
+    }
+
+    private var historySection: PaneBandSection {
+        PaneBandSection(
+            id: "history", chrome: Double(Self.headerHeight + Self.dividerHeight), isOpen: historyOpen,
+            natural: historyNatural, minimum: min(historyNatural, 5 * Double(Self.graphRowHeight)))
+    }
+
+    /// The change list, the preview of the selected file, and History. The list is weighted
+    /// 2:1 over History; the preview never grows past its diff; the last open one that can
+    /// grow takes what is left, so there is no empty grey under it.
+    private var dirtySections: [PaneBandSection] {
+        let stashNatural = model.stashes.isEmpty || isFiltering ? 0
+            : Double(Self.headerHeight) + (stashesOpen ? Double(model.stashes.count) * Double(Self.stashRowHeight) : 0)
+        let listNatural = rows.reduce(0.0) { $0 + ($1.kind == .group ? Double(Self.groupRowHeight) : Double(Self.rowHeight)) }
+            + stashNatural + 8
+        var out = [PaneBandSection(id: "list", chrome: 0, isOpen: true, natural: listNatural,
+                                   minimum: min(listNatural, 4 * Double(Self.rowHeight)), weight: 2)]
+        if let item = preview.item, selection == "\(item.group.rawValue)|f|\(item.path)" {
+            var ready = false
+            if case .ready = preview.state { ready = true }
+            out.append(PaneBandSection(
+                id: "preview", chrome: Double(Self.previewChrome), isOpen: true,
+                natural: ready ? Double(Self.previewBodyMax) : 34, minimum: ready ? 60 : 34, grows: false))
+        }
+        out.append(historySection)
+        return out
+    }
+
+    private var cleanSections: [PaneBandSection] {
+        var out: [PaneBandSection] = []
+        if !model.stashes.isEmpty {
+            let natural = Double(model.stashes.count) * Double(Self.stashRowHeight)
+            out.append(PaneBandSection(
+                id: "stashes", chrome: Double(Self.headerHeight), isOpen: stashesOpen,
+                natural: natural, minimum: min(natural, 2 * Double(Self.stashRowHeight)), grows: false))
+        }
+        out.append(historySection)
+        return out
+    }
+
+    /// The region under the composer. It is a clear rectangle that takes the pane's
+    /// remaining height, measured with `onGeometryChange` (a `GeometryReader` in the
+    /// background adds views and trips AppKit's constraint-pass breaker, ADR-0062); the
+    /// sections are drawn in an overlay, so what they ask for never feeds back into the
+    /// measurement. Heights are NOT animated: a collapse is instant.
+    private func band<Content: View>(
+        sections: [PaneBandSection], @ViewBuilder content: @escaping ([String: CGFloat]) -> Content
+    ) -> some View {
+        let plan = PaneBandPlan.contentHeights(available: Double(bandHeight), sections: sections)
+        let heights = plan.mapValues { CGFloat($0) }
+        return Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Decided here, written on the next run-loop turn: a state write inside the geometry
+            // callback runs in the window's constraints pass (ADR-0062 addendum 5). Whole points
+            // only, so a sub-pixel jitter cannot ping-pong.
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height.rounded() }) { height in
+                DispatchQueue.main.async { if bandHeight != height { bandHeight = height } }
+            }
+            .overlay(alignment: .top) {
+                VStack(spacing: 0) { content(heights) }
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .transaction { $0.animation = nil }
+            }
+            .clipped()
+    }
+
+    @ViewBuilder
+    private func stashes(bodyHeight: CGFloat?) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             groupHeader("Stashes", count: model.stashes.count, id: "section.stashes")
-            if !collapsed.contains("section.stashes") {
-                ForEach(model.stashes) { entry in
-                    HStack(spacing: 6) {
-                        Text(entry.message)
-                            .font(.system(size: 11.5))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .foregroundStyle(MarvinTheme.textPrimary)
-                        Spacer(minLength: 4)
-                        Text(entry.relativeDate)
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .paneRow()
-                    .padding(.leading, 6)
-                    .contextMenu {
-                        Button("Pop") { model.stashAction("pop", index: entry.index) }
-                        Button("Apply") { model.stashAction("apply", index: entry.index) }
-                        Divider()
-                        Button("Drop…", role: .destructive) { model.stashAction("drop", index: entry.index) }
-                    }
+            if stashesOpen {
+                if let bodyHeight {
+                    ScrollView { stashRows }.frame(height: bodyHeight)
+                } else {
+                    stashRows
+                }
+            }
+        }
+    }
+
+    private var stashRows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(model.stashes) { entry in
+                HStack(spacing: 6) {
+                    Text(entry.message)
+                        .font(PaneFont.rowTitle)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(MarvinTheme.textPrimary)
+                    Spacer(minLength: 4)
+                    Text(entry.relativeDate)
+                        .font(PaneFont.secondary)
+                        .foregroundStyle(.tertiary)
+                }
+                .paneRow()
+                .padding(.leading, 6)
+                .contextMenu {
+                    Button("Pop") { model.stashAction("pop", index: entry.index) }
+                    Button("Apply") { model.stashAction("apply", index: entry.index) }
+                    Divider()
+                    Button("Drop…", role: .destructive) { model.stashAction("drop", index: entry.index) }
                 }
             }
         }
     }
 
     @ViewBuilder
-    private var history: some View {
+    private func history(bodyHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
             MarvinDivider()
             groupHeader("History", count: nil, id: "section.history") {
@@ -426,9 +542,9 @@ import SwiftUI
                     .help("Refresh history")
                     .accessibilityLabel("Refresh history")
             }
-            if !collapsed.contains("section.history") {
+            if historyOpen {
                 GitGraphView(cwd: target.path, model: graphModel)
-                    .frame(height: graphHeight)
+                    .frame(height: bodyHeight, alignment: .top)
             }
         }
     }

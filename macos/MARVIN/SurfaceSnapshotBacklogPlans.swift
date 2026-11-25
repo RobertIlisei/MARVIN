@@ -190,9 +190,15 @@ enum BacklogPlansFixtures {
     static func surfaces() -> [SurfaceSnapshot.Surface] {
         func window(_ id: String, _ title: String, widths: [CGFloat], mode: BacklogMode = .full,
                     startAtReview: Bool = false, select: String? = nil,
+                    statuses: String = "", group: String = "severity",
                     interact: (@MainActor (NSView) -> Void)? = nil) -> SurfaceSnapshot.Surface {
             SurfaceSnapshot.Surface(id, title, .populated, widths: widths, height: 700,
-                                    prepare: { backlogMode = mode }, interact: interact) {
+                                    prepare: {
+                                        backlogMode = mode
+                                        // The window reads these through @AppStorage: set (and reset) them per scenario.
+                                        UserDefaults.standard.set(statuses, forKey: "marvin.backlog.statuses")
+                                        UserDefaults.standard.set(group, forKey: "marvin.backlog.group")
+                                    }, interact: interact) {
                 AnyView(BacklogPanel(workDir: SurfaceFixtures.project, startAtReview: startAtReview, initialSelection: select,
                                      onPromote: { _ in }, onClose: {}, onChanged: {}))
             }
@@ -207,6 +213,9 @@ enum BacklogPlansFixtures {
             window("backlog-window-selected", "Backlog window — an item selected, its notes and links", widths: [720, 1180],
                    select: "per-attempt-cost-ledger"),
             window("backlog-window-review", "Backlog window — opened at the auto-captured review", widths: [720, 1180], startAtReview: true),
+            window("backlog-window-filtered", "Backlog window — filtered: In progress + Blocked, with the chips", widths: [720, 1180],
+                   statuses: "inProgress,blocked"),
+            window("backlog-window-status-groups", "Backlog window — grouped by status", widths: [1180], group: "status"),
             window("backlog-window-empty", "Backlog window — nothing parked", widths: [720], mode: .empty),
             window("backlog-window-no-results", "Backlog window — a search with no results", widths: [720],
                    interact: { host in typeIntoFirstField(host, "zzzq") }),

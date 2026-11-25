@@ -215,6 +215,58 @@ the words and the glyph, never in colour alone. A row's text is one element
 (title, secondary and trailing read together); its buttons stay separate.
 Reduced motion drops the scale on press and keeps the colour change.
 
+### 2.12 Height: the last open flexible section fills the pane
+
+The owner, 25.11: *"the history seems to be cut if the other menu is minimised."*
+Source Control drew its commit graph at a fixed 200 pt. With a clean tree and
+Stashes folded, 500 pt of grey sat under a graph that was cut mid-row.
+
+**The rule: the last open flexible section fills the pane; no fixed-height band
+leaves empty space under it.** A band that scrolls is never given a literal
+height. In full:
+
+- A folded group takes its header and nothing else.
+- An open section takes what its rows need, and never less than a usable
+  minimum (about five rows) while the pane can afford it.
+- When the open sections want more than the pane has, the surplus is shared by
+  weight (the change list 2, History 1), each capped at what it wants. The list
+  scrolls; History keeps its minimum; either can still be folded.
+- When they want less, the last open section that *can grow* takes the rest. A
+  preview of a three-line diff cannot grow; the list and the graph can.
+- A new sibling is a new row in the plan, not a new constant.
+
+The decision is `PaneBandPlan.contentHeights(available:sections:)` in
+`MARVINLogic` (pure, tested: fixed cases and a 400-case property run that checks
+nothing overflows and nothing is left empty while a section could grow). The
+view measures the band with `onGeometryChange` on a clear rectangle and draws the
+sections in an overlay, so what they ask for never feeds back into the
+measurement (no `GeometryReader` in a background, ADR-0062); a collapse does not
+animate height. Reference: `SourceControlChangesView.band(sections:content:)`.
+
+The empty state of a pane that still has something under it is one line, not a
+poster: `PaneEmptyView` is for a pane that has nothing else to show.
+
+Fixed heights that are right: a text editor in a sheet, a control, a glyph box
+(under 100 pt). The guard (§4) flags the rest.
+
+### 2.13 A filter that narrows a list is visible on the list
+
+A filter inside a menu is invisible: the filter button wears a count, and
+`PaneFilterChips` (kit) says *which*: one removable chip per active filter, and
+one "Clear filters". It draws nothing, and costs no height, when nothing narrows.
+Several facets of one kind (status) are joined by OR; kinds of filter (status,
+severity, kind, search) are ANDed.
+
+The Project Backlog window is the reference. Its three-way switch (Open / To
+review / Resolved) stays the top-level view; a **status facet is a filter within
+one scope** (`BacklogStatusFacet`): *In progress*, *Blocked* and *Open, not
+started* are Open's, *Done* and *Dismissed* are Resolved's, and *To review* is
+its whole scope, so it offers nothing to narrow. The menu shows the current
+scope's facets with how many each would show; a facet picked in another scope
+waits there and narrows nothing here, so switching scope never leaves a hidden
+filter on the list. A row leads its second line with where the item stands, when
+it is not plain open: "In progress · tab: fix-it", "Blocked · waits on the lawyer".
+
 ## 3. The kit on one screen
 
 Existing components keep their signatures; everything below was added with
@@ -251,6 +303,9 @@ PaneEnableToggle(isOn:, name:, help:, onToggle:)
 // The scrolling body, with the keyboard
 PaneScrollList(rows: [(id, title)], selection: $id, onActivate:, onSpace:, onEscape:) { content }
 
+// Active filters (2.13)
+PaneFilterChips(chips: [BacklogFilterChip], onRemove:, onClearAll:)
+
 // States and notices
 PaneEmptyView(state:, actionTitle:, action:)    PaneLoadingView(label:)    PaneNote(text:)
 PaneNoticeStrip(notice:, actionTitle:, onAction:, onDismiss:)
@@ -259,7 +314,8 @@ PaneNoticeStrip(notice:, actionTitle:, onAction:, onDismiss:)
 PaneTypeScale  PaneSpacing  PaneFilter.matches(_:in:)  PaneCollapseState  PaneRowActionPlan.plan
 PaneBulkAction.title(_:count:)  PaneKeyNav.move  PaneTypeAhead  InstalledGrouping.group  PracticeScoreBand
 PaneEmptyState (.noProject .nothingYet .filtered .couldNotLoad .notARepo .noResults .awaitingInput)
-PaneSourceScan (the allowlist `migrating`)
+PaneBandPlan.contentHeights(available:sections:) + PaneBandSection (2.12)
+PaneSourceScan (the allowlist `migrating`; `fixedHeightViolations`)
 ```
 
 ### A pane in twenty lines
@@ -296,6 +352,12 @@ VStack(spacing: 0) {
 2. **No text below 11 pt.** `.font(.system(size: N))` with N under 11, or `.caption`,
    `.caption2`, `.footnote`, fails, except for a glyph (an `Image` on the same or
    the two preceding lines, or a `// glyph` note).
+
+3. **No fixed-height band** (`PaneSourceScan.fixedHeightViolations`, over every
+   pane file, allowlisted or not, plus the Source Control, graph and left-pane
+   container files). A literal `.frame(height: N)` of 100 pt or more fails unless
+   a `// fixed: <why>` note is within three lines above, or it is a text editor.
+   Use `PaneBandPlan` instead (§2.12).
 
 A "pane file" is `Pane*.swift` (the kit: scanned for size only), `*Pane.swift`,
 `*Panel.swift`, `*PaneView.swift`, `*PanelView.swift`, and a short named list. A

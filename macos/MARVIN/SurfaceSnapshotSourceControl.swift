@@ -39,6 +39,8 @@ enum SurfaceSourceControlFixtures {
         case "/api/git/status":
             let cwd = query["cwd"] ?? root
             return ok(status(scenario, inTab: cwd.contains("/.marvin/worktrees/")))
+        case "/api/git/graph":
+            return ok(longGraph)
         case "/api/git/repos":
             return ok(repos)
         case "/api/worktrees" where method != "POST":
@@ -123,6 +125,27 @@ enum SurfaceSourceControlFixtures {
         file("scripts/seed.sh", index: ".", working: "?", type: "untracked"),
     ]
 
+    // MARK: History
+
+    /// The shared graph fixture has eight commits; a real project returns a hundred and twenty.
+    /// The height defect needs a graph longer than the pane, so the eight are followed by sixty more.
+    private static let longGraph: String = {
+        func sha(_ i: Int) -> String { String(format: "%040x", 0xabc000 + i) }
+        var json = SurfaceRoutes.gitGraph
+        guard let root = json.range(of: #""parents":[],"#), let end = json.range(of: "]}", options: .backwards) else { return json }
+        json.replaceSubrange(end, with: "")
+        json.replaceSubrange(root, with: #""parents":["\#(sha(0))"],"#)
+        let people = ["Dana Whitfield", "Priya Raman", "Marco Silva"]
+        let subjects = ["fix(sync): handle a closed socket", "refactor(ledger): split the summary", "test: cover the retry ceiling",
+                        "docs: explain the eviction order", "chore: bump dependencies", "feat(api): paginate the usage list"]
+        var out = ""
+        for i in 0..<60 {
+            let parent = i == 59 ? "" : "\"\(sha(i + 1))\""
+            out += #",{"sha":"\#(sha(i))","shortSha":"\#(sha(i).prefix(7))","author":"\#(people[i % 3])","date":"2026-09-\#(String(format: "%02d", 28 - i / 3))T10:00:00+00:00","relativeDate":"\#(i / 2 + 5) weeks ago","refs":[],"parents":[\#(parent)],"subject":"\#(subjects[i % 6])"}"#
+        }
+        return json + out + "]}"
+    }()
+
     // MARK: Repos and worktrees
 
     private static let repos = #"""
@@ -168,6 +191,9 @@ enum SurfaceSourceControlFixtures {
 enum SurfaceSourceControlSurfaces {
     private static let widths: [CGFloat] = [260, 420]
     private static let height: CGFloat = 780
+    /// Taller than the content: the defect (a fixed-height band under an empty grey pane)
+    /// only shows when the pane has more room than the sections ask for.
+    private static let tall: CGFloat = 900
     /// A tab that works in its own worktree / one that shares the checkout (SurfaceRoutesMore.openIds).
     private static let worktreeTab = SurfaceRoutesMore.openIds[3]
     private static let sharedTab = SurfaceRoutesMore.openIds[1]
@@ -177,6 +203,8 @@ enum SurfaceSourceControlSurfaces {
         func surface(
             _ id: String, _ title: String, _ scenario: SurfaceSourceControlFixtures.Scenario, tab: String,
             initial: SourceControlInitialState = SourceControlInitialState(),
+            widths: [CGFloat] = SurfaceSourceControlSurfaces.widths,
+            height: CGFloat = SurfaceSourceControlSurfaces.height,
             interact: (@MainActor (NSView) -> Void)? = nil
         ) -> SurfaceSnapshot.Surface {
             SurfaceSnapshot.Surface(
@@ -204,6 +232,25 @@ enum SurfaceSourceControlSurfaces {
                     initial: SourceControlInitialState(pin: .project)),
             surface("sc-clean", "Source Control — nothing to commit", .clean, tab: sharedTab),
             surface("sc-conflicts", "Source Control — merge conflicts above ordinary changes", .conflicts, tab: sharedTab),
+            // The owner's screenshot (25.11): clean tree, Stashes folded, History open, a pane taller than its content.
+            surface("sc-clean-tall", "Source Control — clean tree, Stashes folded, History open, a tall pane", .clean, tab: sharedTab,
+                    initial: SourceControlInitialState(collapsed: ["worktrees.spent", "section.stashes"]),
+                    widths: [420], height: tall),
+            surface("sc-clean-tall-stashes", "Source Control — clean tree, Stashes and History both open, a tall pane", .clean, tab: sharedTab,
+                    initial: SourceControlInitialState(collapsed: ["worktrees.spent"]),
+                    widths: [420], height: tall),
+            surface("sc-clean-tall-publish", "Source Control — a tab's clean tree with no upstream (Publish Branch), History open, a tall pane", .clean, tab: worktreeTab,
+                    initial: SourceControlInitialState(collapsed: ["worktrees.spent", "section.stashes"]),
+                    widths: [420], height: tall),
+            surface("sc-tab-12-tall", "Source Control — 12 changes and History open, a tall pane", .fleet, tab: worktreeTab,
+                    initial: SourceControlInitialState(collapsed: ["worktrees.spent", "section.stashes"]),
+                    widths: [420], height: tall),
+            surface("sc-project-100-tall", "Source Control — 100 changes (list scrolls) and History open, a tall pane", .fleet, tab: sharedTab,
+                    initial: SourceControlInitialState(collapsed: ["worktrees.spent", "section.stashes"]),
+                    widths: [420], height: tall),
+            surface("sc-tab-12-history-folded", "Source Control — 12 changes, History folded: the list takes the pane", .fleet, tab: worktreeTab,
+                    initial: SourceControlInitialState(collapsed: ["worktrees.spent", "section.stashes", "section.history"]),
+                    widths: [420], height: tall),
             surface("sc-worktrees-14", "Source Control — the project scope: fourteen worktrees in mixed states", .fleet, tab: worktreeTab,
                     initial: SourceControlInitialState(scope: .project)),
         ]

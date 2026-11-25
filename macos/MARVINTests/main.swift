@@ -159,6 +159,9 @@ runner.suite("watch-feed-wait-clock") {
 private let paneStdSources = PaneSourceScan.loadPaneSources(
     macosDir: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().path)
 
+private let heightGuardSources = PaneSourceScan.loadHeightGuardSources(
+    macosDir: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().path)
+
 runner.suite("pane standard") {
     runner.test("nothing a person must read is below 11 pt") {
         for (name, pt) in PaneTypeScale.tokens {
@@ -325,6 +328,23 @@ runner.suite("pane standard") {
         runner.expect(PaneSourceScan.smallTextViolations(in: ["Fake.swift": "Text(\"x\").font(.system(size: 11))"], allowlist: [:]).isEmpty, "11 pt is the floor, not a violation")
     }
 
+    runner.test("guard: no fixed-height band under a pane's list") {
+        // The owner, 25.11: a fixed 200 pt History under an empty pane. A literal `.frame(height: N)` of
+        // 100 pt or more is a band that cannot grow and cannot shrink; it needs `// fixed: <why>` on the
+        // line or one of the two above it, or it goes through `PaneBandPlan`.
+        let hits = PaneSourceScan.fixedHeightViolations(in: heightGuardSources)
+        runner.expect(hits.isEmpty, "fixed-height bands: \(hits.joined(separator: "; "))")
+        runner.expect(!PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "GitGraphView(cwd: p)\n    .frame(height: 200)"]).isEmpty, "a 200 pt band is caught")
+        runner.expect(!PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "ScrollView { x }\n    .frame(maxWidth: .infinity, height: 120.0)"]).isEmpty, "with other arguments too")
+        runner.expect(PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "Color.clear.frame(width: 12, height: 12)"]).isEmpty, "a 12 pt glyph box is not a band")
+        runner.expect(PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "x.frame(minHeight: 140, maxHeight: .infinity)"]).isEmpty, "a floor is not a fixed band")
+        runner.expect(PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "// fixed: a text editor, the sheet sizes to it\nTextEditor(text: $t)\n    .frame(height: 160)"]).isEmpty, "a justified one passes")
+        runner.expect(PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "TextEditor(text: $t)\n    .font(.body)\n    .frame(height: 160)"]).isEmpty, "a text editor is a field, not a band")
+        runner.expect(PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "// .frame(height: 300)"]).isEmpty, "a comment is not code")
+        runner.expect(heightGuardSources["SourceControlChangesView.swift"] != nil, "the Source Control list is under the guard")
+        runner.expect(heightGuardSources["LeftPane.swift"] != nil, "the Files pane's tools band is under the guard")
+    }
+
     runner.test("guard: the migrated panes are not on the allowlist") {
         for done in ["SkillsPane.swift", "PluginsPane.swift", "PracticePane.swift"] {
             runner.expect(PaneSourceScan.migrating[done] == nil, "\(done) is on the standard")
@@ -332,6 +352,212 @@ runner.suite("pane standard") {
         for (file, owner) in PaneSourceScan.migrating {
             runner.expect(!owner.isEmpty, "\(file) names who is migrating it")
         }
+    }
+}
+
+// MARK: - Backlog status filter (owner 25.11: "i can't filter by in progress, or blocked")
+//
+// The window filtered by importance and kind only. The status filter sits INSIDE the
+// three-way switch (Open / To review / Resolved): each facet belongs to one scope, the
+// menu offers the current scope's, and a facet picked in another scope waits there.
+
+runner.suite("backlog status filter") {
+    func item(_ id: String, status: String = "open", severity: String = "med", kind: String? = nil,
+              blocked: Bool? = nil, blockedOn: String? = nil, title: String = "t") -> BacklogItem {
+        BacklogItem(id: id, title: title, body: "", status: status, severity: severity, created: "2026-11-20",
+                    kind: kind, blocked: blocked, blockedOn: blockedOn,
+                    claimedBy: status == "doing" ? "8cb24ed6aaaa" : nil, claimedBranch: status == "doing" ? "marvin/tab/fix" : nil)
+    }
+    let items = [
+        item("todo1", severity: "high"),
+        item("todo2", severity: "low", kind: "docs", title: "Document it"),
+        item("wait", severity: "high", blocked: true, blockedOn: "the lawyer"),
+        item("run1", status: "doing"),
+        item("run2", status: "doing", severity: "high", blocked: true, blockedOn: "a review"),
+        item("cap", status: "provisional"),
+        item("fin", status: "done"),
+        item("gone", status: "dismissed"),
+    ]
+    func ids(_ f: BacklogFilter) -> [String] { BacklogBrowse.filter(items, f).map(\.id) }
+
+    runner.test("each facet belongs to one scope, in the owner's words") {
+        runner.expect(BacklogStatusFacet.facets(in: .open).map(\.title), equals: ["In progress", "Blocked", "Open, not started"], "Open")
+        runner.expect(BacklogStatusFacet.facets(in: .resolved).map(\.title), equals: ["Done", "Dismissed"], "Resolved")
+        runner.expect(BacklogStatusFacet.facets(in: .review).isEmpty, "To review is already the whole scope: nothing to narrow")
+        runner.expect(BacklogStatusFacet.toReview.title, equals: "To review", "the facet exists for the grouping and the chips")
+    }
+
+    runner.test("In progress and Blocked are filters within Open, joined by OR") {
+        runner.expect(ids(BacklogFilter(scope: .open, statuses: [.inProgress])), equals: ["run1", "run2"], "In progress is status doing")
+        runner.expect(ids(BacklogFilter(scope: .open, statuses: [.blocked])), equals: ["wait", "run2"], "Blocked is the flag, whatever the status")
+        runner.expect(ids(BacklogFilter(scope: .open, statuses: [.inProgress, .blocked])), equals: ["wait", "run1", "run2"], "either")
+        runner.expect(ids(BacklogFilter(scope: .open, statuses: [.notStarted])), equals: ["todo1", "todo2"], "open and not blocked: what can be picked up")
+        runner.expect(ids(BacklogFilter(scope: .open)), equals: ["todo1", "todo2", "wait", "run1", "run2"], "no facet, no narrowing")
+    }
+
+    runner.test("Resolved splits into Done and Dismissed") {
+        runner.expect(ids(BacklogFilter(scope: .resolved, statuses: [.done])), equals: ["fin"], "done")
+        runner.expect(ids(BacklogFilter(scope: .resolved, statuses: [.dismissed])), equals: ["gone"], "dismissed")
+        runner.expect(ids(BacklogFilter(scope: .resolved, statuses: [.done, .dismissed])), equals: ["fin", "gone"], "both")
+    }
+
+    runner.test("a facet picked in another scope waits there and narrows nothing here") {
+        let f = BacklogFilter(scope: .open, statuses: [.done])
+        runner.expect(f.activeStatuses.isEmpty, "Done is not an Open facet")
+        runner.expect(ids(f), equals: ["todo1", "todo2", "wait", "run1", "run2"], "the Open list is whole")
+        runner.expect(f.activeFilterCount, equals: 0, "and the filter button wears no count")
+        runner.expect(!f.isNarrowed, "a list nothing narrows is not 'filtered'")
+    }
+
+    runner.test("the facets are one filter on the button, and they compose with the others") {
+        runner.expect(BacklogFilter(scope: .open, statuses: [.inProgress, .blocked]).activeFilterCount, equals: 1, "one group, like severity")
+        let both = BacklogFilter(scope: .open, severities: ["high"], statuses: [.inProgress, .blocked])
+        runner.expect(ids(both), equals: ["wait", "run2"], "high severity AND (in progress OR blocked)")
+        runner.expect(both.activeFilterCount, equals: 2, "severity and status")
+        runner.expect(ids(BacklogFilter(scope: .open, query: "document", statuses: [.notStarted])), equals: ["todo2"], "search composes too")
+    }
+
+    runner.test("counts say what picking a facet would show, under the other filters") {
+        let open = BacklogBrowse.statusCounts(items, BacklogFilter(scope: .open))
+        runner.expect(open[.inProgress], equals: 2, "in progress")
+        runner.expect(open[.blocked], equals: 2, "blocked: one open, one in progress")
+        runner.expect(open[.notStarted], equals: 2, "not started")
+        let high = BacklogBrowse.statusCounts(items, BacklogFilter(scope: .open, severities: ["high"]))
+        runner.expect(high[.notStarted], equals: 1, "the severity filter applies to the counts")
+        let picked = BacklogBrowse.statusCounts(items, BacklogFilter(scope: .open, statuses: [.blocked]))
+        runner.expect(picked[.inProgress], equals: 2, "the facets themselves do not shrink each other's counts")
+        let resolved = BacklogBrowse.statusCounts(items, BacklogFilter(scope: .resolved))
+        runner.expect(resolved[.done], equals: 1, "done")
+        runner.expect(resolved[.dismissed], equals: 1, "dismissed")
+    }
+
+    runner.test("the choice is stored as text and read back, in a stable order") {
+        runner.expect(BacklogStatusFacet.encode([.blocked, .inProgress, .done]), equals: "inProgress,blocked,done", "declaration order")
+        runner.expect(BacklogStatusFacet.decode("blocked,inProgress"), equals: [.inProgress, .blocked], "round trip")
+        runner.expect(BacklogStatusFacet.decode("blocked,retired,,"), equals: [.blocked], "an unknown word is dropped, not an error")
+        runner.expect(BacklogStatusFacet.decode("").isEmpty, "empty is no filter")
+    }
+
+    runner.test("active filters are chips a person can remove, and Clear filters empties them") {
+        let f = BacklogFilter(scope: .open, severities: ["high", "med"], hiddenKinds: ["docs"], statuses: [.inProgress, .blocked], onlyIds: ["wait"])
+        let chips = BacklogBrowse.chips(f)
+        runner.expect(chips.map(\.label), equals: ["In progress", "Blocked", "Severity: High, Medium", "Hiding Docs", "Flagged only"],
+                      "the statuses first, each removable alone")
+        runner.expect(BacklogBrowse.chips(BacklogFilter()).isEmpty, "no filter, no chips")
+        let less = f.removing("status.blocked")
+        runner.expect(less.statuses, equals: [.inProgress], "removing one chip removes one facet")
+        runner.expect(f.removing("severity").severities, equals: ["high", "med", "low"], "the severity chip restores all three")
+        runner.expect(f.removing("kinds").hiddenKinds.isEmpty, "the kinds chip shows them again")
+        runner.expect(f.removing("flagged").onlyIds == nil, "the flagged chip drops the narrowing")
+        let cleared = f.cleared()
+        runner.expect(cleared.activeFilterCount, equals: 0, "Clear filters")
+        runner.expect(cleared.scope, equals: .open, "the scope is the top-level view and stays")
+        let searching = BacklogFilter(scope: .resolved, query: "retry", statuses: [.done]).cleared()
+        runner.expect(searching.query, equals: "retry", "the search box is not a filter chip: it clears itself")
+        runner.expect(searching.scope, equals: .resolved, "scope kept")
+    }
+
+    runner.test("grouping by status still bands the five statuses") {
+        let sections = BacklogBrowse.sections(BacklogBrowse.filter(items, BacklogFilter(scope: .open)), group: .status)
+        runner.expect(sections.map(\.title), equals: ["In progress", "Open"], "doing then open, as the group menu says")
+    }
+}
+
+// MARK: - pane height band (pane-standard.md 2.12)
+//
+// The owner, 25.11: "the history seems to be cut if the other menu is minimised."
+// A fixed 200 pt graph sat under an empty grey pane. The rule: the last open
+// section that can grow fills the pane; a folded section takes only its header.
+
+runner.suite("pane height band") {
+    func section(_ id: String, chrome: Double = 28, open: Bool = true, natural: Double, minimum: Double = 80,
+                 weight: Double = 1, grows: Bool = true) -> PaneBandSection {
+        PaneBandSection(id: id, chrome: chrome, isOpen: open, natural: natural, minimum: minimum, weight: weight, grows: grows)
+    }
+    func used(_ sections: [PaneBandSection], _ h: [String: Double]) -> Double {
+        sections.reduce(0) { $0 + $1.chrome + (h[$1.id] ?? 0) }
+    }
+
+    runner.test("a clean tree: History is the only open section and fills the pane") {
+        let s = [section("stashes", open: false, natural: 52, grows: false), section("history", natural: 240)]
+        let h = PaneBandPlan.contentHeights(available: 700, sections: s)
+        runner.expect(h["stashes"], equals: 0, "a folded group takes only its header")
+        runner.expect(h["history"], equals: 700 - 56, "History takes everything the headers leave, past its 240 pt of rows")
+        runner.expect(used(s, h), equals: 700, "no empty space under it")
+    }
+
+    runner.test("a short list leaves the rest to History") {
+        let s = [section("list", chrome: 0, natural: 130, minimum: 78, weight: 2), section("history", natural: 2880, minimum: 120)]
+        let h = PaneBandPlan.contentHeights(available: 800, sections: s)
+        runner.expect(h["list"], equals: 130, "five rows need no more than five rows")
+        runner.expect(h["history"], equals: 800 - 28 - 130, "History gets the remainder")
+    }
+
+    runner.test("a long list scrolls and History keeps a usable share") {
+        let s = [section("list", chrome: 0, natural: 2500, minimum: 78, weight: 2), section("history", natural: 2880, minimum: 120)]
+        let h = PaneBandPlan.contentHeights(available: 700, sections: s)
+        runner.expect((h["history"] ?? 0) >= 120, "History keeps its minimum (\(h["history"] ?? -1))")
+        runner.expect((h["list"] ?? 0) > (h["history"] ?? 0), "the list, weighted 2:1, gets the larger part")
+        runner.expect(used(s, h), equals: 700, "the two together fill the pane exactly")
+    }
+
+    runner.test("History folded: the list grows to the bottom") {
+        let s = [section("list", chrome: 0, natural: 130, minimum: 78, weight: 2), section("history", open: false, natural: 2880, minimum: 120)]
+        let h = PaneBandPlan.contentHeights(available: 800, sections: s)
+        runner.expect(h["history"], equals: 0, "folded")
+        runner.expect(h["list"], equals: 800 - 28, "the last open section that can grow fills")
+    }
+
+    runner.test("a section that cannot grow never takes the surplus") {
+        let s = [
+            section("list", chrome: 0, natural: 130, minimum: 78, weight: 2),
+            section("preview", chrome: 27, natural: 60, minimum: 40, grows: false),
+            section("history", open: false, natural: 100),
+        ]
+        let h = PaneBandPlan.contentHeights(available: 800, sections: s)
+        runner.expect(h["preview"], equals: 60, "the preview of a short diff stays short")
+        runner.expect(h["list"], equals: 800 - 28 - 27 - 60, "and the list, which can grow, fills")
+    }
+
+    runner.test("a cramped pane shrinks every section and never overflows") {
+        let s = [section("list", chrome: 0, natural: 2500, minimum: 78, weight: 2), section("history", natural: 2880, minimum: 120)]
+        let h = PaneBandPlan.contentHeights(available: 150, sections: s)
+        runner.expect(used(s, h) <= 150 + 0.001, "sections plus headers fit in 150 pt (\(used(s, h)))")
+        runner.expect(h.values.allSatisfy { $0 >= 0 }, "no negative height")
+        let none = PaneBandPlan.contentHeights(available: 10, sections: s)
+        runner.expect(none.values.allSatisfy { $0 == 0 }, "less room than the headers: nothing is drawn below them")
+    }
+
+    runner.test("property: nothing overflows, nothing is left empty while a section could grow") {
+        var seed: UInt64 = 0x9E3779B97F4A7C15
+        func next() -> Double {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Double((seed >> 33) % 1000) / 1000
+        }
+        var checked = 0
+        for _ in 0..<400 {
+            let count = 1 + Int(next() * 4)
+            var s: [PaneBandSection] = []
+            for i in 0..<count {
+                let natural = (next() * 3000).rounded()
+                s.append(PaneBandSection(
+                    id: "s\(i)", chrome: (next() * 30).rounded(), isOpen: next() > 0.35, natural: natural,
+                    minimum: min(natural, (next() * 150).rounded()), weight: 1 + (next() * 2).rounded(), grows: next() > 0.3))
+            }
+            let available = (next() * 1400).rounded()
+            let h = PaneBandPlan.contentHeights(available: available, sections: s)
+            let headers = s.reduce(0) { $0 + $1.chrome }
+            checked += 1
+            runner.expect(h.values.allSatisfy { $0 >= 0 }, "no negative height: \(s) in \(available)")
+            if available >= headers {
+                runner.expect(used(s, h) <= available + 0.001, "overflow in \(available): \(s) -> \(h)")
+                if s.contains(where: { $0.isOpen && $0.grows }) {
+                    runner.expect(abs(used(s, h) - available) < 0.001, "empty space in \(available): \(s) -> \(h)")
+                }
+            }
+            for sec in s where !sec.isOpen { runner.expect(h[sec.id] ?? 0, equals: 0, "folded section \(sec.id) draws no body") }
+        }
+        runner.expect(checked, equals: 400, "ran every case")
     }
 }
 
@@ -7895,13 +8121,15 @@ runner.suite("backlog-browse-pane-standard") {
         runner.expect(BacklogBrowse.sections([], group: .none, now: now).isEmpty, "nothing, no empty band")
     }
 
-    runner.test("a row's second line says severity, kind, age and what it waits on") {
-        runner.expect(BacklogRowText.secondary(items[0], now: now), equals: "High · bug · 1d", "severity, kind, age")
-        runner.expect(BacklogRowText.secondary(items[2], now: now), equals: "High · 2mo · waits on accountant sign-off", "blocked with its reason; no kind, nothing invented")
-        runner.expect(BacklogRowText.secondary(item("x", "x", blocked: true), now: now), equals: "Medium · 5d · blocked", "blocked without a reason says so")
-        runner.expect(BacklogRowText.secondary(items[6], now: now), equals: "Medium · 2w · in progress · tab: fix-the-thing", "who holds it")
-        runner.expect(BacklogRowText.secondary(items[3], now: now), equals: "Medium · today · auto-captured", "provisional")
-        runner.expect(BacklogRowText.secondary(items[5], now: now), equals: "Medium · 3mo · done", "resolved")
+    runner.test("a row's second line leads with where the item stands, then severity, kind and age") {
+        runner.expect(BacklogRowText.secondary(items[0], now: now), equals: "High · bug · 1d", "a plain open item says nothing about status")
+        runner.expect(BacklogRowText.secondary(items[2], now: now), equals: "Blocked · waits on accountant sign-off · High · 2mo", "blocked leads, with its reason; no kind, nothing invented")
+        runner.expect(BacklogRowText.secondary(item("x", "x", blocked: true), now: now), equals: "Blocked · Medium · 5d", "blocked without a reason says so")
+        runner.expect(BacklogRowText.secondary(items[6], now: now), equals: "In progress · tab: fix-the-thing · Medium · 2w", "who holds it")
+        runner.expect(BacklogRowText.secondary(item("y", "y", status: "doing", blocked: true, blockedOn: "a review", claimedBy: "8cb24ed6aaaa"), now: now),
+                      equals: "In progress · session 8cb24ed6 · Blocked · waits on a review · Medium · 5d", "doing and blocked say both")
+        runner.expect(BacklogRowText.secondary(items[3], now: now), equals: "Auto-captured · Medium · today", "provisional")
+        runner.expect(BacklogRowText.secondary(items[5], now: now), equals: "Done · Medium · 3mo", "resolved")
         runner.expect(BacklogRowText.secondary(item("w", "w", created: "garbage"), now: now), equals: "Medium", "an unreadable date is left out")
     }
 

@@ -135,6 +135,50 @@ public enum PaneSourceScan {
         return collected.joined(separator: "\n")
     }
 
+    // MARK: Fixed-height bands
+
+    /// Files that lay out a band of lists under a pane's header but are not named like a pane.
+    public static let heightGuardExtras: [String] = [
+        "SourceControlChangesView.swift", "SourceControlProjectView.swift", "SourceControlPreview.swift",
+        "GitGraphView.swift", "LeftPane.swift",
+    ]
+
+    /// Every pane file (allowlisted or not: a fixed band is wrong in a pane that has not
+    /// moved to the kit too) plus the files above.
+    public static func loadHeightGuardSources(macosDir: String) -> [String: String] {
+        let dir = macosDir + "/MARVIN"
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        var out: [String: String] = [:]
+        for n in names where isPaneFile(n) || heightGuardExtras.contains(n) {
+            if let text = try? String(contentsOfFile: dir + "/" + n, encoding: .utf8) { out[n] = text }
+        }
+        return out
+    }
+
+    private static let fixedHeight = try! NSRegularExpression(pattern: #"\.frame\([^)]*\bheight:\s*([0-9]+(?:\.[0-9]+)?)\s*[,)]"#)
+
+    /// The smallest literal height that is a band and not a control or a glyph box.
+    public static let bandHeightFloor: Double = 100
+
+    /// `.frame(height: N)` with N >= 100 on a literal: a band that cannot grow when the pane
+    /// has room (an empty grey under it) and cannot shrink when it has not (content cut while
+    /// space is free). It passes with a `// fixed: <why>` note on the line or the three above,
+    /// or on a text editor (a field the person types into, sized to its sheet).
+    public static func fixedHeightViolations(in files: [String: String]) -> [String] {
+        var out: [String] = []
+        for name in files.keys.sorted() {
+            let lines = files[name]!.components(separatedBy: "\n")
+            for (i, line) in lines.enumerated() {
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") { continue }
+                guard let h = capture(fixedHeight, line), let n = Double(h), n >= bandHeightFloor else { continue }
+                let context = lines[max(0, i - 3)...i].joined(separator: "\n")
+                if context.contains("// fixed:") || context.contains("TextEditor") { continue }
+                out.append("\(name):\(i + 1)")
+            }
+        }
+        return out
+    }
+
     // MARK: Small text
 
     private static let systemSize = try! NSRegularExpression(pattern: #"\.font\(\s*\.system\(\s*size:\s*([0-9]+(?:\.[0-9]+)?)"#)

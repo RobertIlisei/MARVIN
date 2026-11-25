@@ -400,6 +400,8 @@ struct SourceControlInitialState {
     var filter = ""
     var selection: String? = nil
     var folderOverrides: [String: Bool] = [:]
+    /// Folded section ids; nil is what the person has saved (or the defaults).
+    var collapsed: Set<String>? = nil
 }
 
 @MainActor struct SourceControlView: View {
@@ -409,6 +411,7 @@ struct SourceControlInitialState {
         _filter = State(initialValue: initial.filter)
         _selection = State(initialValue: initial.selection)
         _folderOverrides = State(initialValue: initial.folderOverrides)
+        if let folded = initial.collapsed { _collapsed = State(initialValue: folded) }
     }
 
     @Environment(MarvinBridge.self) private var bridge
