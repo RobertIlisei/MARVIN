@@ -7515,6 +7515,146 @@ runner.suite("chat-status-strip") {
     }
 }
 
+// MARK: - the backlog count, live (ADR-0044 addendum, 2026-11-25)
+//
+// The chat's "N backlog items parked" strip read its number once and never
+// again. One store now holds the project's counts; the sidecar says when they
+// move (`backlog.changed`), and every surface reads the store.
+
+private func backlogWire(_ rev: Int, _ reason: String, _ p: Int, _ o: Int, _ d: Int, _ done: Int, _ x: Int, _ b: Int) -> Data {
+    Data(#"{"projectId":"p1","revision":\#(rev),"reason":"\#(reason)","counts":{"provisional":\#(p),"open":\#(o),"doing":\#(d),"done":\#(done),"dismissed":\#(x),"blocked":\#(b),"active":\#(p + o + d)}}"#.utf8)
+}
+
+runner.suite("backlog live count") {
+    runner.test("the event decodes with every status and the blocked flag") {
+        let e = BacklogFeedEvent.decode(name: "backlog.changed", data: backlogWire(7, "change", 2, 5, 1, 10, 3, 4))
+        runner.expect(e, equals: .changed(projectId: "p1", revision: 7, isSnapshot: false,
+                                          counts: BacklogStatusCounts(provisional: 2, open: 5, doing: 1, done: 10, dismissed: 3, blocked: 4)), "change")
+        let s = BacklogFeedEvent.decode(name: "backlog.changed", data: backlogWire(0, "snapshot", 0, 1, 0, 0, 0, 0))
+        runner.expect(s, equals: .changed(projectId: "p1", revision: 0, isSnapshot: true,
+                                          counts: BacklogStatusCounts(open: 1)), "snapshot")
+        runner.expect(BacklogFeedEvent.decode(name: "turn.ended", data: Data("{}".utf8)) == nil, "not ours")
+        runner.expect(BacklogFeedEvent.decode(name: "backlog.changed", data: Data("{".utf8)) == nil, "malformed")
+        runner.expect(BacklogFeedEvent.decode(name: "backlog.changed", data: Data(#"{"projectId":"p","revision":1,"reason":"change","counts":{"open":2}}"#.utf8)),
+                      equals: .changed(projectId: "p", revision: 1, isSnapshot: false, counts: BacklogStatusCounts(open: 2)), "a sidecar that sends fewer fields reads the rest as zero")
+    }
+
+    runner.test("a frame exactly as the sidecar sent it (captured from the real announce route, 2026-11-25) lands in the state") {
+        let frame = #"{"projectId":"private-var-tmp-proj","revision":3,"reason":"change","counts":{"provisional":1,"open":3,"doing":0,"done":1,"dismissed":0,"blocked":0,"active":4}}"#
+        var st = BacklogLiveState()
+        guard let e = BacklogFeedEvent.decode(name: "backlog.changed", data: Data(frame.utf8)) else {
+            runner.expect(false, "the captured frame decodes")
+            return
+        }
+        runner.expect(st.apply(e, project: "private-var-tmp-proj"), "applies")
+        runner.expect(st.counts.active, equals: 4, "the strip's number")
+        runner.expect(st.counts.scopeCounts, equals: BacklogCounts(open: 3, review: 1, resolved: 1), "the window's scopes")
+    }
+
+    runner.test("active is what the strip shows: provisional + open + doing, never the resolved") {
+        let c = BacklogStatusCounts(provisional: 2, open: 5, doing: 1, done: 200, dismissed: 50, blocked: 9)
+        runner.expect(c.active, equals: 8, "active")
+        runner.expect(BacklogStatusCounts.zero.active, equals: 0, "zero")
+    }
+
+    runner.test("the window's scope counts come from the same numbers") {
+        let c = BacklogStatusCounts(provisional: 2, open: 5, doing: 1, done: 10, dismissed: 3, blocked: 4)
+        runner.expect(c.scopeCounts, equals: BacklogCounts(open: 6, review: 2, resolved: 13), "open = open + doing; review = provisional; resolved = done + dismissed")
+        runner.expect(c.scopeCounts.open + c.scopeCounts.review, equals: c.active, "the two live scopes add up to the strip's number")
+    }
+
+    runner.test("a change replaces the counts and ticks the generation; an older one is dropped") {
+        var st = BacklogLiveState()
+        runner.expect(!st.hasData, "nothing yet")
+        let a = st.apply(.changed(projectId: "p1", revision: 3, isSnapshot: true, counts: BacklogStatusCounts(open: 4)), project: "p1")
+        runner.expect(a && st.counts.active == 4 && st.hasData, "snapshot applies")
+        let g1 = st.generation
+        runner.expect(st.apply(.changed(projectId: "p1", revision: 4, isSnapshot: false, counts: BacklogStatusCounts(open: 9)), project: "p1"), "newer change applies")
+        runner.expect(st.counts.active, equals: 9, "nine")
+        runner.expect(st.generation, equals: g1 + 1, "views watching the generation reload")
+        runner.expect(!st.apply(.changed(projectId: "p1", revision: 4, isSnapshot: false, counts: BacklogStatusCounts(open: 1)), project: "p1"), "the same revision is not a new change")
+        runner.expect(!st.apply(.changed(projectId: "p1", revision: 2, isSnapshot: false, counts: BacklogStatusCounts(open: 1)), project: "p1"), "an older one is dropped")
+        runner.expect(st.counts.active, equals: 9, "still nine")
+        runner.expect(st.generation, equals: g1 + 1, "no tick for a dropped event")
+    }
+
+    runner.test("a snapshot always applies and re-bases the revision: a restarted sidecar counts from zero again") {
+        var st = BacklogLiveState()
+        _ = st.apply(.changed(projectId: "p1", revision: 41, isSnapshot: false, counts: BacklogStatusCounts(open: 7)), project: "p1")
+        runner.expect(st.apply(.changed(projectId: "p1", revision: 0, isSnapshot: true, counts: BacklogStatusCounts(open: 3)), project: "p1"), "snapshot after a restart")
+        runner.expect(st.counts.active, equals: 3, "three")
+        runner.expect(st.revision, equals: 0, "re-based")
+        runner.expect(st.apply(.changed(projectId: "p1", revision: 1, isSnapshot: false, counts: BacklogStatusCounts(open: 4)), project: "p1"), "the first change of the new sidecar is not mistaken for an old one")
+        runner.expect(st.counts.active, equals: 4, "four")
+    }
+
+    runner.test("another project's event is ignored") {
+        var st = BacklogLiveState()
+        runner.expect(!st.apply(.changed(projectId: "other", revision: 1, isSnapshot: false, counts: BacklogStatusCounts(open: 99)), project: "p1"), "wrong project")
+        runner.expect(st.counts.active, equals: 0, "untouched")
+        runner.expect(!st.apply(.changed(projectId: "p1", revision: 1, isSnapshot: false, counts: BacklogStatusCounts(open: 5)), project: nil), "no project loaded")
+    }
+
+    runner.test("a plain re-read (window back to the front) replaces the numbers whatever their revision") {
+        var st = BacklogLiveState()
+        _ = st.apply(.changed(projectId: "p1", revision: 41, isSnapshot: false, counts: BacklogStatusCounts(open: 7)), project: "p1")
+        let g = st.generation
+        runner.expect(st.adoptRead(BacklogStatusCounts(open: 2)), "differs")
+        runner.expect(st.counts.active, equals: 2, "two")
+        runner.expect(st.generation, equals: g + 1, "ticks")
+        runner.expect(!st.adoptRead(BacklogStatusCounts(open: 2)), "the same numbers are not a change")
+        runner.expect(st.generation, equals: g + 1, "no tick")
+    }
+
+    runner.test("reset forgets everything when the project changes") {
+        var st = BacklogLiveState()
+        _ = st.apply(.changed(projectId: "p1", revision: 3, isSnapshot: true, counts: BacklogStatusCounts(open: 4)), project: "p1")
+        st.reset()
+        runner.expect(!st.hasData && st.counts == .zero && st.revision == -1, "empty")
+    }
+
+    runner.test("what each surface says for a state") {
+        runner.expect(BacklogSurface.chipText(active: 261), equals: "261 backlog items parked", "the strip's wording is unchanged")
+        runner.expect(BacklogSurface.chipText(active: 1), equals: "1 backlog item parked", "singular")
+        runner.expect(!BacklogSurface.showsChip(active: 0), "zero: no strip row, as before")
+        runner.expect(BacklogSurface.showsChip(active: 1), "one")
+        runner.expect(BacklogSurface.windowSubtitle(BacklogCounts(open: 6, review: 2, resolved: 13)), equals: "6 open \u{B7} 2 to review", "window header")
+        runner.expect(BacklogSurface.windowSubtitle(BacklogCounts(open: 6, review: 0, resolved: 13)), equals: "6 open", "nothing to review")
+    }
+
+    runner.test("a burst of events reduces to the last one's numbers") {
+        var st = BacklogLiveState()
+        for (i, n) in [3, 4, 5, 4, 6].enumerated() {
+            _ = st.apply(.changed(projectId: "p1", revision: i + 1, isSnapshot: false, counts: BacklogStatusCounts(open: n)), project: "p1")
+        }
+        runner.expect(st.counts.active, equals: 6, "six")
+        runner.expect(st.revision, equals: 5, "revision")
+    }
+}
+
+runner.suite("backlog count source guard") {
+    let macosDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().path
+    runner.test("no view or model keeps its own copy of the backlog count") {
+        let hits = BacklogCountSourceScan.violations(in: BacklogCountSourceScan.loadSources(macosDir: macosDir))
+        runner.expect(hits.isEmpty, "a copy of the count outside BacklogLiveStore: \(hits.joined(separator: "; "))")
+    }
+    runner.test("the guard catches the shapes that caused the staleness") {
+        func hits(_ text: String, file: String = "Fake.swift") -> [String] { BacklogCountSourceScan.violations(in: [file: text]) }
+        runner.expect(!hits("    private(set) var backlogOpenCount: Int = 0").isEmpty, "a stored count")
+        runner.expect(!hits("    backlogOpenCount = await BacklogService.shared.openCount(workDir: wd)").isEmpty, "an assignment from a one-time read")
+        runner.expect(!hits("    let n = await BacklogService.shared.openCount(workDir: wd)").isEmpty, "a count read through the service")
+        runner.expect(!hits("    @State private var parkedBacklogCount = 0").isEmpty, "a @State copy named for the backlog")
+        runner.expect(!hits("    let items = try await BacklogService.shared.fetch(workDir: wd)\n    Text(\"\\(items.count) backlog items parked\")").isEmpty, "a count derived from a fetched list in a view")
+        runner.expect(hits("    var backlogOpenCount: Int { BacklogLiveStore.shared.counts.active }").isEmpty, "a computed read of the store is the right shape")
+        runner.expect(hits("    private(set) var counts = BacklogStatusCounts.zero", file: "BacklogLiveStore.swift").isEmpty, "the store itself holds it")
+        runner.expect(hits("    if model.backlogOpenCount > 0 { }").isEmpty, "comparing is reading")
+        runner.expect(hits("    let n = BacklogLiveStore.shared.counts.active").isEmpty, "reading the store")
+        runner.expect(hits("    keywords: [\"todo\", \"parked\", \"backlog\"]").isEmpty, "the word alone is not a count")
+        runner.expect(hits("    headline: \"Nothing parked\" // backlog").isEmpty, "a headline without a number")
+        runner.expect(hits("    // backlogOpenCount = 0 used to live here").isEmpty, "a comment")
+    }
+}
+
 runner.suite("scope-met-bar") {
     runner.test("Mark reviewed is the primary action; Review changes sits beside it only when there is a diff") {
         let withDiff = ScopeMetBar.layout(hasChanges: true)

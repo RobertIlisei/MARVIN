@@ -1,3 +1,5 @@
+import { backlogChangedPayload, getBacklogLive } from "@marvin/runtime/backlog-live";
+import { getProject } from "@marvin/runtime/projects";
 import { type ProjectEvent, subscribeProjectEvents } from "@marvin/runtime/turn-registry";
 import type { NextRequest } from "next/server";
 
@@ -59,6 +61,25 @@ export async function GET(req: NextRequest) {
         send(e.event, e.data);
       });
 
+      // ADR-0044 addendum — the project's backlog counts ride this stream too:
+      // the current state right after attach (so a reconnect after sleep or a
+      // sidecar restart resyncs), then one `backlog.changed` per debounced
+      // change of any origin. One watcher per project however many clients.
+      let releaseBacklogWatch: (() => void) | null = null;
+      let unsubscribeBacklog: (() => void) | null = null;
+      const project = getProject(projectId);
+      if (project) {
+        const hub = getBacklogLive();
+        releaseBacklogWatch = hub.watch(project.workDir);
+        unsubscribeBacklog = hub.subscribe(project.workDir, (c) =>
+          send("backlog.changed", backlogChangedPayload(projectId, c)),
+        );
+        hub
+          .snapshot(project.workDir)
+          .then((c) => send("backlog.changed", backlogChangedPayload(projectId, c)))
+          .catch(() => {});
+      }
+
       const heartbeat = setInterval(() => write(`: ping\n\n`), HEARTBEAT_MS);
       heartbeat.unref?.();
 
@@ -66,6 +87,8 @@ export async function GET(req: NextRequest) {
         if (!open) return;
         open = false;
         unsubscribe();
+        unsubscribeBacklog?.();
+        releaseBacklogWatch?.();
         clearInterval(heartbeat);
         try {
           controller.close();

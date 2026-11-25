@@ -21,6 +21,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { noteBacklogWrite } from "./backlog-live";
 import { type AdrIndex, buildAdrIndex, linkTrailerFor, stripLinkTrailer } from "./note-links";
 
 export const INDEX_HEADER = "# Project Backlog";
@@ -577,6 +578,9 @@ async function writeItem(
   const index = adrIndex ?? (await buildAdrIndex(workDir));
   const trailer = linkTrailerFor(`${item.title}\n${item.body}`, workDir, index);
   await writeFile(join(backlogDir(workDir), `${item.id}.md`), serialize(item, trailer), "utf-8");
+  // Say so (ADR-0044 addendum): every write path ends here, so every surface
+  // that shows a backlog count hears about it — one debounced signal per project.
+  noteBacklogWrite(workDir);
 }
 
 /**
