@@ -8,10 +8,12 @@ repo is their only home:
 |---|---|
 | `pr-review` | adapted from Garry Tan's gstack (`garrytan/gstack`) |
 | `security-audit` | adapted from gstack |
-| `systematic-debugging` | merges Jesse Vincent's Superpowers (`obra/superpowers`) + gstack |
-| `test-driven-development` | ported from Superpowers |
+| `systematic-debugging` | merges Jesse Vincent's Superpowers (`obra/superpowers`) + gstack; sibling files for root-cause tracing, condition-based waiting, defense in depth |
+| `test-driven-development` | ported from Superpowers; `writing-good-tests.md` beside it |
+| `verification-before-completion` | adapted from Superpowers (no prompt line; named in briefs, ADR-0138) |
 
-Attribution lives at the bottom of each `SKILL.md`.
+Attribution lives at the bottom of each `SKILL.md` (Superpowers ports refreshed
+against v7.0.2, 2026-11-25).
 
 ## Upstream Anthropic skills are NOT vendored
 
@@ -36,7 +38,8 @@ bash scripts/install-skills.sh
 ```
 
 Idempotent — existing skills in `~/.claude/skills/` are left alone; missing
-upstream ones are cloned.
+upstream ones are cloned. It never updates: to refresh an installed copy, copy
+the skill folder over it by hand.
 
 `graphify` ships from `~/.claude/skills/graphify/` separately (a local authored
 skill, not from the Anthropic bundle). `honeycomb:*` ships via the
