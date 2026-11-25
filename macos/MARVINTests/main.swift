@@ -8462,6 +8462,173 @@ runner.suite("sessions-groups-r3") {
     }
 }
 
+// MARK: - editor area regressions (owner, 25.11.2026: tab bar, Markdown preview toggle, header gone)
+//
+// The W-11 work-area change put `.clipped()` on the editor column. Clipping an
+// AppKit-backed view (the `VSplitView` inside it) drops the safe area SwiftUI hands
+// its content, so the tab bar and the file header - 61 pt of chrome - were laid
+// out UNDER the 52 pt title bar and the editor looked chromeless. Nothing in the
+// code had been deleted, which is why a read of the source found nothing. These
+// tests pin the decisions as values and the source shape that lost them.
+
+private let editorMacosDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().path
+
+runner.suite("editor area: Markdown preview toggle") {
+    runner.test("only Markdown files have a preview") {
+        runner.expect(MarkdownPreviewToggle.isPreviewable("/p/docs/0616-adr.md"), ".md")
+        runner.expect(MarkdownPreviewToggle.isPreviewable("/p/README.MARKDOWN"), "case does not matter")
+        runner.expect(MarkdownPreviewToggle.isPreviewable("/p/page.mdx"), ".mdx")
+        runner.expect(!MarkdownPreviewToggle.isPreviewable("/p/Sources/App.swift"), "source has none")
+        runner.expect(!MarkdownPreviewToggle.isPreviewable("/p/notes"), "no extension")
+    }
+    runner.test("a Markdown file opens as source, and a toggle flips only that file") {
+        var previewing: Set<String> = []
+        runner.expect(MarkdownPreviewToggle.mode(for: "/p/a.md", previewing: previewing), equals: .source, "the default is the source")
+        MarkdownPreviewToggle.toggle("/p/a.md", in: &previewing)
+        runner.expect(MarkdownPreviewToggle.mode(for: "/p/a.md", previewing: previewing), equals: .preview, "after one toggle")
+        runner.expect(MarkdownPreviewToggle.mode(for: "/p/b.md", previewing: previewing), equals: .source, "another file is untouched")
+        MarkdownPreviewToggle.toggle("/p/a.md", in: &previewing)
+        runner.expect(MarkdownPreviewToggle.mode(for: "/p/a.md", previewing: previewing), equals: .source, "and back")
+    }
+    runner.test("a file with no preview is never previewed, whatever the set holds") {
+        runner.expect(MarkdownPreviewToggle.mode(for: "/p/a.swift", previewing: ["/p/a.swift"]), equals: .source, "no preview for source")
+        var previewing: Set<String> = []
+        MarkdownPreviewToggle.toggle("/p/a.swift", in: &previewing)
+        runner.expect(previewing.isEmpty, "toggling a non-Markdown file changes nothing")
+    }
+    runner.test("the control names the action it will perform, not the state it is in") {
+        let toSource = MarkdownPreviewToggle.control(for: .preview)
+        runner.expect(toSource.title, equals: "Show Source", "showing the preview, the button goes to the source")
+        runner.expect(toSource.accessibilityLabel, equals: "Show Markdown source", "spoken the same way")
+        runner.expect(toSource.help.contains("⇧⌘V"), "and the key is in the tooltip")
+        let toPreview = MarkdownPreviewToggle.control(for: .source)
+        runner.expect(toPreview.title, equals: "Preview", "showing the source, the button goes to the preview")
+        runner.expect(toPreview.accessibilityLabel, equals: "Preview rendered Markdown", "spoken the same way")
+        runner.expect(toPreview.systemImage != toSource.systemImage, "the icon changes with the action")
+    }
+}
+
+runner.suite("editor area: tabs") {
+    let tabs = ["/p/a.swift", "/p/b.md", "/p/c.go"]
+    runner.test("closing the selected tab selects the one that took its place, else the one before") {
+        runner.expect(EditorTabs.selectionAfterClosing("/p/b.md", in: tabs, selected: "/p/b.md"), equals: "/p/c.go", "the next tab")
+        runner.expect(EditorTabs.selectionAfterClosing("/p/c.go", in: tabs, selected: "/p/c.go"), equals: "/p/b.md", "the last one falls back to the previous")
+        runner.expect(EditorTabs.selectionAfterClosing("/p/a.swift", in: ["/p/a.swift"], selected: "/p/a.swift"), equals: nil, "the only tab leaves none")
+    }
+    runner.test("closing a tab that is not selected keeps the selection") {
+        runner.expect(EditorTabs.selectionAfterClosing("/p/a.swift", in: tabs, selected: "/p/c.go"), equals: "/p/c.go", "selection stays")
+        runner.expect(EditorTabs.selectionAfterClosing("/p/zzz", in: tabs, selected: "/p/c.go"), equals: "/p/c.go", "an unknown path changes nothing")
+    }
+}
+
+runner.suite("editor area: the chrome must not be laid out under the title bar") {
+    // The two files, as they ship.
+    let fileViewer = (try? String(contentsOfFile: editorMacosDir + "/MARVIN/FileViewerView.swift", encoding: .utf8)) ?? ""
+    let contentView = (try? String(contentsOfFile: editorMacosDir + "/MARVIN/ContentView.swift", encoding: .utf8)) ?? ""
+
+    runner.test("the shipped editor builds the tab bar, the header, the Markdown preview and the toggle") {
+        runner.expect(!fileViewer.isEmpty && !contentView.isEmpty, "both files were read")
+        let hits = EditorSourceGuard.violations(fileViewer: fileViewer, contentView: contentView)
+        runner.expect(hits.isEmpty, "the editor lost: \(hits.joined(separator: "; "))")
+    }
+
+    runner.test("the guard fails on each shape that lost the editor chrome") {
+        let fv = EditorGuardFixtures.fileViewer
+        let cv = EditorGuardFixtures.contentView
+        func dropLines(_ text: String, containing needle: String) -> String {
+            text.components(separatedBy: "\n").filter { !$0.contains(needle) }.joined(separator: "\n")
+        }
+        func swapped(_ text: String) -> String {
+            text.components(separatedBy: "\n").map { line -> String in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if t == "tabBar" { return line.replacingOccurrences(of: "tabBar", with: "header") }
+                if t == "header" { return line.replacingOccurrences(of: "header", with: "tabBar") }
+                return line
+            }.joined(separator: "\n")
+        }
+        let ok = EditorSourceGuard.violations(fileViewer: fv, contentView: cv)
+        runner.expect(ok.isEmpty, "the fixtures are a passing editor: \(ok)")
+
+        let noTabBar = fv.components(separatedBy: "\n").filter { $0.trimmingCharacters(in: .whitespaces) != "tabBar" }.joined(separator: "\n")
+        runner.expect(noTabBar != fv && !EditorSourceGuard.violations(fileViewer: noTabBar, contentView: cv).isEmpty,
+                      "a body without the tab bar")
+        let noPreview = fv.replacingOccurrences(of: "MarkdownFilePreview(", with: "Text(")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: noPreview, contentView: cv).isEmpty,
+                      "a content branch without the Markdown preview")
+        let noToggle = fv.replacingOccurrences(of: "MarkdownPreviewToggle.control(", with: "other(")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: noToggle, contentView: cv).isEmpty,
+                      "a header whose toggle is not built from the rule")
+        let wrongOrder = swapped(fv)
+        runner.expect(wrongOrder != fv && !EditorSourceGuard.violations(fileViewer: wrongOrder, contentView: cv).isEmpty,
+                      "the header above the tab bar")
+        let bareClip = cv.replacingOccurrences(of: ".opacity(fills ? 0 : 1)", with: ".clipped()")
+        runner.expect(bareClip != cv && !EditorSourceGuard.violations(fileViewer: fv, contentView: bareClip).isEmpty,
+                      "the W-11 shape: a clip on the editor column")
+        let shapeClip = cv.replacingOccurrences(of: ".opacity(fills ? 0 : 1)", with: ".clipShape(Rectangle())")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: fv, contentView: shapeClip).isEmpty,
+                      "a clipShape does the same damage as clipped")
+        let maskIt = cv.replacingOccurrences(of: ".opacity(fills ? 0 : 1)", with: ".mask(Rectangle())")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: fv, contentView: maskIt).isEmpty,
+                      "and so does a mask")
+        let noWorkArea = cv.replacingOccurrences(of: "var workArea: some View", with: "var somethingElse: some View")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: fv, contentView: noWorkArea).isEmpty,
+                      "a renamed workArea is noticed, not silently unchecked")
+        let noViewer = cv.replacingOccurrences(of: "FileViewerView()", with: "EmptyView()")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: fv, contentView: noViewer).isEmpty,
+                      "an editor area that never builds the file viewer")
+    }
+}
+
+private enum EditorGuardFixtures {
+    static let fileViewer = """
+    @MainActor struct FileViewerView: View {
+        var body: some View {
+            VStack(spacing: 0) {
+                tabBar
+                    .zIndex(1)
+                MarvinDivider()
+                header
+                    .zIndex(1)
+                MarvinDivider()
+                content
+            }
+        }
+        private var tabBar: some View {
+            ScrollView(.horizontal) { ForEach(bridge.openFiles, id: \\.self) { path in tabButton(path: path) } }
+        }
+        private var header: some View {
+            let control = MarkdownPreviewToggle.control(for: mode)
+            Button { togglePreview(path) } label: { Label(control.title, systemImage: control.systemImage) }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+        }
+        @ViewBuilder private var content: some View {
+            if isPreviewing {
+                MarkdownFilePreview(text: buffer.content, workDir: bridge.projectWorkDir)
+            } else {
+                FileViewerNSView(path: path)
+            }
+        }
+    }
+    """
+
+    static let contentView = """
+    private var editorArea: some View {
+        ZStack {
+            FileViewerView().transition(.opacity)
+        }
+    }
+    private var workArea: some View {
+        HStack(spacing: 0) {
+            webIsland
+                .frame(minWidth: Self.editorMinWidth)
+                .opacity(fills ? 0 : 1)
+            chatDivider
+        }
+    }
+    private var chatDivider: some View { MarvinDivider() }
+    """
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

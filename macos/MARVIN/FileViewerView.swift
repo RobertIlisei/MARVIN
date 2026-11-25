@@ -1330,18 +1330,17 @@ final class MarvinEditorTextView: STTextView {
             // it: the pane is already one column of a three-pane window, and
             // half of it is too narrow to read prose in.
             if let path = bridge.selectedFilePath, Self.isPreviewable(path) {
+                let control = MarkdownPreviewToggle.control(for: previewMode(of: path))
                 Button {
                     togglePreview(path)
                 } label: {
-                    Label(
-                        isPreviewing ? "Show Source" : "Preview",
-                        systemImage: isPreviewing ? "chevron.left.forwardslash.chevron.right" : "doc.richtext"
-                    )
-                    .labelStyle(.iconOnly)
+                    Label(control.title, systemImage: control.systemImage)
+                        .labelStyle(.iconOnly)
                 }
                 .buttonStyle(.borderless)
                 .keyboardShortcut("v", modifiers: [.command, .shift])
-                .help(isPreviewing ? "Show the Markdown source (⇧⌘V)" : "Preview the rendered Markdown (⇧⌘V)")
+                .help(control.help)
+                .accessibilityLabel(control.accessibilityLabel)
             }
             // Find in file (⌘F). The menu command alone is invisible — twice
             // now a capability has shipped with no on-screen affordance and
@@ -1445,20 +1444,20 @@ final class MarvinEditorTextView: STTextView {
     /// `ChatMarkdown`, which is a Markdown parser; pointing it at anything
     /// else would render garbage confidently.
     static func isPreviewable(_ path: String) -> Bool {
-        ["md", "markdown", "mdx"].contains((path as NSString).pathExtension.lowercased())
+        MarkdownPreviewToggle.isPreviewable(path)
+    }
+
+    private func previewMode(of path: String) -> MarkdownPreviewToggle.Mode {
+        MarkdownPreviewToggle.mode(for: path, previewing: previewPaths)
     }
 
     private var isPreviewing: Bool {
         guard let path = bridge.selectedFilePath else { return false }
-        return previewPaths.contains(path)
+        return previewMode(of: path) == .preview
     }
 
     private func togglePreview(_ path: String) {
-        if previewPaths.contains(path) {
-            previewPaths.remove(path)
-        } else {
-            previewPaths.insert(path)
-        }
+        MarkdownPreviewToggle.toggle(path, in: &previewPaths)
     }
 
     @ViewBuilder
