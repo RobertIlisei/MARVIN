@@ -71,6 +71,8 @@ private enum GitConfirmSeverity: String {
     /// as a scrollable monospace block. Phase 3g only passes paths
     /// for stage / unstage / discard; commit-amend skips it.
     let paths: [String]
+    /// The tree the act lands in, and the pane's own wording of it, when known.
+    var context: GitConfirmContext? = nil
 
     let onConfirm: () -> Void
     let onCancel: () -> Void
@@ -96,18 +98,20 @@ private enum GitConfirmSeverity: String {
                 .font(.title2)
                 .foregroundStyle(sev.tint)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Confirm \(actionVerb.lowercased())")
+                Text(context?.text?.title ?? "Confirm \(actionVerb.lowercased())")
                     .font(.title3.weight(.semibold))
-                Text("git policy requires explicit confirmation")
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(context.map { "git policy requires explicit confirmation · \($0.target)" } ?? "git policy requires explicit confirmation")
                     .font(.caption.monospaced())
                     .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
         }
     }
 
     private var reasonBlock: some View {
-        Text(reason)
+        Text(context?.text.map { "\(reason)\n\n\($0.message)" } ?? reason)
             .font(.body)
             .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
@@ -172,12 +176,12 @@ private enum GitConfirmSeverity: String {
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     )
-                Button(sev.actionLabel(for: actionVerb)) { onConfirm() }
+                Button(context?.text?.confirmLabel ?? sev.actionLabel(for: actionVerb)) { onConfirm() }
                     .tint(.red)
             } else {
                 Button("Cancel") { onCancel() }
                     .keyboardShortcut(.cancelAction)
-                Button(sev.actionLabel(for: actionVerb)) { onConfirm() }
+                Button(context?.text?.confirmLabel ?? sev.actionLabel(for: actionVerb)) { onConfirm() }
                     .keyboardShortcut(.defaultAction)
             }
         }

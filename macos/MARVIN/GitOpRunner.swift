@@ -28,6 +28,7 @@
 // The runner is deliberately NOT a singleton: each panel owns one, so
 // an in-flight branch switch can't dim the SCM panel's commit button.
 
+import MARVINLogic
 import SwiftUI
 
 @MainActor
@@ -70,6 +71,7 @@ final class GitOpRunner {
         verb: String,
         key: String,
         cwd: String,
+        context: GitConfirmContext? = nil,
         body: @escaping (_ token: String?) async throws -> FilesService.GitMutationOutcome,
         onSuccess: (() -> Void)? = nil
     ) {
@@ -83,6 +85,7 @@ final class GitOpRunner {
                 verb: verb,
                 cwd: cwd,
                 token: nil,
+                context: context,
                 body: body,
                 onSuccess: onSuccess
             )
@@ -93,6 +96,7 @@ final class GitOpRunner {
     func runRemote(
         verb: String,
         cwd: String,
+        context: GitConfirmContext? = nil,
         body: @escaping (_ token: String?) async throws -> FilesService.GitRemoteOutcome,
         onSuccess: (() -> Void)? = nil
     ) {
@@ -106,6 +110,7 @@ final class GitOpRunner {
                 verb: verb,
                 cwd: cwd,
                 token: nil,
+                context: context,
                 body: body,
                 onSuccess: onSuccess
             )
@@ -121,12 +126,13 @@ final class GitOpRunner {
     func runRemoteAwaiting(
         verb: String,
         cwd: String,
+        context: GitConfirmContext? = nil,
         body: @escaping (_ token: String?) async throws -> FilesService.GitRemoteOutcome
     ) async -> Bool {
         guard !inFlight.contains(verb) else { return false }
         inFlight.insert(verb)
         defer { inFlight.remove(verb) }
-        return await executeRemote(verb: verb, cwd: cwd, token: nil, body: body)
+        return await executeRemote(verb: verb, cwd: cwd, token: nil, context: context, body: body)
     }
 
     // MARK: - Internals
@@ -136,6 +142,7 @@ final class GitOpRunner {
         verb: String,
         cwd: String,
         token: String?,
+        context: GitConfirmContext?,
         body: @escaping (_ token: String?) async throws -> FilesService.GitMutationOutcome,
         onSuccess: (() -> Void)?
     ) async -> Bool {
@@ -158,12 +165,14 @@ final class GitOpRunner {
                     cwd: cwd,
                     severity: severity,
                     reason: reason,
-                    op: op
+                    op: op,
+                    context: context
                 ) { [weak self] minted in
                     await self?.execute(
                         verb: verb,
                         cwd: cwd,
                         token: minted,
+                        context: context,
                         body: body,
                         onSuccess: onSuccess
                     )
@@ -181,6 +190,7 @@ final class GitOpRunner {
         verb: String,
         cwd: String,
         token: String?,
+        context: GitConfirmContext?,
         body: @escaping (_ token: String?) async throws -> FilesService.GitRemoteOutcome,
         onSuccess: (() -> Void)? = nil
     ) async -> Bool {
@@ -201,12 +211,14 @@ final class GitOpRunner {
                     cwd: cwd,
                     severity: severity,
                     reason: reason,
-                    op: op
+                    op: op,
+                    context: context
                 ) { [weak self] minted in
                     await self?.executeRemote(
                         verb: verb,
                         cwd: cwd,
                         token: minted,
+                        context: context,
                         body: body,
                         onSuccess: onSuccess
                     )
@@ -227,6 +239,7 @@ final class GitOpRunner {
         severity: String,
         reason: String,
         op: ChatJSON,
+        context: GitConfirmContext?,
         retry: @escaping (String) async -> Void
     ) async {
         pendingConfirm = PendingGitConfirm(
@@ -234,6 +247,7 @@ final class GitOpRunner {
             reason: reason,
             severity: severity,
             paths: Self.pathsPreview(from: op),
+            context: context,
             confirm: { [weak self] in
                 guard let self else { return }
                 self.pendingConfirm = nil
@@ -307,6 +321,18 @@ struct PendingGitConfirm: Identifiable {
     let reason: String
     let severity: String
     let paths: [String]
+    /// Where the act lands and what cannot be undone, when the caller knows.
+    var context: GitConfirmContext? = nil
     let confirm: () -> Void
     let cancel: () -> Void
+}
+
+/// What a confirmation says beyond the policy's own reason: the tree it acts in
+/// and, for the acts the pane words itself, the title, consequence and button.
+/// The Source Control pane can show a tab's tree while project-level work acts
+/// on the project, so "Discard" alone no longer says which tree loses the files.
+struct GitConfirmContext {
+    /// `SourceControlTarget.actionPhrase` — "in tab X (branch)".
+    let target: String
+    var text: SourceControlConfirmText? = nil
 }

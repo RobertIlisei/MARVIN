@@ -240,6 +240,373 @@ runner.suite("work-area layout (W-11)") {
     }
 }
 
+// MARK: - Source Control: two scopes, a tree for a hundred files (owner, 25.11.2026)
+
+runner.suite("source control: which tree the pane is viewing") {
+    func input(
+        branch: String? = "main", tab: String? = "B54 security", mode: SessionMode? = .worktree,
+        present: Bool? = true, path: String? = "/Users/x/Atlas/.marvin/worktrees/tab-b54"
+    ) -> SourceControlTargetInput {
+        SourceControlTargetInput(
+            projectRoot: "/Users/x/Atlas", projectName: "Atlas", projectBranch: branch,
+            tabName: tab, tabMode: mode,
+            tabTree: mode == .worktree ? SessionTreeWire(mode: .worktree, slug: "tab-b54", path: path, branch: "marvin/tab/b54") : nil,
+            tabTreePresent: present, home: "/Users/x")
+    }
+
+    runner.test("no project, nothing to view") {
+        let none = SourceControlTargetInput(projectRoot: nil, projectName: nil, projectBranch: nil, tabName: nil, tabMode: nil, tabTree: nil, tabTreePresent: nil, home: nil)
+        runner.expect(SourceControlTarget.resolve(pin: .followTab, none) == nil, "no root, no target")
+    }
+    runner.test("a worktree tab: the pane views the tab's own tree and names it") {
+        let t = SourceControlTarget.resolve(pin: .followTab, input())!
+        runner.expect(t.kind, equals: .tab, "kind")
+        runner.expect(t.path, equals: "/Users/x/Atlas/.marvin/worktrees/tab-b54", "cwd is the tab's tree")
+        runner.expect(t.scopeTitle, equals: "This tab", "scope title")
+        runner.expect(t.segmentTitle, equals: "This tab", "segment")
+        runner.expect(t.viewingLine, equals: "Viewing: B54 security · marvin/tab/b54 · .marvin/worktrees/tab-b54", "the line the owner asked for")
+        runner.expect(t.actionPhrase, equals: "in tab B54 security (marvin/tab/b54)", "what a confirmation says")
+        runner.expect(t.canPin, "a tab with its own tree can pin")
+        runner.expect(!t.isPinned && !t.differsFromTab && t.notice == nil, "following, nothing odd")
+    }
+    runner.test("a tab on the shared checkout: the project checkout, same words everywhere") {
+        let t = SourceControlTarget.resolve(pin: .followTab, input(tab: "Chat", mode: .shared))!
+        runner.expect(t.kind, equals: .project, "kind")
+        runner.expect(t.path, equals: "/Users/x/Atlas", "project root")
+        runner.expect(t.scopeTitle, equals: "Project checkout", "scope title")
+        runner.expect(t.segmentTitle, equals: "Checkout", "segment")
+        runner.expect(t.viewingLine, equals: "Viewing: Project checkout · main · ~/Atlas", "line")
+        runner.expect(t.actionPhrase, equals: "in the project checkout (main)", "phrase")
+        runner.expect(!t.canPin, "nothing to pin away from")
+    }
+    runner.test("no tab selected reads as the project checkout") {
+        let t = SourceControlTarget.resolve(pin: .followTab, input(tab: nil, mode: nil))!
+        runner.expect(t.kind, equals: .project, "kind")
+        runner.expect(!t.canPin, "no pin")
+    }
+    runner.test("pinned to the project checkout while a worktree tab is selected: says it is not the tab") {
+        let t = SourceControlTarget.resolve(pin: .project, input())!
+        runner.expect(t.kind, equals: .project, "kind")
+        runner.expect(t.isPinned, "pinned")
+        runner.expect(t.differsFromTab, "differs from the selected tab")
+        runner.expect(t.canPin, "the control stays so it can be undone")
+        runner.expect((t.notice ?? "").contains("B54 security"), "names the tab it is not showing")
+        runner.expect(t.segmentTitle, equals: "Checkout", "segment")
+    }
+    runner.test("a pin to another worktree: named as a worktree, differs from the tab") {
+        let pin = SourceControlPin.worktree(path: "/Users/x/Atlas/.marvin/worktrees/tab-zz", branch: "marvin/tab/zz", name: "Fix sync")
+        let t = SourceControlTarget.resolve(pin: pin, input())!
+        runner.expect(t.kind, equals: .worktree, "kind")
+        runner.expect(t.path, equals: "/Users/x/Atlas/.marvin/worktrees/tab-zz", "cwd")
+        runner.expect(t.actionPhrase, equals: "in worktree Fix sync (marvin/tab/zz)", "phrase")
+        runner.expect(t.differsFromTab, "not the tab's tree")
+        let same = SourceControlPin.worktree(path: "/Users/x/Atlas/.marvin/worktrees/tab-b54", branch: "marvin/tab/b54", name: "B54 security")
+        runner.expect(SourceControlTarget.resolve(pin: same, input())!.differsFromTab == false, "pinning the tab's own tree changes nothing")
+    }
+    runner.test("a tab whose worktree is gone never silently falls back: the project is shown with the reason") {
+        let t = SourceControlTarget.resolve(pin: .followTab, input(present: false))!
+        runner.expect(t.kind, equals: .project, "kind")
+        runner.expect((t.notice ?? "").contains("B54 security"), "names the tab")
+        runner.expect((t.notice ?? "").contains("not on disk"), "says why")
+        runner.expect(t.differsFromTab, "it is not the tab's tree")
+    }
+    runner.test("a worktree tab with no worktree yet, and a tab whose path is the project root") {
+        let none = SourceControlTargetInput(projectRoot: "/Users/x/Atlas", projectName: "Atlas", projectBranch: "main", tabName: "New", tabMode: .worktree, tabTree: nil, tabTreePresent: nil, home: "/Users/x")
+        runner.expect((SourceControlTarget.resolve(pin: .followTab, none)!.notice ?? "").contains("no worktree yet"), "no worktree yet")
+        let same = input(path: "/Users/x/Atlas")
+        runner.expect(SourceControlTarget.resolve(pin: .followTab, same)!.kind, equals: .project, "root path is the project checkout")
+    }
+    runner.test("a detached HEAD reads as detached") {
+        let t = SourceControlTarget.resolve(pin: .followTab, input(branch: nil, tab: nil, mode: nil))!
+        runner.expect(t.viewingLine, equals: "Viewing: Project checkout · (detached) · ~/Atlas", "line")
+        runner.expect(t.actionPhrase, equals: "in the project checkout ((detached))", "phrase")
+    }
+}
+
+runner.suite("source control: changes as a tree") {
+    func item(_ path: String, _ group: ChangeGroup = .changes, code: String = "M") -> ChangeItem {
+        ChangeItem(path: path, group: group, code: code, entryType: group == .untracked ? "untracked" : "ordinary", renamedFrom: nil)
+    }
+    func ids(_ rows: [ChangeTreeRow]) -> [String] { rows.map(\.id) }
+
+    runner.test("raw porcelain rows split into conflicts, staged, changes and untracked; a half-staged file is in two") {
+        let raw = [
+            RawChange(path: "a.swift", indexStatus: "M", workingStatus: "M", entryType: "ordinary", renamedFrom: nil),
+            RawChange(path: "b.swift", indexStatus: "A", workingStatus: ".", entryType: "ordinary", renamedFrom: nil),
+            RawChange(path: "c.swift", indexStatus: ".", workingStatus: "D", entryType: "ordinary", renamedFrom: nil),
+            RawChange(path: "d.txt", indexStatus: ".", workingStatus: "?", entryType: "untracked", renamedFrom: nil),
+            RawChange(path: "e.swift", indexStatus: "U", workingStatus: "U", entryType: "unmerged", renamedFrom: nil),
+        ]
+        let g = ChangeTree.partition(raw)
+        runner.expect(g[.conflicts]?.map(\.path), equals: ["e.swift"], "conflicts")
+        runner.expect(g[.staged]?.map(\.path), equals: ["a.swift", "b.swift"], "staged")
+        runner.expect(g[.changes]?.map(\.path), equals: ["a.swift", "c.swift"], "changes — a is in both")
+        runner.expect(g[.untracked]?.map(\.path), equals: ["d.txt"], "untracked is its own group")
+        runner.expect(g[.staged]?.first?.code, equals: "M", "staged shows the index column")
+        runner.expect(g[.changes]?.first?.code, equals: "M", "changes shows the working column")
+    }
+    runner.test("under the threshold a group opens fully: directories first, then files, single-child chains joined") {
+        let items = [item("README.md"), item("Sources/App/Services/Sync.swift"), item("Sources/App/Services/Api.swift"), item("Sources/App/Models/P.swift"), item("docs/deep/er/x.md")]
+        let rows = ChangeTree.rows(items: items, group: .changes, filter: "", overrides: [:])
+        runner.expect(rows.map { "\($0.depth)\($0.kind == .directory ? "d" : "f") \($0.name)" }, equals: [
+            "0d docs/deep/er", "1f x.md",
+            "0d Sources/App", "1d Models", "2f P.swift", "1d Services", "2f Api.swift", "2f Sync.swift",
+            "0f README.md",
+        ], "shape")
+        runner.expect(rows.first(where: { $0.name == "Sources/App" })?.count, equals: 3, "a directory counts every file under it")
+        runner.expect(rows.first(where: { $0.name == "docs/deep/er" })?.id, equals: "changes|d|docs/deep/er", "id is group + joined path")
+    }
+    runner.test("a hundred files open collapsed: only the top-level directories show, with counts") {
+        var items: [ChangeItem] = []
+        for d in 0..<20 { for f in 0..<5 { items.append(item("dir\(d)/sub/file\(f).swift")) } }
+        let rows = ChangeTree.rows(items: items, group: .changes, filter: "", overrides: [:])
+        runner.expect(rows.count, equals: 20, "20 directories, nothing under them")
+        runner.expect(rows.allSatisfy { $0.kind == .directory && $0.collapsed && $0.count == 5 }, "collapsed with their count")
+        runner.expect(rows.first?.name, equals: "dir0/sub", "the single-child chain is one row")
+    }
+    runner.test("a person's toggle beats the default, in both directions") {
+        var items: [ChangeItem] = []
+        for d in 0..<20 { for f in 0..<5 { items.append(item("dir\(d)/file\(f).swift")) } }
+        let opened = ChangeTree.rows(items: items, group: .changes, filter: "", overrides: ["changes|d|dir3": false])
+        runner.expect(opened.count, equals: 25, "one directory opened shows its five files")
+        let small = [item("a/x.swift"), item("a/y.swift"), item("b/z.swift")]
+        let closed = ChangeTree.rows(items: small, group: .changes, filter: "", overrides: ["changes|d|a": true])
+        runner.expect(ids(closed), equals: ["changes|d|a", "changes|d|b", "changes|f|b/z.swift"], "a closed one hides its files")
+    }
+    runner.test("a filter shows only matches, fully opened, whatever was collapsed") {
+        var items: [ChangeItem] = []
+        for d in 0..<20 { for f in 0..<5 { items.append(item("dir\(d)/file\(f).swift")) } }
+        let rows = ChangeTree.rows(items: items, group: .changes, filter: "DIR7 file3", overrides: ["changes|d|dir7": true])
+        runner.expect(ids(rows), equals: ["changes|d|dir7", "changes|f|dir7/file3.swift"], "every token must match, case-insensitively")
+        runner.expect(ChangeTree.rows(items: items, group: .changes, filter: "zzz", overrides: [:]).isEmpty, "no match, no rows")
+        runner.expect(ChangeTree.filter(items, query: "  ").count, equals: 100, "blank filter keeps everything")
+    }
+    runner.test("the flat list: a header per group with its count, closed groups hide their rows") {
+        let groups: [(ChangeGroup, [ChangeItem])] = [
+            (.staged, [item("a.swift", .staged)]),
+            (.changes, [item("b/c.swift"), item("b/d.swift")]),
+            (.untracked, []),
+        ]
+        let rows = ChangeTree.flatten(groups: groups, filter: "", collapsedGroups: ["changes"], overrides: [:])
+        runner.expect(rows.map(\.id), equals: ["g|staged", "staged|f|a.swift", "g|changes"], "empty groups are omitted")
+        runner.expect(rows.first(where: { $0.id == "g|changes" })?.count, equals: 2, "count of the closed group still shows")
+        runner.expect(rows.first(where: { $0.id == "g|changes" })?.collapsed, equals: true, "closed")
+    }
+    runner.test("paths for an action: a file, a directory, a whole group") {
+        let items = [item("a/x.swift"), item("a/b/y.swift"), item("c/z.swift")]
+        runner.expect(ChangeTree.paths(under: "a", in: items), equals: ["a/x.swift", "a/b/y.swift"], "a directory takes its subtree, not its sibling prefix")
+        runner.expect(ChangeTree.paths(under: "a/b", in: items), equals: ["a/b/y.swift"], "nested")
+        let prefix = [item("app/x.swift"), item("a/y.swift")]
+        runner.expect(ChangeTree.paths(under: "a", in: prefix), equals: ["a/y.swift"], "a/ is not app/")
+    }
+    runner.test("arrow keys: down and up clamp, home and end jump, nothing selected starts at the edge") {
+        let rows = ChangeTree.flatten(groups: [(.changes, [item("a/x.swift"), item("a/y.swift"), item("z.swift")])], filter: "", collapsedGroups: [], overrides: [:])
+        // g|changes, d a, f x, f y, f z
+        runner.expect(ChangeTree.move(.down, from: nil, rows: rows), equals: .select("g|changes"), "down from nothing")
+        runner.expect(ChangeTree.move(.up, from: nil, rows: rows), equals: .select("changes|f|z.swift"), "up from nothing")
+        runner.expect(ChangeTree.move(.down, from: "changes|d|a", rows: rows), equals: .select("changes|f|a/x.swift"), "down")
+        runner.expect(ChangeTree.move(.down, from: "changes|f|z.swift", rows: rows), equals: .select("changes|f|z.swift"), "clamped at the end")
+        runner.expect(ChangeTree.move(.up, from: "g|changes", rows: rows), equals: .select("g|changes"), "clamped at the start")
+        runner.expect(ChangeTree.move(.end, from: "g|changes", rows: rows), equals: .select("changes|f|z.swift"), "end")
+        runner.expect(ChangeTree.move(.home, from: "changes|f|z.swift", rows: rows), equals: .select("g|changes"), "home")
+    }
+    runner.test("five thousand changed files build their list in a few milliseconds (measured, printed)") {
+        var many: [ChangeItem] = []
+        for d in 0..<400 { for f in 0..<12 { many.append(item("pkg\(d % 40)/mod\(d)/sub/file\(f).swift")) } }
+        let start = Date()
+        var rows = 0
+        for _ in 0..<20 {
+            rows = ChangeTree.flatten(groups: [(.changes, many)], filter: "", collapsedGroups: [], overrides: [:]).count
+        }
+        let closedMs = Date().timeIntervalSince(start) * 1000 / 20
+        let open = Date()
+        let all = ChangeTree.rows(items: many, group: .changes, filter: "", overrides: [:], autoCollapseAbove: .max).count
+        let openMs = Date().timeIntervalSince(open) * 1000
+        print("[measure] 4,800 files: closed list \(rows) rows in \(String(format: "%.1f", closedMs)) ms; fully open \(all) rows in \(String(format: "%.1f", openMs)) ms")
+        runner.expect(rows < 100, "a group of thousands opens closed: a few dozen rows, not thousands")
+        runner.expect(closedMs < 250, "the closed list is cheap enough to rebuild on a keypress")
+    }
+    runner.test("left and right: collapse and expand, step into children, step out to the parent") {
+        let rows = ChangeTree.flatten(groups: [(.changes, [item("a/x.swift"), item("z.swift")])], filter: "", collapsedGroups: [], overrides: [:])
+        runner.expect(ChangeTree.move(.left, from: "changes|d|a", rows: rows), equals: .toggle(id: "changes|d|a", collapse: true), "left closes an open directory")
+        runner.expect(ChangeTree.move(.right, from: "changes|d|a", rows: rows), equals: .select("changes|f|a/x.swift"), "right on an open directory steps in")
+        runner.expect(ChangeTree.move(.left, from: "changes|f|a/x.swift", rows: rows), equals: .select("changes|d|a"), "left on a file goes to its directory")
+        runner.expect(ChangeTree.move(.left, from: "changes|f|z.swift", rows: rows), equals: .select("g|changes"), "a root file's parent is the group")
+        runner.expect(ChangeTree.move(.right, from: "changes|f|z.swift", rows: rows), equals: .none, "right on a file does nothing")
+        let closed = ChangeTree.flatten(groups: [(.changes, [item("a/x.swift")])], filter: "", collapsedGroups: [], overrides: ["changes|d|a": true])
+        runner.expect(ChangeTree.move(.right, from: "changes|d|a", rows: closed), equals: .toggle(id: "changes|d|a", collapse: false), "right opens a closed directory")
+        runner.expect(ChangeTree.move(.left, from: "g|changes", rows: rows), equals: .toggle(id: "g|changes", collapse: true), "left on a group closes it")
+    }
+}
+
+runner.suite("source control: the project's worktrees") {
+    func line(_ slug: String, _ state: String, dirty: Bool = false, present: Bool = true, at: String? = nil, commits: Int = 1, files: Int = 2, task: String = "", added: Int? = nil, removed: Int? = nil, merged: String? = nil) -> WorktreeLine {
+        WorktreeLine(slug: slug, branch: "marvin/tab/\(slug)", task: task, state: state, commits: commits, filesChanged: files, dirty: dirty, checkoutPresent: present, mergedInto: merged, lastCommitAt: at, added: added, removed: removed)
+    }
+    let mixed: [WorktreeLine] = [
+        line("r-old", "ready", at: "2026-11-20T10:00:00Z", added: 10, removed: 2),
+        line("r-new", "ready", at: "2026-11-24T10:00:00Z"),
+        line("run", "running", commits: 0, files: 0),
+        line("tab-a", "session", dirty: true),
+        line("tab-b", "session"),
+        line("m1", "merged", merged: "main"),
+        line("e1", "empty", commits: 0, files: 0),
+        line("e2", "empty", dirty: true, commits: 0, files: 0),
+    ]
+
+    runner.test("sections follow what a person does next: ready, building, open tabs, spent") {
+        let s = WorktreeSections.make(mixed)
+        runner.expect(s.map(\.id), equals: ["ready", "building", "tabs", "spent"], "order")
+        runner.expect(s.map(\.title), equals: ["Ready to merge", "Building", "Open tabs", "Merged or empty"], "titles")
+        runner.expect(s.map { $0.rows.count }, equals: [2, 2, 2, 2], "an empty branch with uncommitted work is still being built, not spent")
+        runner.expect(s.map(\.collapsedByDefault), equals: [false, false, false, true], "only spent branches start closed")
+    }
+    runner.test("newest tip first inside a section, and a section with nothing is omitted") {
+        let s = WorktreeSections.make(mixed)
+        runner.expect(s[0].rows.map(\.slug), equals: ["r-new", "r-old"], "newest first")
+        runner.expect(WorktreeSections.make([line("x", "ready")]).map(\.id), equals: ["ready"], "only ready")
+        runner.expect(WorktreeSections.make([]).isEmpty, "none")
+    }
+    runner.test("one visible action per row: merge for a ready branch, view for a tab with a checkout, none for spent ones") {
+        let s = WorktreeSections.make(mixed)
+        runner.expect(s[0].rows[0].primary, equals: .merge, "ready")
+        runner.expect(s[2].rows[0].primary, equals: .viewChanges, "tab")
+        runner.expect(s[3].rows[0].primary, equals: .none, "spent")
+        let gone = WorktreeSections.make([line("g", "session", present: false)])
+        runner.expect(gone[0].rows[0].primary, equals: .none, "no checkout, nothing to view")
+    }
+    runner.test("dropping a checkout is offered only where nothing is lost: never for an open tab or a running build") {
+        let s = WorktreeSections.make(mixed)
+        runner.expect(s[0].rows[0].menu.contains(.dropCheckout), "ready: can drop")
+        runner.expect(!s[1].rows[0].menu.contains(.dropCheckout), "building: no")
+        runner.expect(!s[2].rows[0].menu.contains(.dropCheckout), "tab: no")
+        runner.expect(s[3].rows[0].menu.contains(.dropCheckout), "spent: can drop")
+        let noCheckout = WorktreeSections.make([line("g", "ready", present: false)])
+        runner.expect(!noCheckout[0].rows[0].menu.contains(.dropCheckout) && !noCheckout[0].rows[0].menu.contains(.reveal), "no checkout on disk, nothing to drop or reveal")
+    }
+    runner.test("row text: the task is the title, the secondary line is what it holds") {
+        let r = WorktreeSections.make([line("a", "ready", commits: 3, files: 5, task: "Fix body replay", added: 61, removed: 9)])[0].rows[0]
+        runner.expect(r.title, equals: "Fix body replay", "title")
+        runner.expect(r.subtitle, equals: "3 commits, 5 files · +61 −9", "subtitle")
+        let b = WorktreeSections.make([line("b", "ready", commits: 1, files: 1)])[0].rows[0]
+        runner.expect(b.title, equals: "marvin/tab/b", "no task: the branch")
+        runner.expect(b.subtitle, equals: "1 commit, 1 file", "singular")
+        let m = WorktreeSections.make([line("m", "merged", merged: "main")])[0].rows[0]
+        runner.expect(m.subtitle, equals: "merged into main", "merged")
+        let run = WorktreeSections.make([line("r", "running")])[0].rows[0]
+        runner.expect(run.subtitle, equals: "building…", "running")
+    }
+    runner.test("the summary and what the integrate menu may offer") {
+        runner.expect(WorktreeSections.summary(mixed), equals: "2 ready · 2 building · 2 open tabs · 2 spent", "summary")
+        runner.expect(WorktreeSections.summary([]), equals: "No worktrees", "none")
+        let a = WorktreeSections.integration(mixed)
+        runner.expect(a.readyCount, equals: 2, "ready")
+        runner.expect(a.canMergeAll && a.canPrepareMR, "two ready: both")
+        runner.expect(a.spentCount, equals: 2, "spent (the dirty empty one is not)")
+        let one = WorktreeSections.integration([line("x", "ready")])
+        runner.expect(!one.canMergeAll && one.canPrepareMR, "one ready: a plain merge covers it, MR still possible")
+        runner.expect(!WorktreeSections.integration([line("x", "session")]).canPrepareMR, "nothing ready")
+    }
+}
+
+runner.suite("source control: what a confirmation says") {
+    let tab = "in tab B54 security (marvin/tab/b54)"
+    runner.test("a discard names the count, the tree, and that it cannot be undone") {
+        let t = SourceControlConfirmText.discard(count: 3, untracked: false, target: tab)
+        runner.expect(t.title, equals: "Discard 3 files in tab B54 security (marvin/tab/b54)?", "title")
+        runner.expect(t.confirmLabel, equals: "Discard 3 files", "button")
+        runner.expect(t.message.contains("cannot be undone"), "says so")
+        let one = SourceControlConfirmText.discard(count: 1, untracked: false, target: tab)
+        runner.expect(one.title.hasPrefix("Discard 1 file in"), "singular")
+    }
+    runner.test("deleting untracked files says git has no copy") {
+        let t = SourceControlConfirmText.discard(count: 2, untracked: true, target: "in the project checkout (main)")
+        runner.expect(t.title, equals: "Delete 2 untracked files in the project checkout (main)?", "title")
+        runner.expect(t.message.contains("no copy"), "no copy anywhere")
+        runner.expect(t.confirmLabel, equals: "Delete 2 files", "button")
+    }
+    runner.test("a force-push names the tree and the lease") {
+        let t = SourceControlConfirmText.forcePush(target: tab)
+        runner.expect(t.title, equals: "Force-push in tab B54 security (marvin/tab/b54)?", "title")
+        runner.expect(t.message.contains("cannot be undone"), "irreversible")
+        runner.expect(t.message.contains("someone pushed"), "the lease")
+    }
+    runner.test("merge all names the target branch and says nothing is pushed") {
+        let t = SourceControlConfirmText.mergeAll(readyCount: 3, targetBranch: "main")
+        runner.expect(t.title, equals: "Merge 3 finished branches into main?", "title")
+        runner.expect(t.message.contains("Nothing is pushed"), "local only")
+        runner.expect(t.message.contains("first conflict"), "stops at a conflict")
+        runner.expect(t.confirmLabel, equals: "Merge 3 branches", "button")
+        runner.expect(SourceControlConfirmText.mergeAll(readyCount: 3, targetBranch: nil).title.contains("the current branch"), "unknown branch still reads")
+    }
+    runner.test("reclaiming says what is kept and what is removed") {
+        let t = SourceControlConfirmText.sweep(spentCount: 4)
+        runner.expect(t.title, equals: "Remove 4 spent checkouts and their branches?", "title")
+        runner.expect(t.message.contains("Unmerged work and uncommitted changes are never touched"), "the guard")
+        runner.expect(SourceControlConfirmText.sweep(spentCount: 1).title, equals: "Remove 1 spent checkout and its branch?", "singular")
+    }
+    runner.test("dropping a checkout keeps the branch and says so") {
+        let t = SourceControlConfirmText.dropCheckout(branch: "marvin/tab/x")
+        runner.expect(t.title, equals: "Remove the checkout of marvin/tab/x?", "title")
+        runner.expect(t.message.contains("branch stays"), "branch kept")
+    }
+}
+
+runner.suite("source control: a selected file's diff preview") {
+    func hunk(_ n: Int, adds: Int, dels: Int) -> String {
+        var s = "@@ -\(n * 100),\(dels) +\(n * 100),\(adds) @@ func f\(n)\n"
+        for i in 0..<dels { s += "-old \(n) \(i)\n" }
+        for i in 0..<adds { s += "+new \(n) \(i)\n" }
+        return s
+    }
+    let text = "diff --git a/f b/f\nindex 1..2 100644\n--- a/f\n+++ b/f\n" + hunk(1, adds: 20, dels: 10) + hunk(2, adds: 5, dels: 5)
+
+    runner.test("the preview is capped, counts the whole file, and says how much it left out") {
+        let p = DiffPreview.make(UnifiedDiff.parse(text)!, maxRows: 12)
+        runner.expect(p.rows.count, equals: 12, "capped")
+        runner.expect(p.additions, equals: 25, "additions of the whole diff")
+        runner.expect(p.deletions, equals: 15, "deletions of the whole diff")
+        runner.expect(p.hiddenRows, equals: (1 + 30) + (1 + 10) - 12, "hunk bars and lines not shown")
+        runner.expect(p.summary, equals: "+25 −15", "summary")
+    }
+    runner.test("a short diff is shown whole and a binary or empty one has a reason instead of rows") {
+        let p = DiffPreview.make(UnifiedDiff.parse("diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,1 @@\n-a\n+b\n")!, maxRows: 12)
+        runner.expect(p.hiddenRows, equals: 0, "nothing hidden")
+        runner.expect(p.rows.count, equals: 3, "bar + two lines")
+        runner.expect(DiffPreview.empty(binary: true, truncated: false, empty: false), equals: "Binary file — open the diff to see its size.", "binary")
+        runner.expect(DiffPreview.empty(binary: false, truncated: true, empty: false), equals: "Over 2 MB — too large to preview.", "truncated")
+        runner.expect(DiffPreview.empty(binary: false, truncated: false, empty: true), equals: "No changes in this view.", "empty")
+        runner.expect(DiffPreview.empty(binary: false, truncated: false, empty: false) == nil, "has content")
+    }
+    runner.test("a 40,000-line diff parses and previews quickly (the app runs it off the main actor regardless)") {
+        var big = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,20000 +1,20000 @@\n"
+        for i in 0..<20_000 { big += "-removed line \(i) with a little text to make it realistic\n+added line \(i) with a little text to make it realistic\n" }
+        let start = Date()
+        let p = DiffPreview.make(UnifiedDiff.parse(big)!, maxRows: 14)
+        let ms = Date().timeIntervalSince(start) * 1000
+        print("[measure] parse + preview of a \(big.utf8.count / 1024) KB diff: \(Int(ms)) ms")
+        runner.expect(p.rows.count, equals: 14, "capped")
+        runner.expect(p.additions, equals: 20_000, "all counted")
+        runner.expect(ms < 5000, "finishes (the number is printed above)")
+    }
+}
+
+runner.suite("source control: collapsed groups survive") {
+    runner.test("first launch: spent worktrees, the graph and stashes start closed; everything else open") {
+        let c = SourceControlCollapse.initial(stored: nil)
+        runner.expect(c, equals: ["worktrees.spent", "section.history", "section.stashes"], "defaults")
+    }
+    runner.test("a stored set wins, even an empty one (the person opened everything)") {
+        runner.expect(SourceControlCollapse.initial(stored: []), equals: [], "empty is a choice")
+        runner.expect(SourceControlCollapse.initial(stored: ["staged"]), equals: ["staged"], "stored")
+    }
+    runner.test("toggling is a flip and encodes to a stable order") {
+        runner.expect(SourceControlCollapse.toggled("staged", in: ["b", "a"]), equals: ["a", "b", "staged"], "closed")
+        runner.expect(SourceControlCollapse.toggled("a", in: ["a", "b"]), equals: ["b"], "opened")
+        runner.expect(SourceControlCollapse.encode(["b", "a"]), equals: ["a", "b"], "sorted for storage")
+    }
+}
+
 runner.suite("menu placement (R2-17)") {
     func item(_ id: String) -> MenuPlacement.Item? { MenuPlacement.item(id) }
 

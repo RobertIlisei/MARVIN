@@ -86,8 +86,16 @@ final class DiffSheetModel {
                     mode: captured.rawValue
                 )
                 guard !Task.isCancelled, mode == captured else { return }
+                // Parsed off the main actor: a 2 MB diff is tens of milliseconds, and
+                // the sheet must not stall the list it was opened from (measured, 2.2 MB
+                // / 40,000 lines: 30 ms). `response` and `parsed` land together, so the
+                // raw-text fallback never flashes while the parse is running.
+                let text = res.diff
+                let skip = res.binary || res.truncated
+                let structured = skip ? nil : await Task.detached(priority: .userInitiated) { UnifiedDiff.parse(text) }.value
+                guard !Task.isCancelled, mode == captured else { return }
                 response = res
-                parsed = (res.binary || res.truncated) ? nil : UnifiedDiff.parse(res.diff)
+                parsed = structured
             } catch is CancellationError {
                 /* mode flipped under us — quiet */
             } catch {

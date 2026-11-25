@@ -19,6 +19,9 @@ enum SurfaceRoutes {
             .json(json.replacingOccurrences(of: "@ROOT@", with: root))
         }
 
+        // The Source Control scenarios answer the git routes by directory (SurfaceSnapshotSourceControl.swift).
+        if let r = SurfaceSourceControlFixtures.handle(method: method, path: path, query: query, root: root) { return r }
+
         switch path {
         case "/api/health": return ok(health)
         case "/api/projects": return ok(projects)

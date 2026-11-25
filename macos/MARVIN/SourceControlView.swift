@@ -1,134 +1,68 @@
-// SourceControlView — the Source Control panel.
+// SourceControlView — the Source Control pane.
 //
-// Rebuilt to the VS Code / Antigravity shape. The previous cut showed
-// porcelain-v2 two-column codes on the left of every row and pinned a
-// commit box to the bottom with a plain Commit button; the branch
-// routes that had shipped with ADR-0012 M2 had no caller at all, so
-// nothing in the app could switch, create or delete a branch.
+// Two scopes in one pane (owner, 25.11.2026: "Source Control needs a better
+// implementation"). The pane used to read the project's shared checkout
+// whichever tab was selected, while every tab works in its own git worktree on
+// its own branch; the status, stage, commit and push belong to ONE tree, and the
+// worktree list, merge all, reclaim and Prepare MR belong to the PROJECT. One
+// `cwd` for both is what made a tab's tree impossible to show safely, so there
+// are now two, each owned by its own model:
 //
-// ## Layout
+//   This tab  /  Checkout      SourceControlModel            cwd = the viewed tree
+//     Viewing: <tab> · <branch> · <path>        [pin to the project checkout]
+//     branch, ahead/behind, filter, commit box
+//     Staged · Changes · Untracked as a tree with counts, a diff preview
+//     Stashes, History
 //
-//   Source Control                                     [ … ]
-//   ── Changes ──────────────────────────────────────────────
-//    ▾ repo-name   branch ▾              ⟳  ✓  ↻  …
-//      ┌ Message (⌘Enter to commit on "branch")   ✨ Generate ┐
-//      [ ✓ Commit                                          ▾ ]
-//      ▾ Staged Changes                                    (3)
-//      ▾ Changes                                         (477)
-//    ▸ other-worktree   branch                          (12)
-//   ── Graph ────────────────────────────────────── ↓ ↑ ⟳ ──
-//    ●─┐ chore: backlog audit — 8 easy wins   [chore/…]  6c8f907
+//   Project                    SourceControlProjectModel     root = the project, always
+//     Ready to merge · Building · Open tabs · Merged or empty
+//     Integrate ▾  (merge all, Prepare MR, reclaim) — in a menu, each behind a
+//     confirmation that names what it touches and what cannot be undone
 //
-// Three things drive the shape:
-//
-//   • **Composer on top.** The reference puts it above the file list
-//     because the list is unbounded — 477 rows push a bottom-anchored
-//     box off screen exactly when you have the most to say about it.
-//
-//   • **One primary action that changes identity.** With something
-//     staged it is `Commit` (+ a split menu for the & Push / & Sync /
-//     Amend variants). With nothing staged and a diverged branch it
-//     becomes `Sync Changes 10↓ 5↑`. Two buttons where only one is
-//     ever live is the thing the reference avoids.
-//
-//   • **Untracked files live inside Changes**, with a `U` letter
-//     rather than in a section of their own — that is what the
-//     reference does, and a separate section splits "what did I
-//     touch" across two lists for no gain.
+// Which tree the first scope shows is `SourceControlTarget.resolve`, a pure
+// decision (MARVINLogic): the pin the person set, the selected tab and the
+// project root. It changes with the tab selection and with nothing else.
 //
 // Every mutation goes through `GitOpRunner` (confirm-token round trip,
-// ADR-0012). Worktrees come from `/api/git/repos`, so an implementer
-// subagent's checkout (ADR-0081) shows up as its own group instead of
-// being invisible.
+// ADR-0012) with the target named in its confirmation. ADR-0102's confirm for a
+// HEAD-moving command and ADR-0109's confirm before spending CI minutes are the
+// server's and the sheet's; nothing here removes or answers them.
 
 import AppKit
 import MARVINLogic
 import SwiftUI
 
-/// View-model for the SCM panel. Owns the status fetch, the repo list,
-/// the stash list, and the commit composer state. Mutations delegate to
-/// `runner`.
+/// View-model for the first scope: ONE working tree. Owns the status fetch, the
+/// stash list and the commit composer state. Mutations delegate to `runner`.
 @MainActor
 @Observable
 final class SourceControlModel {
     private(set) var response: GitStatusResponse? = nil
     private(set) var isLoading: Bool = false
     private(set) var lastError: String? = nil
+    /// The directory every request here uses. Set synchronously by `view`, before
+    /// any fetch, so a stage or a discard can never reach the PREVIOUS tree while
+    /// the new one is loading.
     private(set) var loadedCwd: String? = nil
+    /// "in tab X (branch)" — what a confirmation says about where it acts.
+    private(set) var targetPhrase: String = "in the project checkout"
+    private(set) var stashes: [GitStashEntry] = []
+    /// The response, split into the pane's groups with paths relative to the tree.
+    private(set) var groups: [ChangeGroup: [ChangeItem]] = [:]
 
     /// The status banner's ×; it used to be an empty closure (audit L18).
     func dismissStatusError() { lastError = nil }
 
-    /// Worktrees of the open repo — the main checkout first.
-    private(set) var repos: [GitRepoEntry] = []
-    private(set) var stashes: [GitStashEntry] = []
-    /// Implementer worktrees (ADR-0103), state derived from git server-side.
-    private(set) var worktrees: [WorktreeEntry] = []
-    /// Result of the last merge/sweep, shown inline until the next action —
-    /// with its kind, so a failure never renders like a success.
-    var worktreeNotice: PaneNotice? = nil
-    private(set) var worktreeBusy: Bool = false
-
-    /// ADR-0109 amendment — the running integration, polled from the sidecar.
-    /// It is the sidecar's record, not this app's: a Prepare MR outlives the
-    /// HTTP request that started it, the app that fired it, and the project
-    /// being switched away from.
-    private(set) var integrationJob: IntegrationJobEntry? = nil
-    private var jobPollTask: Task<Void, Never>?
-    /// The last run this model has already announced, so a finished job is
-    /// reported once rather than on every poll.
-    private var announcedJobId: String?
-
-    /// True while anything is integrating — the local call, or a run this app
-    /// merely found. Both must disable the buttons: two merges into one
-    /// checkout is the failure the sidecar refuses, and offering it is worse
-    /// than not.
-    var integrationRunning: Bool { worktreeBusy || (integrationJob?.running == true) }
-
-    /// Watch a run to its end. Started when this app fires one, and when a
-    /// refresh discovers one already going.
-    private func watchIntegrationJob(cwd: String) {
-        jobPollTask?.cancel()
-        jobPollTask = Task { @MainActor in
-            while !Task.isCancelled {
-                guard let res = try? await FilesService.shared.fetchIntegrationJob(cwd: cwd) else {
-                    // A failed poll is not an answer — the sidecar may be
-                    // busy holding the event loop with the very git this is
-                    // reporting on. Keep watching.
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    continue
-                }
-                guard !Task.isCancelled, loadedCwd == cwd else { return }
-                integrationJob = res.job
-                guard let job = res.job else { return }
-                if !job.running {
-                    if announcedJobId != job.id {
-                        announcedJobId = job.id
-                        // The outcome, even when the HTTP call that started it
-                        // timed out or was never waited on.
-                        worktreeNotice = PaneNotice(
-                            kind: (job.ok ?? false) ? .success : .error,
-                            text: IntegrationJobStatus.finishedNotice(ok: job.ok ?? false, summary: job.summary ?? "")
-                        )
-                        refresh(cwd: cwd, force: true)
-                    }
-                    return
-                }
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
-            }
-        }
-    }
-
     private var fetchTask: Task<Void, Never>?
     private var probeRetryTask: Task<Void, Never>?
 
-    /// Commit message input. Reset to "" after a successful commit.
-    /// In-memory only; a draft does not survive a relaunch.
+    /// Commit message input, per tree: a message typed for one tab's branch must
+    /// not be waiting in another's box. In memory only; it does not survive a relaunch.
     var commitMessage: String = ""
+    private var drafts: [String: String] = [:]
 
-    /// True while `/api/git/commit-message` is drafting one. The
-    /// request spawns a model turn server-side, so it is slow enough
-    /// to need its own visible state rather than the generic spinner.
+    /// True while `/api/git/commit-message` is drafting one. The request spawns a
+    /// model turn server-side, so it is slow enough to need its own visible state.
     private(set) var isGenerating = false
     var generateError: String? = nil
 
@@ -141,206 +75,86 @@ final class SourceControlModel {
         }
     }
 
+    // MARK: - Which tree
+
+    /// Point the model at a tree. The old tree's answer is dropped at once; the
+    /// new tree's arrives from `refresh`.
+    func view(cwd: String, phrase: String) {
+        targetPhrase = phrase
+        if loadedCwd != cwd {
+            if let old = loadedCwd { drafts[old] = commitMessage }
+            fetchTask?.cancel()
+            probeRetryTask?.cancel()
+            loadedCwd = cwd
+            response = nil
+            groups = [:]
+            stashes = []
+            lastError = nil
+            isGenerating = false
+            generateError = nil
+            commitMessage = drafts[cwd] ?? ""
+        }
+        refresh(cwd: cwd, force: true)
+    }
+
+    func clear() {
+        fetchTask?.cancel(); fetchTask = nil
+        probeRetryTask?.cancel(); probeRetryTask = nil
+        response = nil
+        groups = [:]
+        stashes = []
+        loadedCwd = nil
+        lastError = nil
+        isLoading = false
+    }
+
     // MARK: - Reads
 
-    /// Kick off a status fetch for `cwd`. Idempotent unless forced.
-    /// The repo, stash and worktree lists ride along — they all change
-    /// together (a commit moves status AND the graph; a stash moves status
-    /// AND the stash list; merging an implementer branch moves status AND
-    /// that branch's state to `merged`), so refreshing them separately
-    /// would guarantee one of them is stale on screen.
+    /// Kick off a status fetch for `cwd`. Idempotent unless forced. The stash list
+    /// rides along: a stash moves status AND the stash list, so refreshing them
+    /// separately would guarantee one of them is stale on screen.
     func refresh(cwd: String, force: Bool = false) {
-        // A `enabled: false` answer is never settled: `probe-failed` means
-        // the sidecar was busy, and even `not-a-git-repo` should be asked
-        // again on the next appear — a repo can be initialised underneath
-        // an open project.
-        if !force, let r = response, r.enabled, loadedCwd == cwd, !isLoading { return }
+        guard loadedCwd == cwd else { return }
+        // An `enabled: false` answer is never settled: `probe-failed` means the
+        // sidecar was busy, and even `not-a-git-repo` should be asked again on the
+        // next appear — a repo can be initialised underneath an open project.
+        if !force, let r = response, r.enabled, !isLoading { return }
         fetchTask?.cancel()
         isLoading = true
         lastError = nil
         fetchTask = Task { @MainActor in
-            defer { isLoading = false }
+            defer { if loadedCwd == cwd { isLoading = false } }
             do {
                 async let status = FilesService.shared.fetchGitStatus(cwd: cwd)
-                async let repoList = FilesService.shared.fetchRepos(cwd: cwd)
                 async let stashList = FilesService.shared.fetchStashes(cwd: cwd)
-                async let worktreeList = FilesService.shared.fetchWorktrees(cwd: cwd)
                 let res = try await status
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, loadedCwd == cwd else { return }
                 response = res
-                loadedCwd = cwd
+                groups = Self.partition(res, cwd: cwd)
                 if !res.enabled, res.reason == "probe-failed" { scheduleProbeRetry(cwd: cwd) }
-                repos = (try? await repoList)?.repos ?? []
-                stashes = (try? await stashList)?.entries ?? []
-                // Newest tip first: the section answers "what did I work on
-                // lately across these tabs" before it offers to integrate it.
-                let list = try? await worktreeList
-                worktrees = (list?.worktrees ?? [])
-                    .sorted { ($0.lastCommitAt ?? "") > ($1.lastCommitAt ?? "") }
-                // An integration started before this refresh — by a previous
-                // launch of this app, or by the run whose HTTP call timed out
-                // — is found here and watched from here.
-                if let job = list?.job {
-                    integrationJob = job
-                    if job.running { watchIntegrationJob(cwd: cwd) } else { announcedJobId = job.id }
-                }
+                let entries = (try? await stashList)?.entries ?? []
+                guard !Task.isCancelled, loadedCwd == cwd else { return }
+                stashes = entries
             } catch is CancellationError {
-                /* racing a project switch — quiet */
+                /* racing a tree switch — quiet */
             } catch {
-                guard !BenignCancellation.matches(error) else { return }
+                guard !BenignCancellation.matches(error), loadedCwd == cwd else { return }
                 lastError = "\(error)"
             }
         }
     }
 
-    /// Merge one implementer branch into the current branch, locally.
-    ///
-    /// Never pushes. On a pipeline-gated project pushing each branch as its
-    /// own MR costs a full CI run each; merging where the implementer was cut
-    /// from costs nothing, because those commits ride along in the pipeline
-    /// the current branch already runs.
-    /// ADR-0111 — the dry-run verdict per finished branch, keyed by slug.
-    var integrationPreview: [String: IntegrationPreviewRow] = [:]
-    func refreshIntegrationPreview() {
-        guard let cwd = loadedCwd else { return }
-        Task { @MainActor in
-            if let out = try? await FilesService.shared.previewIntegration(cwd: cwd), loadedCwd == cwd {
-                integrationPreview = Dictionary(uniqueKeysWithValues: (out.rows ?? []).map { ($0.slug, $0) })
-            }
-        }
-    }
-    func mergeWorktree(slug: String) {
-        guard let cwd = loadedCwd, !worktreeBusy else { return }
-        worktreeBusy = true
-        Task { @MainActor in
-            defer { worktreeBusy = false }
-            do {
-                let out = try await FilesService.shared.mergeWorktree(cwd: cwd, slug: slug)
-                worktreeNotice = PaneNotice(
-                    kind: out.ok == true ? .success : .warning,
-                    text: out.message ?? out.error ?? "Merge finished."
-                )
-            } catch {
-                worktreeNotice = PaneNotice(kind: .error, text: "Merge failed: \(error)")
-            }
-            refresh(cwd: cwd, force: true)
-        }
+    private static func partition(_ res: GitStatusResponse, cwd: String) -> [ChangeGroup: [ChangeItem]] {
+        let root = cwd.hasSuffix("/") ? cwd : cwd + "/"
+        func relative(_ p: String) -> String { p.hasPrefix(root) ? String(p.dropFirst(root.count)) : p }
+        return ChangeTree.partition((res.files ?? []).map {
+            RawChange(path: relative($0.path), indexStatus: $0.indexStatus, workingStatus: $0.workingStatus,
+                      entryType: $0.entryType, renamedFrom: $0.renamedFrom.map(relative))
+        })
     }
 
-    /// Squash the chosen finished branches into one commit on an `mr/…`
-    /// branch, and push / open the merge request when the sheet said so.
-    /// The tab branches are untouched; the user's checkout is never entered.
-    func prepareMergeRequest(slugs: [String], name: String, message: String, push: Bool, openMergeRequest: Bool) {
-        guard let cwd = loadedCwd, !integrationRunning else { return }
-        worktreeBusy = true
-        worktreeNotice = nil
-        // The watch, not the reply, is what reports this run: the squash
-        // commit runs the project's hooks and can outlive the request.
-        watchIntegrationJob(cwd: cwd)
-        Task { @MainActor in
-            defer { worktreeBusy = false }
-            do {
-                let out = try await FilesService.shared.prepareMergeRequest(
-                    cwd: cwd, slugs: slugs, name: name, message: message,
-                    push: push, openMergeRequest: openMergeRequest
-                )
-                var lines: [String] = [out.summary ?? out.error ?? "Done."]
-                for s in out.skipped ?? [] { lines.append("skipped \(s.branch): \(s.reason)") }
-                worktreeNotice = PaneNotice(
-                    kind: out.ok != true ? .warning : (out.stopped != nil ? .warning : .success),
-                    text: lines.joined(separator: "\n")
-                )
-                if let url = out.pushed?.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
-            } catch FilesServiceError.transport(let underlying) where (underlying as? URLError)?.code == .timedOut {
-                // The sidecar keeps going when the client stops waiting; the
-                // outcome is in its log and the branch appears on refresh.
-                worktreeNotice = PaneNotice(kind: .warning, text: "Prepare MR is taking longer than the app waited — the project's commit hooks are probably still running in the sidecar. Refresh in a minute: the mr/ branch appears once the squash commit lands, and ~/Library/Logs/MARVIN/sidecar.log has the outcome.")
-            } catch {
-                worktreeNotice = PaneNotice(kind: .error, text: "Prepare MR failed: \(error)")
-            }
-            refresh(cwd: cwd, force: true)
-        }
-    }
-
-    /// Fold every finished branch into the current branch, in one pass,
-    /// locally (ADR-0109).
-    ///
-    /// One trip instead of N. The friction of merging one at a time is what
-    /// pushes people toward a merge request per branch, which is the expensive
-    /// path: ~10 pipeline-minutes to open and ~48 compute-minutes to merge, per
-    /// branch, against an allowance already exceeded. Batched, five branches
-    /// still cost one pipeline.
-    func mergeAllWorktrees() {
-        guard let cwd = loadedCwd, !integrationRunning else { return }
-        worktreeBusy = true
-        worktreeNotice = nil
-        watchIntegrationJob(cwd: cwd)
-        Task { @MainActor in
-            defer { worktreeBusy = false }
-            do {
-                let out = try await FilesService.shared.mergeAllWorktrees(cwd: cwd)
-                var lines: [String] = [out.message ?? out.error ?? "Merge finished."]
-                // Name what was passed over. "It did nothing" and "there was
-                // nothing to do" must not read the same.
-                for s in out.skipped ?? [] { lines.append("skipped \(s.branch): \(s.reason)") }
-                worktreeNotice = PaneNotice(
-                    kind: out.stopped != nil ? .warning : .success,
-                    text: lines.joined(separator: "\n")
-                )
-            } catch {
-                worktreeNotice = PaneNotice(kind: .error, text: "Merge all failed: \(error)")
-            }
-            refresh(cwd: cwd, force: true)
-        }
-    }
-
-    /// Remove one checkout, keeping its branch — the ADR-0081 semantics.
-    func dropWorktree(slug: String) {
-        guard let cwd = loadedCwd, !worktreeBusy else { return }
-        worktreeBusy = true
-        Task { @MainActor in
-            defer { worktreeBusy = false }
-            do {
-                let out = try await FilesService.shared.dropWorktree(cwd: cwd, slug: slug)
-                worktreeNotice = PaneNotice(
-                    kind: out.ok == true ? .success : .warning,
-                    text: out.message ?? out.error ?? "Checkout removed."
-                )
-            } catch {
-                worktreeNotice = PaneNotice(kind: .error, text: "Drop failed: \(error)")
-            }
-            refresh(cwd: cwd, force: true)
-        }
-    }
-
-    /// Reclaim empty and merged worktrees. Never touches a `ready` branch or
-    /// any checkout holding uncommitted work.
-    func sweepWorktrees() {
-        guard let cwd = loadedCwd, !worktreeBusy else { return }
-        worktreeBusy = true
-        Task { @MainActor in
-            defer { worktreeBusy = false }
-            do {
-                let out = try await FilesService.shared.sweepWorktrees(cwd: cwd)
-                let swept = out.swept ?? []
-                worktreeNotice = swept.isEmpty
-                    ? PaneNotice(kind: .info, headline: "Nothing to reclaim.")
-                    : PaneNotice(
-                        kind: .success,
-                        headline: "Reclaimed \(swept.count) checkout\(swept.count == 1 ? "" : "s").",
-                        detail: swept.map { "\($0.slug): \($0.reason)" }.joined(separator: "\n")
-                    )
-            } catch {
-                worktreeNotice = PaneNotice(kind: .error, text: "Sweep failed: \(error)")
-            }
-            refresh(cwd: cwd, force: true)
-        }
-    }
-
-    /// The status probe timed out because the sidecar's event loop was
-    /// busy (the worktree reconcile is synchronous git, ~1.5 s on 15
-    /// trees), not because the answer was "no". Ask again after a beat.
-    /// A real non-repo answers `not-a-git-repo` and does not come here.
+    /// The status probe timed out because the sidecar's event loop was busy, not
+    /// because the answer was "no". Ask again after a beat.
     private func scheduleProbeRetry(cwd: String) {
         probeRetryTask?.cancel()
         probeRetryTask = Task { @MainActor in
@@ -350,49 +164,15 @@ final class SourceControlModel {
         }
     }
 
-    func clear() {
-        fetchTask?.cancel()
-        fetchTask = nil
-        probeRetryTask?.cancel()
-        probeRetryTask = nil
-        response = nil
-        repos = []
-        stashes = []
-        worktrees = []
-        worktreeNotice = nil
-        loadedCwd = nil
-        lastError = nil
-        isLoading = false
-    }
+    // MARK: - Partitions
 
-    // MARK: - Section partitioning
-
-    /// Conflicts first — nothing else can be committed until they are
-    /// resolved, so they go above everything.
-    var conflicted: [GitStatusFile] {
-        response?.files?.filter { $0.entryType == "unmerged" } ?? []
-    }
-
-    var staged: [GitStatusFile] {
-        response?.files?.filter {
-            $0.entryType != "unmerged" && $0.indexStatus != "."
-        } ?? []
-    }
-
-    /// Working-tree changes INCLUDING untracked files, matching the
-    /// reference's single "Changes" list. A file that is partly staged
-    /// appears in both lists — that is `git status`'s two-column truth,
-    /// not a rendering bug.
-    var changes: [GitStatusFile] {
-        response?.files?.filter {
-            $0.entryType != "unmerged"
-                && ($0.entryType == "untracked" || $0.workingStatus != ".")
-        } ?? []
-    }
-
-    var isClean: Bool {
-        conflicted.isEmpty && staged.isEmpty && changes.isEmpty
-    }
+    func items(_ group: ChangeGroup) -> [ChangeItem] { groups[group] ?? [] }
+    var conflictCount: Int { items(.conflicts).count }
+    var stagedCount: Int { items(.staged).count }
+    var changeCount: Int { items(.changes).count }
+    var untrackedCount: Int { items(.untracked).count }
+    var isClean: Bool { ChangeGroup.allCases.allSatisfy { items($0).isEmpty } }
+    var totalFiles: Int { Set(groups.values.joined().map(\.path)).count }
 
     var branch: GitStatusBranch? { response?.branch }
     var branchName: String { branch?.name ?? "(detached)" }
@@ -403,44 +183,47 @@ final class SourceControlModel {
 
     // MARK: - Per-path mutations
 
+    private var context: GitConfirmContext { GitConfirmContext(target: targetPhrase) }
+
     func stage(_ paths: [String]) {
         guard let cwd = loadedCwd, !paths.isEmpty else { return }
-        runner.run(verb: "stage", key: paths.first ?? "", cwd: cwd) { _ in
+        runner.run(verb: "stage", key: paths.count == 1 ? paths[0] : "*", cwd: cwd, context: context) { _ in
             try await FilesService.shared.stage(cwd: cwd, paths: paths)
         }
     }
 
     func unstage(_ paths: [String]) {
         guard let cwd = loadedCwd, !paths.isEmpty else { return }
-        runner.run(verb: "unstage", key: paths.first ?? "", cwd: cwd) { _ in
+        runner.run(verb: "unstage", key: paths.count == 1 ? paths[0] : "*", cwd: cwd, context: context) { _ in
             try await FilesService.shared.unstage(cwd: cwd, paths: paths)
         }
     }
 
-    func discard(_ paths: [String], mode: String) {
+    /// Discard working-tree changes (`untracked: false`, `git restore`) or delete
+    /// untracked files (`git clean`) — two policy decisions, not one: tracked
+    /// files are restorable-ish (confirm warn), untracked ones are deleted
+    /// outright (confirm danger). The confirmation names the tree, the count and
+    /// that it cannot be undone.
+    func discard(_ paths: [String], untracked: Bool) {
         guard let cwd = loadedCwd, !paths.isEmpty else { return }
-        runner.run(verb: "discard", key: paths.first ?? "", cwd: cwd) { token in
+        let text = SourceControlConfirmText.discard(count: paths.count, untracked: untracked, target: targetPhrase)
+        runner.run(
+            verb: "discard", key: paths.count == 1 ? paths[0] : "*", cwd: cwd,
+            context: GitConfirmContext(target: targetPhrase, text: text)
+        ) { token in
             try await FilesService.shared.discard(
-                cwd: cwd, paths: paths, mode: mode, confirmToken: token
-            )
+                cwd: cwd, paths: paths, mode: untracked ? "untracked" : "working", confirmToken: token)
         }
     }
 
     // MARK: - Bulk mutations
 
-    /// `.` is the repo-root pathspec. It is what `git add .` means and
-    /// it keeps the request one call instead of one per file — on the
-    /// 477-file tree in the reference screenshot, per-file staging
-    /// would be 477 round trips.
-    func stageAll() { stage(["."]) }
-    func unstageAll() { unstage(["."]) }
-
-    /// "Discard all changes" is two policy decisions, not one: tracked
-    /// files are restorable-ish (confirm warn), untracked ones are
-    /// deleted outright (confirm danger). Issue them as separate calls
-    /// so the user confirms the permanent half on its own terms.
-    func discardAllTracked() { discard(["."], mode: "working") }
-    func deleteAllUntracked() { discard(["."], mode: "untracked") }
+    func stageAllChanges() { stage(items(.changes).map(\.path)) }
+    func stageAllUntracked() { stage(items(.untracked).map(\.path)) }
+    func stageEverything() { stage(["."]) }
+    func unstageAll() { unstage(items(.staged).map(\.path)) }
+    func discardAllTracked() { discard(items(.changes).map(\.path), untracked: false) }
+    func deleteAllUntracked() { discard(items(.untracked).map(\.path), untracked: true) }
 
     // MARK: - Commit
 
@@ -449,7 +232,7 @@ final class SourceControlModel {
     }
 
     var canCommit: Bool {
-        !trimmedMessage.isEmpty && !staged.isEmpty && !runner.isRunning("commit")
+        !trimmedMessage.isEmpty && stagedCount > 0 && !runner.isRunning("commit")
     }
 
     /// Amend is allowed with an empty box — git keeps the old message.
@@ -460,11 +243,12 @@ final class SourceControlModel {
     func commit(amend: Bool = false, then followUp: FollowUp = .none) {
         guard let cwd = loadedCwd else { return }
         let message = trimmedMessage
-        guard amend || (!message.isEmpty && !staged.isEmpty) else { return }
+        guard amend || (!message.isEmpty && stagedCount > 0) else { return }
         runner.run(
             verb: "commit",
             key: "",
             cwd: cwd,
+            context: context,
             body: { token in
                 try await FilesService.shared.commit(
                     cwd: cwd, message: message, amend: amend, confirmToken: token
@@ -481,23 +265,16 @@ final class SourceControlModel {
         )
     }
 
-    /// What runs after a successful commit, for the split-button
-    /// variants. Modelled as a value rather than three near-identical
-    /// commit methods.
+    /// What runs after a successful commit, for the split-button variants.
     enum FollowUp { case none, push, sync }
 
     /// Stage everything, then commit. VS Code's "Commit All".
     func stageAllAndCommit() {
         guard let cwd = loadedCwd else { return }
-        let message = trimmedMessage
-        guard !message.isEmpty else { return }
+        guard !trimmedMessage.isEmpty else { return }
         runner.run(
-            verb: "stage",
-            key: ".",
-            cwd: cwd,
-            body: { _ in
-                try await FilesService.shared.stage(cwd: cwd, paths: ["."])
-            },
+            verb: "stage", key: ".", cwd: cwd, context: context,
+            body: { _ in try await FilesService.shared.stage(cwd: cwd, paths: ["."]) },
             onSuccess: { [weak self] in self?.commit() }
         )
     }
@@ -506,55 +283,48 @@ final class SourceControlModel {
 
     func fetchRemote() {
         guard let cwd = loadedCwd else { return }
-        runner.runRemote(verb: "fetch", cwd: cwd) { _ in
+        runner.runRemote(verb: "fetch", cwd: cwd, context: context) { _ in
             try await FilesService.shared.fetch(cwd: cwd)
         }
     }
 
     func pull(strategy: String = "ff-only") {
         guard let cwd = loadedCwd else { return }
-        runner.runRemote(verb: "pull", cwd: cwd) { token in
-            try await FilesService.shared.pull(
-                cwd: cwd, strategy: strategy, confirmToken: token
-            )
+        runner.runRemote(verb: "pull", cwd: cwd, context: context) { token in
+            try await FilesService.shared.pull(cwd: cwd, strategy: strategy, confirmToken: token)
         }
     }
 
     func push(forceWithLease: Bool = false) {
         guard let cwd = loadedCwd else { return }
-        runner.runRemote(verb: "push", cwd: cwd) { token in
-            try await FilesService.shared.push(
-                cwd: cwd, forceWithLease: forceWithLease, confirmToken: token
-            )
+        let ctx = forceWithLease
+            ? GitConfirmContext(target: targetPhrase, text: SourceControlConfirmText.forcePush(target: targetPhrase))
+            : context
+        runner.runRemote(verb: "push", cwd: cwd, context: ctx) { token in
+            try await FilesService.shared.push(cwd: cwd, forceWithLease: forceWithLease, confirmToken: token)
         }
     }
 
-    /// `git push -u` — the only shape that works for a branch with no
-    /// upstream, which is why it is a separate menu entry.
+    /// `git push -u` — the only shape that works for a branch with no upstream.
     func publish() {
         guard let cwd = loadedCwd else { return }
-        runner.runRemote(verb: "publish", cwd: cwd) { token in
-            try await FilesService.shared.push(
-                cwd: cwd, setUpstream: true, confirmToken: token
-            )
+        runner.runRemote(verb: "publish", cwd: cwd, context: context) { token in
+            try await FilesService.shared.push(cwd: cwd, setUpstream: true, confirmToken: token)
         }
     }
 
-    /// Pull then push, IN ORDER and only if the pull succeeded.
-    /// Firing both concurrently would push a branch the pull was about
-    /// to rebase, which is the exact failure this button exists to
-    /// prevent — hence `runRemoteAwaiting` rather than two `runRemote`
-    /// calls.
+    /// Pull then push, IN ORDER and only if the pull succeeded. Firing both
+    /// concurrently would push a branch the pull was about to rebase, which is the
+    /// exact failure this button exists to prevent.
     func sync() {
         guard let cwd = loadedCwd else { return }
+        let ctx = context
         Task { @MainActor in
-            let pulled = await runner.runRemoteAwaiting(verb: "pull", cwd: cwd) { token in
-                try await FilesService.shared.pull(
-                    cwd: cwd, strategy: "ff-only", confirmToken: token
-                )
+            let pulled = await runner.runRemoteAwaiting(verb: "pull", cwd: cwd, context: ctx) { token in
+                try await FilesService.shared.pull(cwd: cwd, strategy: "ff-only", confirmToken: token)
             }
             guard pulled else { return }
-            _ = await runner.runRemoteAwaiting(verb: "push", cwd: cwd) { token in
+            _ = await runner.runRemoteAwaiting(verb: "push", cwd: cwd, context: ctx) { token in
                 try await FilesService.shared.push(cwd: cwd, confirmToken: token)
             }
             refresh(cwd: cwd, force: true)
@@ -566,23 +336,17 @@ final class SourceControlModel {
     func stashPush(includeUntracked: Bool) {
         guard let cwd = loadedCwd else { return }
         let message = trimmedMessage.isEmpty ? nil : trimmedMessage
-        runner.run(verb: "stash", key: "push", cwd: cwd) { token in
+        runner.run(verb: "stash", key: "push", cwd: cwd, context: context) { token in
             try await FilesService.shared.stash(
-                cwd: cwd,
-                action: "push",
-                message: message,
-                includeUntracked: includeUntracked,
-                confirmToken: token
-            )
+                cwd: cwd, action: "push", message: message,
+                includeUntracked: includeUntracked, confirmToken: token)
         }
     }
 
     func stashAction(_ action: String, index: Int?) {
         guard let cwd = loadedCwd else { return }
-        runner.run(verb: "stash", key: action, cwd: cwd) { token in
-            try await FilesService.shared.stash(
-                cwd: cwd, action: action, index: index, confirmToken: token
-            )
+        runner.run(verb: "stash", key: action, cwd: cwd, context: context) { token in
+            try await FilesService.shared.stash(cwd: cwd, action: action, index: index, confirmToken: token)
         }
     }
 
@@ -593,10 +357,10 @@ final class SourceControlModel {
         isGenerating = true
         generateError = nil
         Task { @MainActor in
-            defer { isGenerating = false }
+            defer { if loadedCwd == cwd { isGenerating = false } }
             do {
-                commitMessage = try await FilesService.shared
-                    .generateCommitMessage(cwd: cwd, amend: amend)
+                let drafted = try await FilesService.shared.generateCommitMessage(cwd: cwd, amend: amend)
+                if loadedCwd == cwd { commitMessage = drafted }
             } catch let FilesServiceError.httpStatus(_, body)
                 where (body ?? "").contains("nothing-staged") {
                 generateError = "Nothing staged — stage something first."
@@ -609,56 +373,136 @@ final class SourceControlModel {
 
 // MARK: - View
 
+/// The pane's two scopes.
+enum SourceControlScope: Hashable { case tree, project }
+
+/// What a project-level act asks before it runs.
+private enum ProjectConfirmation: Identifiable {
+    case mergeAll
+    case sweep
+    case drop(slug: String, branch: String)
+
+    var id: String {
+        switch self {
+        case .mergeAll: return "mergeAll"
+        case .sweep: return "sweep"
+        case .drop(let slug, _): return "drop:\(slug)"
+        }
+    }
+}
+
+/// A starting state for the view, so the snapshot harness can render the pane
+/// mid-use (a filter typed, a file selected, the project scope open) without
+/// synthesising clicks. A real launch passes none.
+struct SourceControlInitialState {
+    var scope: SourceControlScope = .tree
+    var pin: SourceControlPin = .followTab
+    var filter = ""
+    var selection: String? = nil
+    var folderOverrides: [String: Bool] = [:]
+}
+
 @MainActor struct SourceControlView: View {
+    init(initial: SourceControlInitialState = SourceControlInitialState()) {
+        _scope = State(initialValue: initial.scope)
+        _pin = State(initialValue: initial.pin)
+        _filter = State(initialValue: initial.filter)
+        _selection = State(initialValue: initial.selection)
+        _folderOverrides = State(initialValue: initial.folderOverrides)
+    }
+
     @Environment(MarvinBridge.self) private var bridge
     @State private var model = SourceControlModel()
+    @State private var project = SourceControlProjectModel()
     @State private var graphModel = GitGraphModel()
+    @State private var preview = SourceControlPreviewModel()
+
+    @State private var scope: SourceControlScope
+    @State private var pin: SourceControlPin
 
     @State private var diffSheet: DiffSheetModel? = nil
     @State private var branchPickerOpen = false
     @State private var prepareMROpen = false
+    @State private var confirmation: ProjectConfirmation? = nil
 
-    /// Collapsed section ids. Sections default to open; storing the
-    /// closed ones means a newly-added section is visible by default.
-    @State private var collapsed: Set<String> = []
-    @State private var graphShown = true
-    /// Focus on the commit box. ⌘⏎ is scoped to it — see `primaryAction`.
-    @FocusState private var composerFocused: Bool
-    @State private var graphHeight: CGFloat = 240
+    /// Collapsed group ids, remembered across launches. Sections default to open
+    /// except the reference ones (`SourceControlCollapse.defaultClosed`).
+    @State private var collapsed: Set<String> = SourceControlView.loadCollapsed()
+    /// A person's own open / closed choice per directory; the default decides the rest.
+    @State private var folderOverrides: [String: Bool]
+    @State private var filter: String
 
-    private var cwd: String { bridge.projectWorkDir ?? "" }
+    private static let collapsedKey = "marvin.sourceControl.collapsed.v1"
+
+    static func loadCollapsed() -> Set<String> {
+        SourceControlCollapse.initial(stored: UserDefaults.standard.stringArray(forKey: collapsedKey))
+    }
+
+    private var root: String { bridge.projectWorkDir ?? "" }
+
+    // MARK: Which tree
+
+    /// The tree the first scope shows. Recomputed from the selected tab, so it
+    /// follows the selection and nothing else (a pin aside).
+    private var target: SourceControlTarget? {
+        guard !root.isEmpty else { return nil }
+        let id = bridge.activeMarvinSessionId
+        let entry = id.flatMap { SessionRegistry.shared.entry($0) }
+        let path = entry?.tree?.path
+        return SourceControlTarget.resolve(pin: pin, SourceControlTargetInput(
+            projectRoot: root,
+            projectName: bridge.projectName,
+            projectBranch: scopeIsProjectCheckoutBranch,
+            tabName: id.map { SessionRegistry.shared.displayName($0) },
+            tabMode: entry?.mode,
+            tabTree: entry?.tree,
+            tabTreePresent: path.map { FileManager.default.fileExists(atPath: $0) },
+            home: NSHomeDirectory()))
+    }
+
+    /// The branch the PROJECT checkout is on. The first scope's own status may be
+    /// a tab's tree, so the project's branch comes from the project model's list.
+    private var scopeIsProjectCheckoutBranch: String? {
+        project.repos.first(where: { $0.isMain })?.branch
+            ?? (model.loadedCwd == root ? model.response?.branch?.name : nil)
+    }
 
     var body: some View {
+        let target = self.target
         VStack(spacing: 0) {
-            panelHeader
+            header(target)
+            scopePicker(target)
             MarvinDivider()
-            treeBanner
-            if graphShown, model.response?.enabled == true {
-                changesArea
-                graphSplitter
-                graphSection
-                    .frame(height: graphHeight)
-            } else {
-                changesArea
-                if model.response?.enabled == true {
-                    MarvinDivider()
-                    graphHeaderRow
-                }
-            }
+            content(target)
             banners
         }
         .frame(minWidth: 200)
         .background(MarvinTheme.background)
         .preferredColorScheme(bridge.preferredColorScheme)
         .onAppear { syncFromBridge() }
-        .onChange(of: bridge.projectWorkDir) { _, _ in syncFromBridge() }
+        .onChange(of: bridge.projectWorkDir) { _, _ in
+            pin = .followTab
+            syncFromBridge()
+        }
+        // The tree follows the tab selection (and a pin): a new path is a new view.
+        .onChange(of: target?.path) { _, _ in viewTarget() }
         .onChange(of: bridge.isBusy) { wasBusy, isBusy in
-            // A finished turn is the moment tool-driven file writes
-            // become visible to `git status`.
-            if wasBusy, !isBusy, !cwd.isEmpty {
-                model.refresh(cwd: cwd, force: true)
-                graphModel.refresh(cwd: cwd, force: true)
+            // A finished turn is the moment tool-driven file writes become visible
+            // to `git status`, and a tab's branch may have a new commit.
+            if wasBusy, !isBusy, !root.isEmpty {
+                model.refresh(cwd: model.loadedCwd ?? root, force: true)
+                graphModel.refresh(cwd: model.loadedCwd ?? root, force: true)
+                project.refresh(root: root, force: true)
             }
+        }
+        .onChange(of: project.worktrees) { _, list in
+            // A pinned worktree that was removed is not a tree any more.
+            if case .worktree(let path, _, _) = pin, !FileManager.default.fileExists(atPath: path) || !list.contains(where: { $0.path == path }) {
+                pin = .followTab
+            }
+        }
+        .onChange(of: scope) { _, now in
+            if now == .project, !root.isEmpty { project.refresh(root: root, force: true) }
         }
         .sheet(item: Binding(
             get: { diffSheet.map(DiffSheetItem.init) },
@@ -672,1090 +516,265 @@ final class SourceControlModel {
                 reason: pending.reason,
                 severity: pending.severity,
                 paths: pending.paths,
+                context: pending.context,
                 onConfirm: pending.confirm,
                 onCancel: pending.cancel
             )
         }
         .sheet(isPresented: $branchPickerOpen) {
-            GitRefPickerSheet(cwd: cwd) {
-                model.refresh(cwd: cwd, force: true)
-                graphModel.refresh(cwd: cwd, force: true)
+            GitRefPickerSheet(cwd: model.loadedCwd ?? root) {
+                refreshAll()
             }
         }
-        // ADR-0111 — the Sessions pane's "Prepare MR…" lands here.
+        // ADR-0111 — the Sessions pane's "Prepare MR…" lands here, on the project scope.
         .onChange(of: bridge.sourceControlRequest) { _, request in
             guard let request else { return }
             switch request {
             case .prepareMR:
-                model.refresh(cwd: cwd, force: true)
-                model.refreshIntegrationPreview()
+                scope = .project
+                project.refresh(root: root, force: true)
+                project.refreshIntegrationPreview()
                 prepareMROpen = true
             }
             bridge.clearSourceControlRequest()
         }
         .sheet(isPresented: $prepareMROpen) {
-            PrepareMRSheet(worktrees: model.worktrees, preview: model.integrationPreview) { slugs, name, message, push, openMR in
-                model.prepareMergeRequest(slugs: slugs, name: name, message: message, push: push, openMergeRequest: openMR)
+            PrepareMRSheet(worktrees: project.worktrees, preview: project.integrationPreview) { slugs, name, message, push, openMR in
+                project.prepareMergeRequest(slugs: slugs, name: name, message: message, push: push, openMergeRequest: openMR)
             }
         }
-        // A pane absorbs compression and clips; it never negotiates for
-        // width. All seven stay mounted in one ZStack, so the widest
-        // intrinsic minimum among them becomes the sidebar's, and the
-        // overflow pushes the 44pt rail off the left edge (ADR-0114).
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .confirmationDialog(
+            confirmationText?.title ?? "",
+            isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }),
+            titleVisibility: .visible,
+            presenting: confirmation
+        ) { c in
+            if let text = confirmationText {
+                Button(text.confirmLabel, role: isDestructive(c) ? .destructive : nil) { run(c) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text(confirmationText?.message ?? "")
+        }
+        // A pane absorbs compression and clips; it never negotiates for width. All
+        // seven stay mounted in one ZStack, so the widest intrinsic minimum among
+        // them becomes the sidebar's, and the overflow pushes the 44pt rail off the
+        // left edge (ADR-0114).
+        // Top-aligned in every state: a short one (no project, a clean tree) used to float in
+        // the middle of the slot with its header halfway down.
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .clipped()
     }
 
+    // MARK: Syncing
+
     private func syncFromBridge() {
-        guard !cwd.isEmpty else {
+        guard !root.isEmpty else {
             model.clear()
+            project.clear()
             graphModel.clear()
+            preview.clear()
             return
         }
-        model.refresh(cwd: cwd)
-        graphModel.refresh(cwd: cwd)
-    }
-
-    // MARK: - Which tree (R2-12)
-
-    /// This pane reads the project's shared checkout whichever tab is selected;
-    /// a worktree tab works somewhere else. Say which tree is on screen, so a
-    /// "Commit 100" is never a guess about whose 100 files they are.
-    ///
-    /// Showing the selected tab's own worktree here instead is a larger change
-    /// than a label. The tab's path is known (`SessionEntry.tree.path`) and the git
-    /// routes take any directory as `cwd`, but the model holds ONE `cwd` for the
-    /// whole pane: the changes list, stage, commit, branch and push belong to the
-    /// tree on screen, while the worktree list, merge-all, sweep and Prepare MR
-    /// are project-level (they reconcile every tab's branch against the main
-    /// checkout). Pointing the single `cwd` at a tab's tree would send those
-    /// there too, and discard / force-push would then act on a tree chosen by
-    /// the tab selection rather than in this pane. So the pane stays on the
-    /// project checkout and names it; a per-section `cwd` plus a visible "viewing"
-    /// switch is the follow-up.
-    private var treeLabel: SourceControlTreeLabel {
-        let entry = bridge.activeMarvinSessionId.flatMap { SessionRegistry.shared.entry($0) }
-        return SourceControlTreeLabel.make(
-            projectBranch: model.response?.branch?.name,
-            tabTitle: entry?.title,
-            tabIsWorktree: entry?.tree?.mode == .worktree,
-            tabBranch: entry?.tree?.branch
-        )
-    }
-
-    @ViewBuilder
-    private var treeBanner: some View {
-        if model.response?.enabled == true {
-            let label = treeLabel
-            let other = label.kind == .otherTree
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: other ? "exclamationmark.circle.fill" : "folder")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(other ? Color.orange : Color.secondary)
-                    .frame(width: 12)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(label.headline)
-                        .font(.system(size: 10.5, weight: other ? .semibold : .regular))
-                        .foregroundStyle(other ? MarvinTheme.textPrimary : MarvinTheme.textMuted)
-                    if let detail = label.detail {
-                        Text(detail)
-                            .font(.system(size: 10))
-                            .foregroundStyle(MarvinTheme.textMuted)
-                            .lineLimit(3)
-                    }
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color.orange.opacity(other ? 0.08 : 0))
-            .accessibilityElement(children: .combine)
-            MarvinDivider()
-        }
-    }
-
-    // MARK: - Panel header
-
-    private var panelHeader: some View {
-        PaneHeader(title: "Source Control", symbol: "arrow.triangle.branch") {
-            if model.isLoading || model.runner.isBusy {
-                ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 14, height: 14)
-            }
-            overflowMenu
-        }
-    }
-
-    /// The `…` menu. This is where every git command that does not
-    /// earn a toolbar slot lives — the reference does the same, and it
-    /// is the difference between "the panel can commit" and "the panel
-    /// is a source control client".
-    private var overflowMenu: some View {
-        Menu {
-            Section("Changes") {
-                Button("Stage All Changes") { model.stageAll() }
-                    .disabled(model.changes.isEmpty)
-                Button("Unstage All Changes") { model.unstageAll() }
-                    .disabled(model.staged.isEmpty)
-                Button("Discard All Changes…", role: .destructive) {
-                    model.discardAllTracked()
-                }
-                .disabled(model.changes.isEmpty)
-                Button("Delete All Untracked Files…", role: .destructive) {
-                    model.deleteAllUntracked()
-                }
-                .disabled(!model.changes.contains { $0.entryType == "untracked" })
-            }
-            Section("Commit") {
-                Button("Commit") { model.commit() }.disabled(!model.canCommit)
-                Button("Commit (Amend)") { model.commit(amend: true) }
-                    .disabled(!model.canAmend)
-                Button("Stage All & Commit") { model.stageAllAndCommit() }
-                    .disabled(model.commitMessage.trimmingCharacters(
-                        in: .whitespacesAndNewlines).isEmpty)
-            }
-            Section("Pull, Push") {
-                Button("Sync") { model.sync() }.disabled(!model.hasUpstream)
-                Button("Fetch") { model.fetchRemote() }
-                Button("Pull") { model.pull() }
-                Button("Pull (Rebase)") { model.pull(strategy: "rebase") }
-                Button("Push") { model.push() }
-                Button("Publish Branch") { model.publish() }
-                    .disabled(model.hasUpstream)
-                Button("Push (Force with Lease)…", role: .destructive) {
-                    model.push(forceWithLease: true)
-                }
-            }
-            Section("Branch") {
-                Button("Checkout to…") { branchPickerOpen = true }
-                Button("Create Branch…") { branchPickerOpen = true }
-            }
-            Section("Stash") {
-                Button("Stash Changes") { model.stashPush(includeUntracked: false) }
-                    .disabled(model.isClean)
-                Button("Stash Changes (Include Untracked)") {
-                    model.stashPush(includeUntracked: true)
-                }
-                .disabled(model.isClean)
-                Button("Pop Latest Stash") { model.stashAction("pop", index: nil) }
-                    .disabled(model.stashes.isEmpty)
-                Button("Apply Latest Stash") { model.stashAction("apply", index: nil) }
-                    .disabled(model.stashes.isEmpty)
-                Button("Drop Latest Stash…", role: .destructive) {
-                    model.stashAction("drop", index: nil)
-                }
-                .disabled(model.stashes.isEmpty)
-            }
-            Section("View") {
-                Button(graphShown ? "Hide Graph" : "Show Graph") {
-                    graphShown.toggle()
-                    if graphShown, !cwd.isEmpty {
-                        graphModel.refresh(cwd: cwd, force: true)
-                    }
-                }
-                Button("Refresh") {
-                    guard !cwd.isEmpty else { return }
-                    model.refresh(cwd: cwd, force: true)
-                    graphModel.refresh(cwd: cwd, force: true)
-                }
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 11))
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .frame(width: 18)
-        .disabled(cwd.isEmpty)
-        .help("More source control actions")
-    }
-
-    // MARK: - Changes area
-
-    @ViewBuilder
-    private var changesArea: some View {
-        if cwd.isEmpty {
-            PaneEmptyView(state: .noProject("changes"))
-        } else if let response = model.response {
-            if response.enabled == false {
-                // Three parenthesised lowercase fragments, one of which meant
-                // "still trying" and read like a failure (ADR-0114).
-                if response.reason == "not-a-git-repo" {
-                    PaneEmptyView(state: .notARepo())
-                } else if response.reason == "probe-failed" {
-                    PaneLoadingView(label: "Git is busy — retrying…")
-                } else {
-                    PaneEmptyView(
-                        state: PaneEmptyState(headline: "Git is unavailable here", hint: "MARVIN could not run git in this folder.", symbol: "exclamationmark.triangle"),
-                        actionTitle: "Try again",
-                        action: { model.refresh(cwd: cwd, force: true) }
-                    )
-                }
-            } else if let error = response.error, !error.isEmpty {
-                PaneEmptyView(
-                    state: PaneEmptyState(headline: "Git reported an error", hint: error, symbol: "exclamationmark.triangle"),
-                    actionTitle: "Try again",
-                    action: { model.refresh(cwd: cwd, force: true) }
-                )
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        repoGroup
-                        ForEach(otherRepos) { repo in
-                            otherRepoRow(repo)
-                        }
-                        if !model.worktrees.isEmpty { worktreeSection }
-                        if !model.stashes.isEmpty { stashSection }
-                    }
-                    .padding(.bottom, 8)
-                }
-                .frame(maxHeight: .infinity)
-            }
-        } else if model.lastError != nil && !model.isLoading {
-            // The fetch failed and nothing is retrying — the error banner says
-            // why. A pulsing skeleton here would claim it is still loading.
-            EmptyView()
-        } else {
-            // First status fetch in flight: the shape of the file list, not a
-            // spinner on an empty pane.
-            SkeletonRows(count: 5, detailLines: 0)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-        }
-    }
-
-    /// Every worktree except the one the user has open. These are read
-    /// -only rows: switching MARVIN's active project is the way in.
-    private var otherRepos: [GitRepoEntry] {
-        model.repos.filter { !$0.isCurrent }
-    }
-
-    // A `Group`, not a `VStack`: this is built inside the pane's `LazyVStack`,
-    // and a `VStack` child is realised whole — every changed file (the file
-    // header cites 477) became a stateful row and was re-evaluated on every
-    // model change (audit L5). A `Group` lets each `ForEach` row be a direct
-    // lazy child. The enclosing `LazyVStack` already supplies leading
-    // alignment and zero spacing.
-    @ViewBuilder
-    private var repoGroup: some View {
-        Group {
-            repoHeaderRow
-            composer
-            if !model.conflicted.isEmpty {
-                section("Merge Changes", id: "conflicted", files: model.conflicted)
-            }
-            if !model.staged.isEmpty {
-                section("Staged Changes", id: "staged", files: model.staged)
-            }
-            if !model.changes.isEmpty {
-                section("Changes", id: "changes", files: model.changes)
-            }
-            if model.isClean {
-                Text("No changes")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-            }
-        }
-    }
-
-    /// Repo name + branch chip + the four inline actions the reference
-    /// puts on this row (sync, commit, refresh, more).
-    private var repoHeaderRow: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "folder")
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-            Text(bridge.projectName ?? "repository")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(MarvinTheme.textPrimary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            branchChip
-            Spacer(minLength: 4)
-            iconButton("arrow.triangle.2.circlepath", help: syncHelp) { model.sync() }
-                .disabled(!model.hasUpstream || model.runner.isBusy)
-            iconButton("checkmark", help: "Commit staged changes") { model.commit() }
-                .disabled(!model.canCommit)
-            iconButton("arrow.clockwise", help: "Refresh") {
+        let projectRoot = root
+        project.onIntegrated = { [model, graphModel] in
+            // A merge landed in the project checkout: if that is what is on screen, reload it.
+            if let cwd = model.loadedCwd, cwd == projectRoot {
                 model.refresh(cwd: cwd, force: true)
                 graphModel.refresh(cwd: cwd, force: true)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        project.refresh(root: root)
+        viewTarget()
     }
 
-    private var syncHelp: String {
-        guard model.hasUpstream else { return "No upstream — publish the branch first" }
-        if !model.isDiverged { return "Sync — up to date with \(model.branch?.upstream ?? "upstream")" }
-        return "Sync — pull \(model.behind) and push \(model.ahead)"
-    }
-
-    /// The branch name, clickable. This is the affordance that was
-    /// missing entirely: the routes behind it shipped with ADR-0012 and
-    /// nothing in the app called them.
-    private var branchChip: some View {
-        Button {
-            branchPickerOpen = true
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 9))
-                Text(model.branchName)
-                    .font(.system(size: 10))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if model.ahead > 0 || model.behind > 0 {
-                    Text(divergenceLabel)
-                        .font(.system(size: 9).monospaced())
-                }
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 7))
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(Capsule().fill(MarvinTheme.elevated))
+    private func viewTarget() {
+        guard let target else { return }
+        // A different tree is a different list: the selection and the preview belong to the old one.
+        if let loaded = model.loadedCwd, loaded != target.path {
+            preview.clear()
+            selection = nil
+            folderOverrides = [:]
         }
-        .buttonStyle(.plain)
-        .frame(maxWidth: 160)
-        .help("Checkout, create or delete a branch")
+        model.view(cwd: target.path, phrase: target.actionPhrase)
+        graphModel.refresh(cwd: target.path, force: true)
     }
 
-    private var divergenceLabel: String {
-        var parts: [String] = []
-        if model.behind > 0 { parts.append("\(model.behind)↓") }
-        if model.ahead > 0 { parts.append("\(model.ahead)↑") }
-        return parts.joined(separator: " ")
+    private func refreshAll() {
+        guard !root.isEmpty else { return }
+        model.refresh(cwd: model.loadedCwd ?? root, force: true)
+        graphModel.refresh(cwd: model.loadedCwd ?? root, force: true)
+        project.refresh(root: root, force: true)
     }
 
-    private func iconButton(
-        _ symbol: String,
-        help: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        // Every refresh, stage, unstage and discard affordance in the panel
-        // goes through here, and none of them showed a hover or a press
-        // before (ADR-0114).
-        Button(action: action) {
-            Image(systemName: symbol)
-        }
-        .paneIconButton(10)
-        .help(help)
-        .accessibilityLabel(help)
-    }
+    // MARK: Selection (the first scope's list)
 
-    // MARK: - Composer
+    @State private var selection: String?
 
-    private var composer: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .topTrailing) {
-                TextField(
-                    composerPlaceholder,
-                    text: Bindable(model).commitMessage,
-                    axis: .vertical
-                )
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .lineLimit(1...6)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .padding(.trailing, 74)
-                .focused($composerFocused)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(MarvinTheme.elevated)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .stroke(MarvinTheme.border, lineWidth: 1)
-                        )
-                )
-                .onSubmit { if model.canCommit { model.commit() } }
+    // MARK: Header
 
-                generateButton
-                    .padding(.top, 4)
-                    .padding(.trailing, 4)
+    private func header(_ target: SourceControlTarget?) -> some View {
+        PaneHeader(title: "Source Control", symbol: "arrow.triangle.branch") {
+            if model.isLoading || model.runner.isBusy || project.isLoading || project.busy {
+                ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 14, height: 14)
             }
-            primaryAction
-            if let err = model.generateError {
-                Text(err)
-                    .font(.system(size: 10))
-                    .foregroundStyle(GitDecorationColor.modified)
-                    .lineLimit(2)
+            Button { refreshAll() } label: { Image(systemName: "arrow.clockwise") }
+                .paneIconButton(10)
+                .disabled(root.isEmpty)
+                .help("Refresh")
+                .accessibilityLabel("Refresh")
+            if scope == .tree {
+                SourceControlTreeMenu(
+                    model: model, target: target,
+                    pickBranch: { branchPickerOpen = true },
+                    expandAll: { setAllFolders(closed: false) },
+                    collapseAll: { setAllFolders(closed: true) })
+            } else {
+                SourceControlIntegrateMenu(
+                    project: project,
+                    mergeAll: { confirmation = .mergeAll },
+                    prepareMR: { project.refreshIntegrationPreview(); prepareMROpen = true },
+                    sweep: { confirmation = .sweep })
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.bottom, 8)
     }
 
-    /// The reference's placeholder names the branch, which is the one
-    /// piece of context that stops a commit landing somewhere you did
-    /// not mean.
-    private var composerPlaceholder: String {
-        "Message (⌘⏎ to commit on \"\(model.branchName)\")"
-    }
-
-    private var generateButton: some View {
-        Button {
-            model.generateCommitMessage()
-        } label: {
-            // Accent text on an accent fill at 0.18 is accent-on-accent, and
-            // the user could barely read it (2026-09-11). The chip vocabulary
-            // solves this with a stroke and a deeper fill, and it is what
-            // every other button in the pane already wears — so this is one
-            // less bespoke shape as well (ADR-0114).
-            HStack(spacing: 3) {
-                if model.isGenerating {
-                    ProgressView().controlSize(.small).scaleEffect(0.55)
-                } else {
-                    Image(systemName: "sparkles").font(.system(size: 9))
-                }
-                Text("Generate")
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
+    private func setAllFolders(closed: Bool) {
+        var next: [String: Bool] = [:]
+        for group in ChangeGroup.allCases {
+            let rows = ChangeTree.rows(items: model.items(group), group: group, filter: "", overrides: [:], autoCollapseAbove: .max)
+            for r in rows where r.kind == .directory { next[r.id] = closed }
         }
-        .rowChip(.primary)
-        .disabled(model.isGenerating || model.staged.isEmpty)
-        .help(model.staged.isEmpty
-            ? "Stage something to draft a message from"
-            : "Draft a commit message from the staged diff")
+        folderOverrides = next
     }
 
-    /// One primary button whose identity depends on state — Commit
-    /// when there is something to commit, Sync when there is not and
-    /// the branch has diverged. Two buttons with one perpetually
-    /// disabled is what the reference avoids.
     @ViewBuilder
-    private var primaryAction: some View {
-        if model.staged.isEmpty && model.isDiverged {
-            Button {
-                model.sync()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 10))
-                    Text("Sync Changes \(divergenceLabel)")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 5)
+    private func scopePicker(_ target: SourceControlTarget?) -> some View {
+        if target != nil {
+            let ready = project.readyCount
+            ViewThatFits(in: .horizontal) {
+                scopeSegments(first: target?.segmentTitle ?? "Checkout", second: ready > 0 ? "Project · \(ready) ready" : "Project")
+                scopeSegments(first: target?.segmentTitle ?? "Checkout", second: "Project")
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.runner.isBusy)
-        } else if !model.hasUpstream && model.isClean {
-            Button {
-                model.publish()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.up.to.line")
-                        .font(.system(size: 10))
-                    Text("Publish Branch")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 5)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 6)
+        }
+    }
+
+    private func scopeSegments(first: String, second: String) -> some View {
+        Picker("Scope", selection: $scope) {
+            Text(first).tag(SourceControlScope.tree)
+            Text(second).tag(SourceControlScope.project)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel("Source control scope")
+    }
+
+    // MARK: Content
+
+    @ViewBuilder
+    private func content(_ target: SourceControlTarget?) -> some View {
+        if let target {
+            switch scope {
+            case .tree:
+                SourceControlChangesView(
+                    model: model, graphModel: graphModel, preview: preview,
+                    target: target, pin: $pin, collapsed: $collapsed, folderOverrides: $folderOverrides,
+                    filter: $filter, selection: $selection,
+                    openDiff: openDiff, pickBranch: { branchPickerOpen = true },
+                    toggleCollapsed: toggleCollapsed)
+            case .project:
+                SourceControlProjectView(
+                    project: project, projectName: bridge.projectName ?? "project",
+                    collapsed: collapsed, toggleCollapsed: toggleCollapsed,
+                    tabName: tabName(forSlug:),
+                    mergeAll: { confirmation = .mergeAll },
+                    merge: { project.merge(slug: $0) },
+                    view: viewWorktree,
+                    drop: { slug, branch in confirmation = .drop(slug: slug, branch: branch) })
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.runner.isBusy)
         } else {
-            HStack(spacing: 1) {
-                Button {
-                    model.commit()
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "checkmark").font(.system(size: 10))
-                        Text(commitLabel).font(.system(size: 12, weight: .medium))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 5)
-                }
-                .buttonStyle(.borderedProminent)
-                // ⌘⏎ only while the message box has focus, which is what the
-                // placeholder promises and what VS Code does. Declared
-                // unconditionally it is a GLOBAL key equivalent for as long
-                // as this pane is the visible one — so ⌘⏎ aimed at the chat
-                // composer (or at AskQuestionSheet's "Send choice", which
-                // also owns ⌘⏎) could commit instead. A shortcut that fires
-                // from the wrong surface is worse than no shortcut.
-                .modifier(CommitReturnShortcut(enabled: composerFocused))
-                .disabled(!model.canCommit)
-                .help(treeLabel.commitHelp)
-
-                Menu {
-                    Button("Commit & Push") { model.commit(then: .push) }
-                        .disabled(!model.canCommit)
-                    Button("Commit & Sync") { model.commit(then: .sync) }
-                        .disabled(!model.canCommit || !model.hasUpstream)
-                    Divider()
-                    Button("Stage All & Commit") { model.stageAllAndCommit() }
-                    Button("Commit (Amend)") { model.commit(amend: true) }
-                        .disabled(!model.canAmend)
-                } label: {
-                    Image(systemName: "chevron.down").font(.system(size: 9))
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .frame(width: 22)
-                .padding(.vertical, 5)
-                // Follows the Commit button beside it: with nothing to commit
-                // the button reads disabled, and a saturated chevron next to
-                // it was the only live-looking control in the pane (U15).
-                .background(
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(model.canCommit ? Color.accentColor.opacity(0.85) : Color.primary.opacity(0.08))
-                )
-                .foregroundStyle(model.canCommit ? Color.white : Color.secondary)
-                .help("Commit variants")
-            }
+            PaneEmptyView(state: .noProject("changes"))
         }
     }
 
-    private var commitLabel: String {
-        if model.runner.isRunning("commit") { return "Committing…" }
-        if model.staged.isEmpty { return "Commit" }
-        return "Commit \(model.staged.count)"
+    private func toggleCollapsed(_ id: String) {
+        collapsed = SourceControlCollapse.toggled(id, in: collapsed)
+        UserDefaults.standard.set(SourceControlCollapse.encode(collapsed), forKey: Self.collapsedKey)
     }
 
-    // MARK: - Sections + rows
+    private func tabName(forSlug slug: String) -> String? {
+        let registry = SessionRegistry.shared
+        guard let id = registry.fleetSessionIds.first(where: { registry.entry($0)?.tree?.slug == slug }) else { return nil }
+        return registry.displayName(id)
+    }
 
-    @ViewBuilder
-    private func section(_ label: String, id: String, files: [GitStatusFile]) -> some View {
-        let isCollapsed = collapsed.contains(id)
-        Button {
-            if isCollapsed { collapsed.remove(id) } else { collapsed.insert(id) }
-        } label: {
-            // The pane's third section-header shape, now the shared one. The
-            // count capsule sits with the title rather than after the actions,
-            // which is where the other six panes put it (ADR-0114).
-            PaneSectionHeader(title: label, count: files.count, tint: MarvinTheme.textMuted, collapsed: isCollapsed) {
-                sectionActions(id: id, files: files)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+    private func viewWorktree(_ w: WorktreeEntry, name: String) {
+        pin = .worktree(path: w.path, branch: w.branch, name: name)
+        scope = .tree
+    }
 
-        if !isCollapsed {
-            // Identity is section + path. A file that is both staged and
-            // modified appears in two sections, and now that the rows are
-            // direct children of one lazy stack a bare `\.path` collided across
-            // them and dropped a row (seen in the render after L5).
-            ForEach(files.map { SectionedFile(section: id, file: $0) }) { entry in
-                let file = entry.file
-                SourceControlRow(
-                    file: file,
-                    cwd: cwd,
-                    section: id,
-                    isInFlight: rowIsInFlight(file),
-                    onTap: { openDiff(for: file) },
-                    onStage: { model.stage([repoRelative(file.path)]) },
-                    onUnstage: { model.unstage([repoRelative(file.path)]) },
-                    onDiscard: { discardRow(file) },
-                    onReveal: { reveal(file) }
-                )
-            }
+    private func openDiff(_ item: ChangeItem) {
+        guard let cwd = model.loadedCwd else { return }
+        diffSheet = DiffSheetModel(cwd: cwd, relativePath: item.path, initialMode: item.group == .staged ? .staged : .working)
+    }
+
+    // MARK: Project confirmations
+
+    private var confirmationText: SourceControlConfirmText? {
+        switch confirmation {
+        case .mergeAll:
+            return SourceControlConfirmText.mergeAll(
+                readyCount: project.lines.filter { $0.state == "ready" }.count,
+                targetBranch: project.repos.first(where: { $0.isMain })?.branch)
+        case .sweep:
+            return SourceControlConfirmText.sweep(spentCount: WorktreeSections.integration(project.lines).spentCount)
+        case .drop(_, let branch):
+            return SourceControlConfirmText.dropCheckout(branch: branch)
+        case nil:
+            return nil
         }
     }
 
-    /// Bulk actions on the section header, hover-revealed the way the
-    /// reference does it.
-    @ViewBuilder
-    private func sectionActions(id: String, files: [GitStatusFile]) -> some View {
-        if id == "staged" {
-            iconButton("minus", help: "Unstage all") { model.unstageAll() }
-        } else if id == "changes" {
-            iconButton("arrow.uturn.backward", help: "Discard all changes") {
-                model.discardAllTracked()
-            }
-            iconButton("plus", help: "Stage all changes") { model.stageAll() }
+    private func isDestructive(_ c: ProjectConfirmation) -> Bool {
+        switch c {
+        case .mergeAll: return false
+        case .sweep, .drop: return true
         }
     }
 
-
-    /// Implementer worktrees (ADR-0103).
-    ///
-    /// This replaces reading an implementer's progress off a dirty count —
-    /// which reported 0 for one that had correctly committed, making finished
-    /// work indistinguishable from none. `state` is derived from git on every
-    /// fetch, so a branch merged in a terminal or another session shows as
-    /// merged here without MARVIN having witnessed it.
-    private var worktreeSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-                Text("Worktrees")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MarvinTheme.textMuted)
-                Spacer()
-                let ready = model.worktrees.filter(\.isReady).count
-                if ready > 0 {
-                    Text("\(ready) ready")
-                        .font(.system(size: 9.5, weight: .semibold).monospaced())
-                        .padding(.horizontal, 5)
-                        .background(Capsule().fill(MarvinTheme.elevated))
-                        .foregroundStyle(GitDecorationColor.added)
-                }
-                // Hierarchy: one accent chip for the action this section is
-                // FOR, one neutral chip beside it, and the rare cleanup a
-                // level deeper in a menu — the common path first.
-                if ready > 1 {
-                    Button("Merge all") { model.mergeAllWorktrees() }
-                        .chip(.neutral)
-                        .disabled(model.integrationRunning)
-                        .help("Fold all \(ready) finished branches into this branch, locally. Never pushes — one push covers all of them, so N branches still cost one pipeline instead of N. Stops at the first conflict.")
-                }
-                if ready > 0 {
-                    // The ellipsis is macOS's promise that a click opens
-                    // something to fill in rather than acting immediately.
-                    Button("Prepare MR…") { model.refreshIntegrationPreview(); prepareMROpen = true }
-                        .chip(.primary)
-                        .disabled(model.integrationRunning)
-                        .help("Squash the finished branches you pick into one commit on a new mr/… branch, then push it and open one merge request. The tab branches stay as they are.")
-                }
-                if model.worktrees.contains(where: \.isSpent) {
-                    Menu {
-                        Button("Reclaim spent checkouts") { model.sweepWorktrees() }
-                            .disabled(model.integrationRunning)
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 10, weight: .semibold))
-                            .frame(width: 18, height: 18)
-                            .contentShape(Rectangle())
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .frame(width: 18)
-                    .foregroundStyle(MarvinTheme.textMuted)
-                    .help("Remove checkouts and delete branches that are empty or already merged. Never touches unmerged or uncommitted work.")
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 8)
-            .padding(.bottom, 3)
-
-            if let job = model.integrationJob, job.running { integrationProgressRow(job) }
-
-            ForEach(model.worktrees) { w in worktreeRow(w) }
-
-            if let notice = model.worktreeNotice {
-                worktreeNoticeRow(notice)
-            }
+    private func run(_ c: ProjectConfirmation) {
+        switch c {
+        case .mergeAll: project.mergeAll()
+        case .sweep: project.sweep()
+        case .drop(let slug, _): project.dropCheckout(slug: slug)
         }
     }
 
-    /// The outcome of the last integration. It used to render as 10pt grey
-    /// body text, four lines deep, with raw git command output inside the
-    /// sentence — which is how a FAILED merge came to look exactly like a
-    /// successful one (2026-09-11). Feedback has kinds: this one carries its
-    /// own glyph and colour, and the detail sits under the sentence.
-    @ViewBuilder
-    private func worktreeNoticeRow(_ notice: PaneNotice) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: notice.kind.symbol)
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(notice.kind.tint)
-                .frame(width: 12)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(notice.headline)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(notice.kind == .error ? MarvinTheme.textPrimary : MarvinTheme.textMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let detail = notice.detail {
-                    Text(detail)
-                        .font(.system(size: 9.5, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 0)
-            Button {
-                model.worktreeNotice = nil
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .semibold))
-                    .frame(width: 14, height: 14)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.tertiary)
-            .help("Dismiss")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(notice.kind.tint.opacity(notice.kind == .info ? 0 : 0.08))
-        )
-        .padding(.horizontal, 10)
-        .padding(.top, 4)
-    }
-
-    /// What the running integration is doing, refreshed about once a second.
-    /// The elapsed time is the load-bearing part: it is what separates
-    /// "working" from "wedged" for an operation that legitimately takes
-    /// minutes (ADR-0109 amendment, 2026-09-11).
-    private func integrationProgressRow(_ job: IntegrationJobEntry) -> some View {
-        HStack(spacing: 6) {
-            ProgressView()
-                .controlSize(.small)
-                .scaleEffect(0.55)
-                .frame(width: 12, height: 12)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(job.kind == "merge-all" ? "Merge all" : "Prepare MR")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(MarvinTheme.textMuted)
-                Text(job.progressLine)
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .help("This runs in the sidecar, not in the app: it keeps going if you switch project or close the window, and the result appears here when it lands.")
-    }
-
-    private func worktreeRow(_ w: WorktreeEntry) -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(worktreeTint(w))
-                .frame(width: 6, height: 6)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(w.branch)
-                    .font(.system(size: 11))
-                    .foregroundStyle(MarvinTheme.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(w.diffBadge.map { "\(w.summary) · \($0)" } ?? w.summary)
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            if w.isReady {
-                Button("Merge") { model.mergeWorktree(slug: w.slug) }
-                    .rowChip(.tinted(GitDecorationColor.added))
-                    .disabled(model.integrationRunning)
-                    .help("Merge \(w.branch) into the current branch, locally. Never pushes — the commits ride along in whatever pipeline this branch already runs.")
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 3)
-        .contentShape(Rectangle())
-        .help("\(w.task)\n\(w.path)")
-        .contextMenu {
-            Button("Copy Review Command") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(
-                    "git diff \(w.base)...\(w.branch)", forType: .string
-                )
-            }
-            Button("Copy Branch Name") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(w.branch, forType: .string)
-            }
-            if w.checkoutPresent {
-                Button("Reveal in Finder") {
-                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: w.path)
-                }
-                Divider()
-                Button("Drop Checkout (keep branch)") {
-                    model.dropWorktree(slug: w.slug)
-                }
-                .disabled(model.worktreeBusy)
-            }
-        }
-    }
-
-    private func worktreeTint(_ w: WorktreeEntry) -> Color {
-        switch w.state {
-        case "ready": return GitDecorationColor.added
-        case "running": return GitDecorationColor.modified
-        case "merged": return MarvinTheme.textMuted
-        default: return .secondary
-        }
-    }
-
-    private var stashSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 4) {
-                Image(systemName: "tray.full")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-                Text("Stashes")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MarvinTheme.textMuted)
-                Spacer()
-                Text("\(model.stashes.count)")
-                    .font(.system(size: 9.5, weight: .semibold).monospaced())
-                    .foregroundStyle(MarvinTheme.textMuted)
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 8)
-            .padding(.bottom, 3)
-
-            ForEach(model.stashes) { entry in
-                HStack(spacing: 6) {
-                    Text(entry.message)
-                        .font(.system(size: 11))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .foregroundStyle(MarvinTheme.textPrimary)
-                    Spacer(minLength: 4)
-                    Text(entry.relativeDate)
-                        .font(.system(size: 9.5))
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 3)
-                .contentShape(Rectangle())
-                .contextMenu {
-                    Button("Pop") { model.stashAction("pop", index: entry.index) }
-                    Button("Apply") { model.stashAction("apply", index: entry.index) }
-                    Divider()
-                    Button("Drop…", role: .destructive) {
-                        model.stashAction("drop", index: entry.index)
-                    }
-                }
-            }
-        }
-    }
-
-    /// A linked worktree. Read-only here — the row exists so a
-    /// checkout MARVIN created for an implementer subagent (ADR-0081)
-    /// is visible rather than silently absent.
-    private func otherRepoRow(_ repo: GitRepoEntry) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "square.split.2x1")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-            Text(repo.name)
-                .font(.system(size: 11))
-                .foregroundStyle(MarvinTheme.textMuted)
-                .lineLimit(1)
-            Text(repo.detached ? "(detached)" : (repo.branch ?? "?"))
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 4)
-            if repo.dirtyCount > 0 {
-                Text("\(repo.dirtyCount)")
-                    .font(.system(size: 9.5, weight: .semibold).monospaced())
-                    .padding(.horizontal, 5)
-                    .background(Capsule().fill(MarvinTheme.elevated))
-                    .foregroundStyle(GitDecorationColor.modified)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .help("Linked worktree at \(repo.path)")
-        .contextMenu {
-            Button("Copy Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(repo.path, forType: .string)
-            }
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.selectFile(
-                    nil, inFileViewerRootedAtPath: repo.path
-                )
-            }
-        }
-    }
-
-    // MARK: - Graph
-
-    /// Drag handle between the changes list and the graph. Plain
-    /// gesture rather than a real split view: the panel is already
-    /// inside one, and nesting NSSplitViews is what produced the
-    /// divider crashes recorded in SplitDividerTheme.swift.
-    private var graphSplitter: some View {
-        MarvinDivider()
-            .frame(height: 5)
-            .background(MarvinTheme.background)
-            .contentShape(Rectangle())
-            .onHover { inside in
-                if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
-            }
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        graphHeight = min(max(graphHeight - value.translation.height, 90), 600)
-                    }
-            )
-    }
-
-    private var graphSection: some View {
-        VStack(spacing: 0) {
-            graphHeaderRow
-            MarvinDivider()
-            GitGraphView(cwd: cwd, model: graphModel)
-        }
-    }
-
-    private var graphHeaderRow: some View {
-        HStack(spacing: 6) {
-            Button {
-                graphShown.toggle()
-                if graphShown, !cwd.isEmpty {
-                    graphModel.refresh(cwd: cwd, force: true)
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: graphShown ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8))
-                    Text("Graph")
-                        .font(.system(size: 11, weight: .semibold))
-                        .textCase(.uppercase)
-                }
-                .foregroundStyle(MarvinTheme.textMuted)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            Spacer()
-            iconButton("arrow.down.to.line", help: "Fetch from origin") {
-                model.fetchRemote()
-            }
-            iconButton("arrow.down.circle", help: "Pull (fast-forward only)") {
-                model.pull()
-            }
-            iconButton("arrow.up.circle", help: "Push to origin") { model.push() }
-            iconButton("arrow.clockwise", help: "Refresh graph") {
-                graphModel.refresh(cwd: cwd, force: true)
-            }
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 26)
-        .background(MarvinTheme.background)
-    }
-
-    // MARK: - Banners
+    // MARK: Banners
 
     @ViewBuilder
     private var banners: some View {
         if let err = model.runner.lastError {
-            MarvinDivider()
-            banner(err, isError: true) { model.runner.dismissError() }
+            PaneNoticeStrip(notice: PaneNotice(kind: .error, text: err), onDismiss: { model.runner.dismissError() })
+                .padding(.bottom, 4)
         } else if let note = model.runner.lastNote, !note.isEmpty {
-            MarvinDivider()
-            banner(note, isError: false) { model.runner.dismissNote() }
+            PaneNoticeStrip(notice: PaneNotice(kind: .success, text: note), onDismiss: { model.runner.dismissNote() })
+                .padding(.bottom, 4)
         }
         if let err = model.lastError {
-            MarvinDivider()
-            banner("Status fetch error: \(err)", isError: true) { model.dismissStatusError() }
-        }
-    }
-
-    private func banner(
-        _ message: String,
-        isError: Bool,
-        dismiss: @escaping () -> Void
-    ) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: isError
-                ? "exclamationmark.triangle.fill"
-                : "checkmark.circle.fill")
-                .foregroundStyle(isError
-                    ? GitDecorationColor.deleted : GitDecorationColor.added)
-            Text(message)
-                .font(.system(size: 10).monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(4)
-            Spacer()
-            Button { dismiss() } label: { Image(systemName: "xmark") }
-                .buttonStyle(.borderless)
-        }
-        .padding(8)
-        .background(
-            (isError ? GitDecorationColor.deleted : GitDecorationColor.added)
-                .opacity(0.08)
-        )
-    }
-
-    // MARK: - Helpers
-
-    private func rowIsInFlight(_ file: GitStatusFile) -> Bool {
-        let relative = repoRelative(file.path)
-        return ["stage", "unstage", "discard"].contains {
-            model.runner.isRunning("\($0):\(relative)")
-        }
-    }
-
-    /// Untracked rows are a `git clean`, not a `git restore` — the two
-    /// carry different policy severities for a reason.
-    private func discardRow(_ file: GitStatusFile) {
-        let relative = repoRelative(file.path)
-        if file.entryType == "untracked" {
-            model.discard([relative], mode: "untracked")
-        } else if file.workingStatus == "." && file.indexStatus != "." {
-            model.discard([relative], mode: "staged")
-        } else {
-            model.discard([relative], mode: "working")
-        }
-    }
-
-    private func repoRelative(_ path: String) -> String {
-        let root = cwd.hasSuffix("/") ? cwd : cwd + "/"
-        return path.hasPrefix(root) ? String(path.dropFirst(root.count)) : path
-    }
-
-    private func openDiff(for file: GitStatusFile) {
-        guard !cwd.isEmpty else { return }
-        let initial = DiffMode(rawValue: DiffSheet.initialMode(for: file)) ?? .working
-        diffSheet = DiffSheetModel(
-            cwd: cwd,
-            relativePath: repoRelative(file.path),
-            initialMode: initial
-        )
-    }
-
-    private func reveal(_ file: GitStatusFile) {
-        NSWorkspace.shared.selectFile(
-            file.path, inFileViewerRootedAtPath: cwd
-        )
-    }
-
-    /// Kept for any remaining in-list placeholder. The pane-level states are
-    /// `PaneEmptyView` / `PaneLoadingView` (ADR-0114).
-    private func placeholder(_ text: String) -> some View {
-        VStack {
-            Spacer()
-            Text(text)
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-/// Applies ⌘⏎ only while `enabled`. SwiftUI has no conditional
-/// `.keyboardShortcut`, and passing `nil` is not available on the
-/// deployment target, so the branch is on the view itself.
-@MainActor private struct CommitReturnShortcut: ViewModifier {
-    let enabled: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if enabled {
-            content.keyboardShortcut(.return, modifiers: [.command])
-        } else {
-            content
+            PaneNoticeStrip(notice: PaneNotice(kind: .error, text: "Status fetch error: \(err)"), onDismiss: { model.dismissStatusError() })
+                .padding(.bottom, 4)
         }
     }
 }
 
-/// Identifiable wrapper for the diff-sheet model — `.sheet(item:)`
-/// needs Identifiable and `DiffSheetModel` is a `@MainActor` class, so
-/// the id is captured from its immutable fields at construction.
+/// Identifiable wrapper for the diff-sheet model — `.sheet(item:)` needs
+/// Identifiable and `DiffSheetModel` is a `@MainActor` class, so the id is
+/// captured from its immutable fields at construction.
 struct DiffSheetItem: Identifiable {
     let model: DiffSheetModel
     let id: String
@@ -1763,224 +782,5 @@ struct DiffSheetItem: Identifiable {
     init(model: DiffSheetModel) {
         self.model = model
         self.id = "\(model.cwd):\(model.relativePath)"
-    }
-}
-
-/// One file row: `icon · filename · dimmed directory · [hover actions] ·
-/// status letter`. This is the reference's layout, and it is a
-/// different reading order from the porcelain two-column badge the
-/// panel used to lead with — the filename is what you scan for, so it
-/// goes first and the status code goes last.
-/// A changed file as one section lists it — identity is the section AND the path.
-private struct SectionedFile: Identifiable {
-    let section: String
-    let file: GitStatusFile
-    var id: String { section + "\u{0}" + file.path }
-}
-
-@MainActor private struct SourceControlRow: View {
-    let file: GitStatusFile
-    let cwd: String
-    /// Section id — decides which inline action is offered.
-    let section: String
-    let isInFlight: Bool
-    let onTap: () -> Void
-    let onStage: () -> Void
-    let onUnstage: () -> Void
-    let onDiscard: () -> Void
-    let onReveal: () -> Void
-
-    @State private var hovering = false
-
-    /// Which control inside the row holds keyboard focus. The per-file actions
-    /// used to exist only while the pointer hovered (L1); they now also show
-    /// while any part of the row has focus, so Tab can reach them.
-    private enum FocusTarget: Hashable { case row, open, discard, stage }
-    @FocusState private var focus: FocusTarget?
-    private var showActions: Bool { hovering || focus != nil }
-
-    private static let rowHeight: CGFloat = 22
-
-    var body: some View {
-        HStack(spacing: 6) {
-            icon
-            // The file name is what the row is for. The directory is shown
-            // whole or not at all: head-truncated to a fragment ("…es/App/
-            // Services") it was noise that also pushed the name into an
-            // ellipsis (U3). A name that still cannot fit truncates in the
-            // middle, which keeps the extension.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 6) {
-                    nameText
-                    Text(directory)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .fixedSize()
-                }
-                nameText
-            }
-            Spacer(minLength: 4)
-            if isInFlight {
-                ProgressView().controlSize(.small).scaleEffect(0.6)
-            } else if showActions {
-                hoverActions
-            }
-            Text(badge.label)
-                .font(.system(size: 11, weight: .semibold).monospaced())
-                .foregroundStyle(badge.colour)
-                .frame(width: 12)
-        }
-        .padding(.horizontal, 12)
-        .frame(height: Self.rowHeight)
-        .background(showActions ? MarvinTheme.rowHover : Color.clear)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture(perform: onTap)
-        // Keyboard: the row takes focus; Return opens the diff, Space stages or
-        // unstages. Discard stays a visible, deliberate button (it confirms).
-        .focusable()
-        .focused($focus, equals: .row)
-        .focusEffectDisabled()
-        .onKeyPress(.return) { onTap(); return .handled }
-        .onKeyPress(.space) {
-            guard section != "conflicted", !isInFlight else { return .ignored }
-            if section == "staged" { onUnstage() } else { onStage() }
-            return .handled
-        }
-        .help(relativePath)
-        .contextMenu { menu }
-        // VoiceOver: one element per file, its status as the value, and the
-        // actions the hover buttons offered as custom actions (L1).
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(fileName)
-        .accessibilityValue(badge.tooltip)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction(.default, onTap)
-        .accessibilityAction(named: "Open changes", onTap)
-        .accessibilityAction(named: section == "staged" ? "Unstage" : "Stage") {
-            if section == "staged" { onUnstage() } else { onStage() }
-        }
-        .accessibilityAction(named: file.entryType == "untracked" ? "Delete file" : "Discard changes", onDiscard)
-        .accessibilityIdentifier("scm-row:\(file.path)")
-    }
-
-    private var nameText: some View {
-        Text(fileName)
-            .font(.system(size: 12))
-            .foregroundStyle(nameColor)
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .strikethrough(badge == .deleted, color: nameColor)
-    }
-
-    /// Actions in the reference's order: open diff, discard, then
-    /// stage/unstage closest to the status letter.
-    private var hoverActions: some View {
-        HStack(spacing: 2) {
-            rowIcon("arrow.left.arrow.right", help: "Open changes", target: .open, action: onTap)
-            if section != "conflicted" {
-                rowIcon(
-                    "arrow.uturn.backward",
-                    help: file.entryType == "untracked"
-                        ? "Delete file" : "Discard changes",
-                    target: .discard,
-                    action: onDiscard
-                )
-                if section == "staged" {
-                    rowIcon("minus", help: "Unstage", target: .stage, action: onUnstage)
-                } else {
-                    rowIcon("plus", help: "Stage", target: .stage, action: onStage)
-                }
-            }
-        }
-    }
-
-    private func rowIcon(
-        _ symbol: String,
-        help: String,
-        target: FocusTarget,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 9))
-                .frame(width: 20, height: 20)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .focused($focus, equals: target)
-        .help(help)
-        .accessibilityLabel(help)
-    }
-
-    @ViewBuilder
-    private var menu: some View {
-        Button("Open Changes", action: onTap)
-        Button("Reveal in Finder", action: onReveal)
-        Divider()
-        if section != "conflicted" {
-            if section == "staged" {
-                Button("Unstage", action: onUnstage)
-            } else {
-                Button("Stage", action: onStage)
-            }
-        }
-        Button("Copy Path") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(relativePath, forType: .string)
-        }
-        Divider()
-        Button(role: .destructive, action: onDiscard) {
-            Text(file.entryType == "untracked"
-                ? "Delete File…" : "Discard Changes…")
-        }
-    }
-
-    @ViewBuilder
-    private var icon: some View {
-        if let glyph = SymbolsIcon.image(
-            forPath: file.path, isDirectory: false, size: 15
-        ) {
-            Image(nsImage: glyph).frame(width: 16)
-        } else {
-            Image(systemName: "doc")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
-        }
-    }
-
-    /// Deleted files read as gone; everything else takes its status
-    /// colour on the NAME, which is the reference's decoration target.
-    private var nameColor: Color {
-        badge == .deleted ? .secondary : badge.colour
-    }
-
-    private var badge: GitStatusBadge {
-        if file.entryType == "untracked" { return .untracked }
-        if file.entryType == "unmerged" { return .conflicted }
-        // A row lives in exactly one section, so read the column that
-        // section cares about — otherwise a file that is staged-modified
-        // AND working-deleted renders the same letter twice.
-        let code = section == "staged" ? file.indexStatus : file.workingStatus
-        return GitStatusBadge.category(forCode: code)
-    }
-
-    private var relativePath: String {
-        let root = cwd.hasSuffix("/") ? cwd : cwd + "/"
-        return file.path.hasPrefix(root)
-            ? String(file.path.dropFirst(root.count))
-            : file.path
-    }
-
-    private var fileName: String {
-        (relativePath as NSString).lastPathComponent
-    }
-
-    private var directory: String {
-        let dir = (relativePath as NSString).deletingLastPathComponent
-        return dir.isEmpty ? "" : dir
     }
 }

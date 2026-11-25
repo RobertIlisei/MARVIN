@@ -415,7 +415,7 @@ enum SurfaceSnapshot {
             },
         ]
 
-        return chat + topBar + statusBar + cost + panes + editor + backlog + settings + live + supervisor + railAndBanner + SurfaceSessionsFleet.surfaces
+        return chat + topBar + statusBar + cost + panes + editor + backlog + settings + live + supervisor + railAndBanner + SurfaceSessionsFleet.surfaces + SurfaceSourceControlSurfaces.surfaces()
     }
 
     // MARK: - Per-surface preparation
