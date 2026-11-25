@@ -98,12 +98,93 @@ enum EditorSnapshot {
                 settle(0.5)
                 failures += report("\(tag) swift tab", host: host, window: window, expectScroll: .sourceText, out: out, png: "editor-\(tag)-3-swift-tab")
 
+                failures += tabScenarios(tag: tag, host: host, window: window, bridge: bridge, out: out)
+
                 window.orderOut(nil)
                 window.contentView = nil
             }
         }
         NativePrefs.shared.setTheme(nil)
         print("[editor] \(failures == 0 ? "ALL OK" : "\(failures) CHECK(S) FAILED"); PNGs in \(out.path)")
+    }
+
+    // MARK: - Tab widths (owner, 25.11.2026: "it shows like a full line of text")
+
+    /// The ADR whose whole name used to take the tab bar.
+    private static let longName = "0659-a-delegated-session-reads-the-farm-years-uploaded-documents-through-a-document-namedinterface-that-applies-the-callers-own-read-gate-the-ledger-and-receipt-proofs-stay-with-the-administrator-b87.md"
+
+    /// A name, the open files and the index of the active one: each scenario is one thing the
+    /// tab bar has to survive (one long name beside a short one; six mixed lengths; equal base
+    /// names in different folders; ten tabs, the ninth active, so the strip must scroll to it).
+    private static func scenarios() -> [(name: String, files: [String], active: Int)] {
+        let p = SurfaceFixtures.project
+        return [
+            ("long-and-short", ["\(p)/docs/adr/\(longName)", "\(p)/docs/adr/14ebe4.md"], 0),
+            ("six-mixed", ["\(p)/docs/adr/\(longName)", "\(p)/src/Main.swift", "\(p)/README.md",
+                           "\(p)/internal/service/handler_test.go", "\(p)/docs/0616-ledger-retention.md", "\(p)/a.go"], 3),
+            ("same-name", ["\(p)/web/index.ts", "\(p)/api/index.ts", "\(p)/x/api/index.ts", "\(p)/README.md"], 1),
+            ("ten-scroll", ["\(p)/docs/adr/\(longName)", "\(p)/src/Main.swift", "\(p)/README.md",
+                            "\(p)/internal/service/handler_test.go", "\(p)/docs/0616-ledger-retention.md", "\(p)/a.go",
+                            "\(p)/Package.swift", "\(p)/docs/roadmap.md", "\(p)/scripts/release-the-whole-thing.sh",
+                            "\(p)/src/Settings.swift"], 8),
+        ]
+    }
+
+    /// Opens each scenario's files, prints the plan the bar was given (widths against the
+    /// bounds) and writes the top of the window (title bar, tab bar, header) as a PNG.
+    /// Returns the number of checks that failed: a tab wider than the maximum, narrower than
+    /// the minimum, or a bar that is not fully used when nothing scrolls is a defect.
+    @MainActor
+    private static func tabScenarios(tag: String, host: NSView, window: NSWindow, bridge: MarvinBridge, out: URL) -> Int {
+        var failed = 0
+        for scenario in scenarios() {
+            for f in bridge.openFiles { bridge.closeFile(f) }
+            settle(0.2)
+            for f in scenario.files { bridge.setSelectedFile(f) }
+            bridge.setSelectedFile(scenario.files[scenario.active])
+            settle(0.9)
+            // The bar's width as the view saw it: the window less the left pane and the chat.
+            let bar = measureEditorBar(in: host, window: window)
+            let plan = EditorTabPlan.make(paths: bridge.openFiles, root: bridge.projectWorkDir, dirty: [], available: bar?.width ?? 0)
+            let widths = plan.tabs.map { Int($0.width) }
+            let ok = plan.tabs.allSatisfy { $0.width <= EditorTabWidths.maxWidth && $0.width >= EditorTabWidths.minWidth }
+            if !ok { failed += 1 }
+            print("[editor] \(tag) tabs/\(scenario.name): bar=\(Int(bar?.width ?? 0)) widths=\(widths) overflows=\(plan.overflows) "
+                  + (ok ? "OK (every tab between \(Int(EditorTabWidths.minWidth)) and \(Int(EditorTabWidths.maxWidth)) pt)" : "OUT OF BOUNDS"))
+            snapshotTop(window: window, height: 120, out: out, png: "tabs-\(scenario.name)-\(tag)")
+        }
+        return failed
+    }
+
+    /// The frame of the tab bar's column: the widest scroll view's column is the editor, so
+    /// look for the editor text view and take its width. Falls back to nil.
+    @MainActor
+    private static func measureEditorBar(in host: NSView, window: NSWindow) -> NSRect? {
+        host.layoutSubtreeIfNeeded()
+        var best: NSRect?
+        func walk(_ v: NSView) {
+            if v is NSScrollView {
+                let r = v.convert(v.bounds, to: nil)
+                if r.width > 250, r.height > 200, r.minX > 150, best == nil || r.width > best!.width { best = r }
+            }
+            v.subviews.forEach(walk)
+        }
+        walk(host)
+        return best
+    }
+
+    /// The top `height` points of the window, full width, as a PNG.
+    @MainActor
+    private static func snapshotTop(window: NSWindow, height: CGFloat, out: URL, png: String) {
+        guard let frameView = window.contentView?.superview ?? window.contentView,
+              let rep = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) else { return }
+        frameView.cacheDisplay(in: frameView.bounds, to: rep)
+        guard let cg = rep.cgImage else { return }
+        let scale = CGFloat(cg.width) / frameView.bounds.width
+        let crop = CGRect(x: 0, y: 0, width: CGFloat(cg.width), height: min(CGFloat(cg.height), height * scale))
+        guard let cropped = cg.cropping(to: crop) else { return }
+        let top = NSBitmapImageRep(cgImage: cropped)
+        try? top.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent("\(png).png"))
     }
 
     private enum Expect { case sourceText, markdown }
