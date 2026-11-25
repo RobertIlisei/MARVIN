@@ -159,6 +159,9 @@ runner.suite("watch-feed-wait-clock") {
 private let paneStdSources = PaneSourceScan.loadPaneSources(
     macosDir: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().path)
 
+private let heightGuardSources = PaneSourceScan.loadHeightGuardSources(
+    macosDir: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().path)
+
 runner.suite("pane standard") {
     runner.test("nothing a person must read is below 11 pt") {
         for (name, pt) in PaneTypeScale.tokens {
@@ -325,6 +328,23 @@ runner.suite("pane standard") {
         runner.expect(PaneSourceScan.smallTextViolations(in: ["Fake.swift": "Text(\"x\").font(.system(size: 11))"], allowlist: [:]).isEmpty, "11 pt is the floor, not a violation")
     }
 
+    runner.test("guard: no fixed-height band under a pane's list") {
+        // The owner, 25.11: a fixed 200 pt History under an empty pane. A literal `.frame(height: N)` of
+        // 100 pt or more is a band that cannot grow and cannot shrink; it needs `// fixed: <why>` on the
+        // line or one of the two above it, or it goes through `PaneBandPlan`.
+        let hits = PaneSourceScan.fixedHeightViolations(in: heightGuardSources)
+        runner.expect(hits.isEmpty, "fixed-height bands: \(hits.joined(separator: "; "))")
+        runner.expect(!PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "GitGraphView(cwd: p)\n    .frame(height: 200)"]).isEmpty, "a 200 pt band is caught")
+        runner.expect(!PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "ScrollView { x }\n    .frame(maxWidth: .infinity, height: 120.0)"]).isEmpty, "with other arguments too")
+        runner.expect(PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "Color.clear.frame(width: 12, height: 12)"]).isEmpty, "a 12 pt glyph box is not a band")
+        runner.expect(PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "x.frame(minHeight: 140, maxHeight: .infinity)"]).isEmpty, "a floor is not a fixed band")
+        runner.expect(PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "// fixed: a text editor, the sheet sizes to it\nTextEditor(text: $t)\n    .frame(height: 160)"]).isEmpty, "a justified one passes")
+        runner.expect(PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "TextEditor(text: $t)\n    .font(.body)\n    .frame(height: 160)"]).isEmpty, "a text editor is a field, not a band")
+        runner.expect(PaneSourceScan.fixedHeightViolations(in: ["Fake.swift": "// .frame(height: 300)"]).isEmpty, "a comment is not code")
+        runner.expect(heightGuardSources["SourceControlChangesView.swift"] != nil, "the Source Control list is under the guard")
+        runner.expect(heightGuardSources["LeftPane.swift"] != nil, "the Files pane's tools band is under the guard")
+    }
+
     runner.test("guard: the migrated panes are not on the allowlist") {
         for done in ["SkillsPane.swift", "PluginsPane.swift", "PracticePane.swift"] {
             runner.expect(PaneSourceScan.migrating[done] == nil, "\(done) is on the standard")
@@ -332,6 +352,104 @@ runner.suite("pane standard") {
         for (file, owner) in PaneSourceScan.migrating {
             runner.expect(!owner.isEmpty, "\(file) names who is migrating it")
         }
+    }
+}
+
+// MARK: - pane height band (pane-standard.md 2.12)
+//
+// The owner, 25.11: "the history seems to be cut if the other menu is minimised."
+// A fixed 200 pt graph sat under an empty grey pane. The rule: the last open
+// section that can grow fills the pane; a folded section takes only its header.
+
+runner.suite("pane height band") {
+    func section(_ id: String, chrome: Double = 28, open: Bool = true, natural: Double, minimum: Double = 80,
+                 weight: Double = 1, grows: Bool = true) -> PaneBandSection {
+        PaneBandSection(id: id, chrome: chrome, isOpen: open, natural: natural, minimum: minimum, weight: weight, grows: grows)
+    }
+    func used(_ sections: [PaneBandSection], _ h: [String: Double]) -> Double {
+        sections.reduce(0) { $0 + $1.chrome + (h[$1.id] ?? 0) }
+    }
+
+    runner.test("a clean tree: History is the only open section and fills the pane") {
+        let s = [section("stashes", open: false, natural: 52, grows: false), section("history", natural: 240)]
+        let h = PaneBandPlan.contentHeights(available: 700, sections: s)
+        runner.expect(h["stashes"], equals: 0, "a folded group takes only its header")
+        runner.expect(h["history"], equals: 700 - 56, "History takes everything the headers leave, past its 240 pt of rows")
+        runner.expect(used(s, h), equals: 700, "no empty space under it")
+    }
+
+    runner.test("a short list leaves the rest to History") {
+        let s = [section("list", chrome: 0, natural: 130, minimum: 78, weight: 2), section("history", natural: 2880, minimum: 120)]
+        let h = PaneBandPlan.contentHeights(available: 800, sections: s)
+        runner.expect(h["list"], equals: 130, "five rows need no more than five rows")
+        runner.expect(h["history"], equals: 800 - 28 - 130, "History gets the remainder")
+    }
+
+    runner.test("a long list scrolls and History keeps a usable share") {
+        let s = [section("list", chrome: 0, natural: 2500, minimum: 78, weight: 2), section("history", natural: 2880, minimum: 120)]
+        let h = PaneBandPlan.contentHeights(available: 700, sections: s)
+        runner.expect((h["history"] ?? 0) >= 120, "History keeps its minimum (\(h["history"] ?? -1))")
+        runner.expect((h["list"] ?? 0) > (h["history"] ?? 0), "the list, weighted 2:1, gets the larger part")
+        runner.expect(used(s, h), equals: 700, "the two together fill the pane exactly")
+    }
+
+    runner.test("History folded: the list grows to the bottom") {
+        let s = [section("list", chrome: 0, natural: 130, minimum: 78, weight: 2), section("history", open: false, natural: 2880, minimum: 120)]
+        let h = PaneBandPlan.contentHeights(available: 800, sections: s)
+        runner.expect(h["history"], equals: 0, "folded")
+        runner.expect(h["list"], equals: 800 - 28, "the last open section that can grow fills")
+    }
+
+    runner.test("a section that cannot grow never takes the surplus") {
+        let s = [
+            section("list", chrome: 0, natural: 130, minimum: 78, weight: 2),
+            section("preview", chrome: 27, natural: 60, minimum: 40, grows: false),
+            section("history", open: false, natural: 100),
+        ]
+        let h = PaneBandPlan.contentHeights(available: 800, sections: s)
+        runner.expect(h["preview"], equals: 60, "the preview of a short diff stays short")
+        runner.expect(h["list"], equals: 800 - 28 - 27 - 60, "and the list, which can grow, fills")
+    }
+
+    runner.test("a cramped pane shrinks every section and never overflows") {
+        let s = [section("list", chrome: 0, natural: 2500, minimum: 78, weight: 2), section("history", natural: 2880, minimum: 120)]
+        let h = PaneBandPlan.contentHeights(available: 150, sections: s)
+        runner.expect(used(s, h) <= 150 + 0.001, "sections plus headers fit in 150 pt (\(used(s, h)))")
+        runner.expect(h.values.allSatisfy { $0 >= 0 }, "no negative height")
+        let none = PaneBandPlan.contentHeights(available: 10, sections: s)
+        runner.expect(none.values.allSatisfy { $0 == 0 }, "less room than the headers: nothing is drawn below them")
+    }
+
+    runner.test("property: nothing overflows, nothing is left empty while a section could grow") {
+        var seed: UInt64 = 0x9E3779B97F4A7C15
+        func next() -> Double {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Double((seed >> 33) % 1000) / 1000
+        }
+        var checked = 0
+        for _ in 0..<400 {
+            let count = 1 + Int(next() * 4)
+            var s: [PaneBandSection] = []
+            for i in 0..<count {
+                let natural = (next() * 3000).rounded()
+                s.append(PaneBandSection(
+                    id: "s\(i)", chrome: (next() * 30).rounded(), isOpen: next() > 0.35, natural: natural,
+                    minimum: min(natural, (next() * 150).rounded()), weight: 1 + (next() * 2).rounded(), grows: next() > 0.3))
+            }
+            let available = (next() * 1400).rounded()
+            let h = PaneBandPlan.contentHeights(available: available, sections: s)
+            let headers = s.reduce(0) { $0 + $1.chrome }
+            checked += 1
+            runner.expect(h.values.allSatisfy { $0 >= 0 }, "no negative height: \(s) in \(available)")
+            if available >= headers {
+                runner.expect(used(s, h) <= available + 0.001, "overflow in \(available): \(s) -> \(h)")
+                if s.contains(where: { $0.isOpen && $0.grows }) {
+                    runner.expect(abs(used(s, h) - available) < 0.001, "empty space in \(available): \(s) -> \(h)")
+                }
+            }
+            for sec in s where !sec.isOpen { runner.expect(h[sec.id] ?? 0, equals: 0, "folded section \(sec.id) draws no body") }
+        }
+        runner.expect(checked, equals: 400, "ran every case")
     }
 }
 

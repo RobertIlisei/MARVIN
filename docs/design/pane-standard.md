@@ -215,6 +215,40 @@ the words and the glyph, never in colour alone. A row's text is one element
 (title, secondary and trailing read together); its buttons stay separate.
 Reduced motion drops the scale on press and keeps the colour change.
 
+### 2.12 Height: the last open flexible section fills the pane
+
+The owner, 25.11: *"the history seems to be cut if the other menu is minimised."*
+Source Control drew its commit graph at a fixed 200 pt. With a clean tree and
+Stashes folded, 500 pt of grey sat under a graph that was cut mid-row.
+
+**The rule: the last open flexible section fills the pane; no fixed-height band
+leaves empty space under it.** A band that scrolls is never given a literal
+height. In full:
+
+- A folded group takes its header and nothing else.
+- An open section takes what its rows need, and never less than a usable
+  minimum (about five rows) while the pane can afford it.
+- When the open sections want more than the pane has, the surplus is shared by
+  weight (the change list 2, History 1), each capped at what it wants. The list
+  scrolls; History keeps its minimum; either can still be folded.
+- When they want less, the last open section that *can grow* takes the rest. A
+  preview of a three-line diff cannot grow; the list and the graph can.
+- A new sibling is a new row in the plan, not a new constant.
+
+The decision is `PaneBandPlan.contentHeights(available:sections:)` in
+`MARVINLogic` (pure, tested: fixed cases and a 400-case property run that checks
+nothing overflows and nothing is left empty while a section could grow). The
+view measures the band with `onGeometryChange` on a clear rectangle and draws the
+sections in an overlay, so what they ask for never feeds back into the
+measurement (no `GeometryReader` in a background, ADR-0062); a collapse does not
+animate height. Reference: `SourceControlChangesView.band(sections:content:)`.
+
+The empty state of a pane that still has something under it is one line, not a
+poster: `PaneEmptyView` is for a pane that has nothing else to show.
+
+Fixed heights that are right: a text editor in a sheet, a control, a glyph box
+(under 100 pt). The guard (§4) flags the rest.
+
 ## 3. The kit on one screen
 
 Existing components keep their signatures; everything below was added with
@@ -296,6 +330,12 @@ VStack(spacing: 0) {
 2. **No text below 11 pt.** `.font(.system(size: N))` with N under 11, or `.caption`,
    `.caption2`, `.footnote`, fails, except for a glyph (an `Image` on the same or
    the two preceding lines, or a `// glyph` note).
+
+3. **No fixed-height band** (`PaneSourceScan.fixedHeightViolations`, over every
+   pane file, allowlisted or not, plus the Source Control, graph and left-pane
+   container files). A literal `.frame(height: N)` of 100 pt or more fails unless
+   a `// fixed: <why>` note is within three lines above, or it is a text editor.
+   Use `PaneBandPlan` instead (§2.12).
 
 A "pane file" is `Pane*.swift` (the kit: scanned for size only), `*Pane.swift`,
 `*Panel.swift`, `*PaneView.swift`, `*PanelView.swift`, and a short named list. A
