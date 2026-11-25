@@ -73,3 +73,30 @@ private struct PaneIconButtonStyle: ButtonStyle {
             .help(help ?? (isOn ? "Switch off" : "Switch on"))
     }
 }
+
+// MARK: - Text action
+
+/// A labelled action: the verb a pane or a row is FOR ("Add…", "Update",
+/// "Install"). The chip look is `InlineActionChip`'s (one vocabulary); the
+/// label is set here at the 11 pt floor. The chip's own label is 10 pt, below
+/// what a person should have to read, and a `.font` set on the `Text` itself
+/// wins over the one the style sets, so the shared chip needs no change.
+///
+/// At most ONE of these per row and one per group header; everything else goes
+/// in a `PaneOverflowMenu`.
+@MainActor struct PaneActionButton: View {
+    let title: String
+    var role: ChipRole = .neutral
+    var help: String? = nil
+    var disabled: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title).font(PaneFont.action)
+        }
+        .rowChip(role)
+        .disabled(disabled)
+        .help(help ?? "")
+    }
+}

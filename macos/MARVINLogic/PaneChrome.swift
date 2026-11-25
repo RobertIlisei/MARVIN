@@ -78,6 +78,23 @@ public struct PaneEmptyState: Equatable, Sendable {
         )
     }
 
+    /// A filter hid everything. One sentence naming the query; the way out is
+    /// the field's own clear button, so no action is drawn here.
+    public static func filtered(query: String, noun: String) -> PaneEmptyState {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return PaneEmptyState(
+            headline: "No \(noun) match “\(q)”",
+            hint: "Clear the filter to see everything.",
+            symbol: "magnifyingglass"
+        )
+    }
+
+    /// A load failed. One sentence, the reason as the hint; the caller adds the
+    /// one action — Retry.
+    public static func couldNotLoad(_ noun: String, reason: String? = nil) -> PaneEmptyState {
+        PaneEmptyState(headline: "Could not load \(noun)", hint: reason, symbol: "exclamationmark.triangle")
+    }
+
     /// Waiting on the user to type. Not a failure, and must not read like one.
     public static func awaitingInput(_ what: String) -> PaneEmptyState {
         PaneEmptyState(headline: what, symbol: "magnifyingglass")

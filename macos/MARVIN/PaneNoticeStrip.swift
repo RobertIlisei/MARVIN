@@ -31,17 +31,17 @@ import SwiftUI
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: notice.kind.symbol)
-                .font(.system(size: 9.5, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(notice.kind.tint)
-                .frame(width: 12)
+                .frame(width: 14)
             VStack(alignment: .leading, spacing: 2) {
                 Text(notice.headline)
-                    .font(.system(size: 10.5))
+                    .font(PaneFont.secondary)
                     .foregroundStyle(notice.kind == .error ? MarvinTheme.textPrimary : MarvinTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail = notice.detail {
                     Text(detail)
-                        .font(.system(size: 9.5, design: .monospaced))
+                        .font(PaneFont.secondaryMono)
                         .foregroundStyle(MarvinTheme.textMuted)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
@@ -49,7 +49,7 @@ import SwiftUI
             }
             Spacer(minLength: 0)
             if let onAction {
-                Button(actionTitle, action: onAction).rowChip(.neutral)
+                PaneActionButton(title: actionTitle, action: onAction)
             }
             if let onDismiss {
                 Button(action: onDismiss) {

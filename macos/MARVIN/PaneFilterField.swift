@@ -23,7 +23,7 @@ import SwiftUI
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.tertiary)
             TextField(prompt, text: $text)
                 .textFieldStyle(.plain)
@@ -43,7 +43,7 @@ import SwiftUI
             if !text.isEmpty {
                 if let matchCount {
                     Text(PaneBadge.text(matchCount))
-                        .font(.system(size: 9.5, weight: .semibold).monospacedDigit())
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
                         .foregroundStyle(MarvinTheme.textMuted)
                 }
                 Button { text = "" } label: { Image(systemName: "xmark.circle.fill") }

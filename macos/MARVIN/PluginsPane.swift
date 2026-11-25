@@ -100,8 +100,12 @@ private struct UpdateResponse: Decodable {
     /// marvin-graph" and "Install failed: HTTP 500" used to be the same
     /// pixels behind the same puzzle-piece icon, both gone in three seconds.
     @State private var notice: PaneNotice?
-    /// Catalog search text + the one catalog entry currently installing.
-    @State private var catalogSearch = ""
+    /// The filter under the header (installed AND catalog), the selected row,
+    /// which groups are closed, and the one catalog entry currently installing.
+    @State private var filter = ""
+    @State private var selection: String?
+    @State private var groups = PaneCollapseStore(pane: "plugins")
+    @State private var bulkUpdating = false
     @State private var installingFromCatalog: String?
 
     // Update state (ADR-0071): last check result per plugin key, plus which
@@ -118,6 +122,13 @@ private struct UpdateResponse: Decodable {
     @State private var marketplacePlugins: [InstallCandidate] = []
     @State private var marketplaceName: String?
 
+    /// The snapshot harness shows the pane after an update check ran and with a
+    /// row open (`SurfaceSnapshotPaneKit`); nothing else passes arguments.
+    init(seedUpdateStatus: [String: String] = [:], seedSelection: String? = nil) {
+        _updateStatus = State(initialValue: seedUpdateStatus)
+        _selection = State(initialValue: seedSelection)
+    }
+
     struct InstallCandidate: Decodable, Identifiable {
         let name: String
         let displayName: String?
@@ -129,13 +140,19 @@ private struct UpdateResponse: Decodable {
     var body: some View {
         VStack(spacing: 0) {
             if bridge.projectWorkDir == nil {
-                PaneEmptyView(state: .noProject("plugins"))
-            } else if let err = loadError, plugins.isEmpty {
+                pluginsHeader(actions: false)
+                PaneEmptyView(state: .noProject("plugins")).frame(maxHeight: .infinity)
+            } else if loadError != nil, plugins.isEmpty {
+                pluginsHeader(actions: false)
                 PaneEmptyView(
-                    state: PaneEmptyState(headline: "Could not read the installed plugins", hint: err, symbol: "exclamationmark.triangle"),
+                    state: .couldNotLoad("plugins", reason: "Check that MARVIN's server is running, then try again."),
                     actionTitle: "Retry",
                     action: { Task { await refresh() } }
-                )
+                ).frame(maxHeight: .infinity)
+            } else if isLoading, plugins.isEmpty, catalog.isEmpty {
+                pluginsHeader(actions: false)
+                PaneLoadingView(label: "Reading the installed plugins…")
+                Spacer(minLength: 0)
             } else {
                 content
             }
@@ -157,167 +174,226 @@ private struct UpdateResponse: Decodable {
 
     @ViewBuilder
     private var content: some View {
-        ScrollView {
-            // LazyVStack for the same reason as SkillsPane: the installed +
-            // marketplace lists are long, and a plain VStack lays every row
-            // out on the tab switch. `/api/plugins` answers in 3.7 ms — the
-            // cost is layout, not data.
-            LazyVStack(alignment: .leading, spacing: 12) {
-                PaneSectionHeader(title: "Project plugins", count: plugins.count, tint: Color.accentColor) {
-                    paneActions
-                }
-                Text("Installed Claude Code plugins (from ~/.claude/plugins). Switch one on to load its skills, commands, MCP servers (each call asks first) and read-only agents for this project. Hooks are never loaded.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if plugins.isEmpty {
-                    Text("No plugins installed. Install one from the catalog below, or via the Claude Code /plugin UI — it lands in the same place.")
-                        .font(.caption).foregroundStyle(.tertiary)
-                        .padding(.vertical, 6)
+        let filtering = PaneFilter.isActive(filter)
+        let shown = plugins.filter {
+            PaneFilter.matches(filter, in: [$0.name, $0.description ?? "", $0.author ?? "", $0.marketplace ?? ""])
+        }
+        let entries = shown.map {
+            InstalledEntry(id: $0.key, name: $0.name, enabled: $0.enabled,
+                           hasUpdate: $0.source?.updatable == true && updateStatus[$0.key] == "update-available",
+                           blocked: false)
+        }
+        let sections = InstalledGrouping.group(entries)
+        let byKey = Dictionary(plugins.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        let available = filteredCatalog
+        let nothing = sections.isEmpty && available.isEmpty
+        VStack(spacing: 0) {
+            pluginsHeader(actions: !(plugins.isEmpty && catalog.isEmpty))
+            if plugins.isEmpty && catalog.isEmpty {
+                PaneEmptyView(state: .nothingYet("plugins", hint: "Install one from a marketplace, or with Claude Code's /plugin command. It lands in the same place."),
+                              actionTitle: "Install…") { openInstallSheet() }
+                    .frame(maxHeight: .infinity)
+            } else {
+                PaneFilterField(text: $filter, prompt: "Filter plugins")
+                if filtering && nothing {
+                    PaneEmptyView(state: .filtered(query: filter, noun: "plugins"), actionTitle: "Clear filter") { filter = "" }
+                    Spacer(minLength: 0)
                 } else {
-                    ForEach(plugins) { p in pluginRow(p) }
-                }
-
-                if !catalog.isEmpty {
-                    MarvinDivider()
-                    catalogSection
+                    PaneScrollList(
+                        rows: visibleRows(sections: sections, byKey: byKey, available: available, filtering: filtering),
+                        selection: $selection,
+                        onActivate: { id in activate(id, byKey: byKey) },
+                        onSpace: { id in if let p = byKey[id] { Task { await toggle(p) } } },
+                        onEscape: { if PaneFilter.isActive(filter) { filter = ""; return true }; return false }
+                    ) {
+                        ForEach(sections, id: \.group) { sec in installedGroup(sec, byKey: byKey, filtering: filtering) }
+                        catalogGroup(available, filtering: filtering)
+                    }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
         }
     }
 
-    /// Pane-local actions — see the note on `SkillsPane.paneActions` for why
-    /// these are not `ToolbarItem`s.
-    private var paneActions: some View {
-        HStack(spacing: 10) {
-            Button {
-                installError = nil; marketplacePlugins = []; marketplaceName = nil
-                installSheetOpen = true
-            } label: {
-                Label("Install", systemImage: "arrow.down.circle")
-            }
-            .help("Install — add a plugin from a marketplace or Git URL")
-            Button { Task { await checkAllUpdates() } } label: {
-                Label("Check for updates", systemImage: "arrow.triangle.2.circlepath")
-            }
-            .help(updatableCount == 0
-                  ? "Check for updates — nothing to check: no plugin here was installed by MARVIN (ones from the Claude Code /plugin UI have no recorded source)."
-                  : "Check for updates — re-fetch the \(updatableCount) plugin\(updatableCount == 1 ? "" : "s") MARVIN installed and report which changed upstream. Installs nothing.")
-            .disabled(checkingUpdates || updatableCount == 0)
-            Button { Task { await refresh() } } label: {
-                Label("Reload list", systemImage: "arrow.clockwise")
-            }
-            .help("Reload the installed list from disk (does not check upstream)")
-            .disabled(isLoading)
+    private func visibleRows(
+        sections: [InstalledGrouping.Section], byKey: [String: PluginSummary],
+        available: [CatalogPlugin], filtering: Bool
+    ) -> [(id: String, title: String)] {
+        var out: [(id: String, title: String)] = []
+        for sec in sections where PaneCollapseState.isShown(collapsed: groups.isCollapsed(sec.group.key, default: false), filterActive: filtering) {
+            out += sec.ids.compactMap { id in byKey[id].map { (id: id, title: $0.name) } }
         }
-        .labelStyle(.iconOnly)
-        .buttonStyle(.borderless)
-        .controlSize(.small)
+        if PaneCollapseState.isShown(collapsed: groups.isCollapsed("catalog", default: true), filterActive: filtering) {
+            out += available.map { (id: "catalog:\($0.id)", title: $0.title) }
+        }
+        return out
     }
 
-    /// How many rows could be updated at all — drives the toolbar button's
-    /// enabled state so "Check for updates" isn't offered when nothing here
-    /// has a recorded source.
+    /// Return on a row does the row's one obvious thing.
+    private func activate(_ id: String, byKey: [String: PluginSummary]) {
+        if let p = byKey[id] {
+            if p.source?.updatable == true, updateStatus[p.key] == "update-available" { Task { await updateOne(p) } }
+            else { selection = id }
+        } else if id.hasPrefix("catalog:"), let c = catalog.first(where: { "catalog:\($0.id)" == id }), installingFromCatalog == nil {
+            Task { await installFromCatalog(c) }
+        }
+    }
+
+    // MARK: Header
+
+    /// One verb the pane exists for, and a menu for the rest (the standard's
+    /// two-action header).
+    private func pluginsHeader(actions: Bool) -> some View {
+        PaneHeader(title: "Plugins", symbol: "puzzlepiece.extension", count: actions ? plugins.count : nil) {
+            if actions {
+                PaneActionButton(title: "Install…", role: .primary, help: "Install — add a plugin from a marketplace or Git URL") {
+                    openInstallSheet()
+                }
+                PaneOverflowMenu(label: "More actions for plugins") {
+                    Button("Check for updates") { Task { await checkAllUpdates() } }
+                        .disabled(checkingUpdates || updatableCount == 0)
+                        .help(updatableCount == 0
+                              ? "Nothing to check: no plugin here was installed by MARVIN (ones from the Claude Code /plugin UI have no recorded source)."
+                              : "Re-fetch the \(updatableCount) plugin\(updatableCount == 1 ? "" : "s") MARVIN installed and report which changed upstream. Installs nothing.")
+                    Button("Reload the list") { Task { await refresh() } }
+                        .disabled(isLoading)
+                        .help("Read the installed plugins from disk again (does not check upstream)")
+                }
+            }
+        }
+    }
+
+    private func openInstallSheet() {
+        installError = nil; marketplacePlugins = []; marketplaceName = nil
+        installSheetOpen = true
+    }
+
+    /// How many rows could be updated at all — gates "Check for updates".
     private var updatableCount: Int {
         plugins.filter { $0.source?.updatable == true }.count
     }
 
-    @ViewBuilder
-    private func pluginRow(_ p: PluginSummary) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            // A real switch. This was a `.buttonStyle(.plain)` SF Symbol with
-            // no hover, no press, no focus ring and no accessibility trait —
-            // and switching it on loads the plugin's MCP servers and agents
-            // into the model's tool surface (ADR-0114).
-            PaneEnableToggle(
-                isOn: p.enabled,
-                name: p.name,
-                help: p.enabled ? "Enabled for this project — switch off to unload it here."
-                                : "Disabled here — switch on to load its skills, commands, gated MCP and read-only agents for this project."
-            ) { _ in Task { await toggle(p) } }
-            .padding(.top, 1)
+    // MARK: Groups
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(p.name)
-                        .font(.system(size: 12, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .layoutPriority(1)
-                    if let v = p.version, !v.isEmpty, v != "unknown" {
-                        Text("v\(v)")
-                            .font(.system(size: 9.5).monospacedDigit())
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                    authorChip(author: p.author, marketplace: p.marketplace)
-                }
-                if let d = p.description, !d.isEmpty {
-                    Text(d)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.tail)
-                }
-                contributionChips(p)
-            }
-            Spacer()
-            updateControl(p)
-            // Occasional actions live here, not in a button on every row (U14).
-            Menu {
-                pluginMenu(p)
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20, height: 18)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("More for \(p.name)")
-            .accessibilityLabel("More actions for \(p.name)")
+    private func groupTint(_ g: InstalledGroup) -> Color {
+        switch g {
+        case .attention: return GitDecorationColor.deleted
+        case .needsUpdate: return .orange
+        case .enabled, .available: return MarvinTheme.textMuted
         }
-        .padding(.vertical, 3)
-        .frame(minWidth: 0, alignment: .leading)
-        .clipped()
-        .contextMenu { pluginMenu(p) }
     }
 
-    /// Update affordance for one plugin (ADR-0071).
-    ///
-    /// Three states, deliberately distinct: no recorded source (nothing to do —
-    /// explain why rather than showing a dead button), a known update waiting,
-    /// and the neutral idle state where Update means "check, then fetch if
-    /// there's anything new".
+    private func groupHelp(_ g: InstalledGroup) -> String {
+        switch g {
+        case .attention: return "Installed, but not loading."
+        case .needsUpdate: return "A check found a newer version upstream."
+        case .enabled: return "Loaded into this project: skills, slash commands, MCP servers (each call asks first) and read-only agents. Hooks are never loaded."
+        case .available: return "Installed in ~/.claude/plugins, so Claude Code sees them too, but not loaded in this project. Switch one on to load it here."
+        }
+    }
+
     @ViewBuilder
-    private func updateControl(_ p: PluginSummary) -> some View {
-        let status = updateStatus[p.key]
-        if p.source?.updatable != true {
-            // No recorded source, so nothing to update. "Set source…" moved to
-            // the row's menu: a neutral button on every such row repeated the
-            // same action down the list (U14).
-            EmptyView()
-        } else if updatingKey == p.key {
-            ProgressView().controlSize(.small)
-        } else {
-            HStack(spacing: 6) {
-                if status == "update-available" {
-                    statusChip("update available", tint: .orange)
-                } else if status == "up-to-date" {
-                    statusChip("up to date", tint: MarvinTheme.textMuted)
-                } else if status == "updated" {
-                    statusChip("updated", tint: GitDecorationColor.added)
+    private func installedGroup(_ sec: InstalledGrouping.Section, byKey: [String: PluginSummary], filtering: Bool) -> some View {
+        let g = sec.group
+        PaneGroup(
+            store: groups, id: g.key, title: g.title, count: sec.ids.count, tint: groupTint(g),
+            help: groupHelp(g), startsCollapsed: false, filterActive: filtering,
+            trailing: {
+                if g == .needsUpdate {
+                    PaneActionButton(
+                        title: PaneBulkAction.title("Update all", count: sec.ids.count),
+                        role: .primary,
+                        help: "Re-fetch every plugin in this group from its recorded source.",
+                        disabled: bulkUpdating || updatingKey != nil || checkingUpdates
+                    ) { Task { await updateAllAvailable() } }
                 }
-                Button("Update") { Task { await updateOne(p) } }
-                    .rowChip(.primary)
-                    .disabled(updatingKey != nil || checkingUpdates)
-                    .help(sourceHelp(p.source))
+            },
+            content: {
+                ForEach(sec.ids, id: \.self) { key in
+                    if let p = byKey[key] { pluginRow(p) }
+                }
+            })
+    }
+
+    @ViewBuilder
+    private func catalogGroup(_ available: [CatalogPlugin], filtering: Bool) -> some View {
+        let total = catalog.filter { !$0.installed }.count
+        if total > 0 {
+            PaneGroup(
+                store: groups, id: "catalog", title: "Available from marketplaces",
+                count: filtering ? rankedCatalog.count : total, tint: Color.accentColor,
+                help: "Everything your marketplaces offer (the same catalogs as the Claude Code /plugin browser). Install copies the plugin into ~/.claude/plugins; then switch it on above.",
+                startsCollapsed: true, filterActive: filtering
+            ) {
+                ForEach(available) { c in catalogRow(c) }
+                if filtering, rankedCatalog.count > available.count {
+                    PaneNote(text: "Showing the closest \(available.count) of \(rankedCatalog.count) — narrow the filter to see the rest.")
+                } else if !filtering, total > available.count {
+                    PaneNote(text: "Showing \(available.count) of \(total) — filter to find the rest.")
+                }
             }
         }
+    }
+
+    // MARK: Rows
+
+    private func pluginRow(_ p: PluginSummary) -> some View {
+        let status = updateStatus[p.key]
+        let updatable = p.source?.updatable == true
+        let waiting = status == "update-available"
+        let canRun = updatingKey == nil && !checkingUpdates && !bulkUpdating
+        let trailingVersion = (p.version.flatMap { $0.isEmpty || $0 == "unknown" ? nil : "v\($0)" })
+
+        var items: [PaneRowItem] = []
+        if updatable {
+            items.append(PaneRowItem(
+                id: "update", title: waiting ? "Update" : "Re-fetch from source",
+                systemImage: "arrow.triangle.2.circlepath", role: waiting ? .primary : .normal, enabled: canRun,
+                help: sourceHelp(p.source), perform: { Task { await updateOne(p) } }))
+        } else {
+            items.append(PaneRowItem(
+                id: "source", title: "Set source…", systemImage: "link",
+                help: "MARVIN did not install this one, so it has no recorded URL to re-fetch from. Installing it through MARVIN once records the source and enables updates.",
+                perform: { installError = nil; marketplacePlugins = []; marketplaceName = nil; installURL = p.source?.url ?? ""; installSheetOpen = true }))
+        }
+        // `/api/plugins` does not send an install path, so this opens the
+        // directory every plugin lives in rather than inventing a field.
+        items.append(PaneRowItem(id: "reveal", title: "Reveal the plugins folder", systemImage: "folder", perform: {
+            let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/plugins")
+            NSWorkspace.shared.activateFileViewerSelecting([root])
+        }))
+        items.append(PaneRowItem(id: "copy", title: "Copy plugin name", systemImage: "doc.on.doc", perform: {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(p.name, forType: .string)
+        }))
+        if let url = p.source?.url, !url.isEmpty {
+            items.append(PaneRowItem(id: "copyurl", title: "Copy source URL", systemImage: "link", perform: {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url, forType: .string)
+            }))
+        }
+        // Deliberately NOT an uninstall. MARVIN clones a plugin but records it in
+        // `~/.claude/plugins/installed_plugins.json`, which Claude Code owns and
+        // both tools read — removing one from there is a cross-tool destructive
+        // edit, and Claude Code's own `/plugin` UI is where it belongs.
+
+        let desc = (p.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return PaneListRow(
+            rowID: p.key, title: p.name, titleIsIdentifier: true,
+            leading: .toggle(
+                isOn: p.enabled, name: p.name,
+                help: p.enabled
+                    ? "Loaded in this project. Switch off to unload it here."
+                    : "Not loaded here. Switch on to load its skills, commands, gated MCP servers and read-only agents.",
+                onToggle: { _ in Task { await toggle(p) } }),
+            secondary: desc.isEmpty ? "No description" : desc,
+            secondaryStyle: desc.isEmpty ? .placeholder : .normal,
+            trailingText: status == "updated" ? "Updated" : trailingVersion,
+            trailingSymbol: status == "updated" ? "checkmark" : nil,
+            trailingTint: status == "updated" ? GitDecorationColor.added : MarvinTheme.textMuted,
+            selected: selection == p.key, busy: updatingKey == p.key, items: items,
+            menuLabel: "More actions for \(p.name)", onSelect: { selection = p.key },
+            showsDetail: selection == p.key,
+            detail: { pluginDetail(p) })
     }
 
     private func sourceHelp(_ s: SourceInfo?) -> String {
@@ -326,109 +402,77 @@ private struct UpdateResponse: Decodable {
         return "Re-fetch from \(origin). Last updated \(s.lastUpdated)."
     }
 
-    /// What the plugin contributes, as one line of words. Four capsules per row
-    /// repeated the same tally down the whole pane (U14). Hooks are the one
-    /// part MARVIN refuses to load (ADR-0054), so that stays a caution with its
-    /// own glyph rather than another count.
+    /// What a selected plugin adds: who made it, what it loads, and the one
+    /// caution — hooks are the part MARVIN refuses to load (ADR-0054).
     @ViewBuilder
-    private func contributionChips(_ p: PluginSummary) -> some View {
+    private func pluginDetail(_ p: PluginSummary) -> some View {
         let parts: [String] = [
             p.skills.isEmpty ? nil : "\(p.skills.count) skill\(p.skills.count == 1 ? "" : "s")",
             p.commands.isEmpty ? nil : "\(p.commands.count) command\(p.commands.count == 1 ? "" : "s")",
-            p.hasMcp ? "MCP (asks first)" : nil,
+            p.hasMcp ? "MCP servers (each call asks first)" : nil,
             p.agents.isEmpty ? nil : "\(p.agents.count) agent\(p.agents.count == 1 ? "" : "s") (read-only)",
         ].compactMap { $0 }
-        WrapLayout(spacing: 8, lineSpacing: 2) {
-            if !parts.isEmpty {
-                Text(parts.joined(separator: " · "))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        let isAnthropic = (p.author ?? "").caseInsensitiveCompare("Anthropic") == .orderedSame
+        VStack(alignment: .leading, spacing: PaneSpace.tight) {
+            if let d = p.description, !d.isEmpty { Text(d).lineLimit(8) }
+            Text(parts.isEmpty ? "Adds nothing MARVIN loads." : "Loads: " + parts.joined(separator: " · "))
+            if let author = p.author, !author.isEmpty {
+                Label("By \(author)\(p.marketplace.map { " · \($0)" } ?? "")",
+                      systemImage: isAnthropic ? "checkmark.seal.fill" : "person")
+                    .foregroundStyle(isAnthropic ? Color.accentColor : MarvinTheme.textMuted)
+            } else if let m = p.marketplace, !m.isEmpty {
+                Text("From \(m)")
             }
             if p.hasHooks {
-                Label("hooks never load", systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+                Label("Its hooks are never loaded.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             }
         }
+        .font(PaneFont.secondary)
+        .foregroundStyle(MarvinTheme.textMuted)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// One shape for every update status. Three existed: a capsule, grey text
-    /// and green text, for three states of the same thing (ADR-0114).
-    private func statusChip(_ text: String, tint: Color) -> some View {
-        Text(text)
-            .font(.system(size: 9.5))
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .foregroundStyle(tint)
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(Capsule().fill(tint.opacity(0.14)))
-    }
-
-    /// Provenance: a sealed "Anthropic" badge for first-party plugins, the
-    /// plain author name otherwise, always followed by the marketplace.
-    @ViewBuilder
-    private func authorChip(author: String?, marketplace: String?) -> some View {
-        let isAnthropic = (author ?? "").caseInsensitiveCompare("Anthropic") == .orderedSame
-        HStack(spacing: 4) {
-            if let author, !author.isEmpty {
-                HStack(spacing: 2) {
-                    if isAnthropic {
-                        Image(systemName: "checkmark.seal.fill").font(.system(size: 8))
-                    }
-                    Text(author)
-                        .font(.system(size: 9.5))
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
+    private func catalogRow(_ c: CatalogPlugin) -> some View {
+        let id = "catalog:\(c.id)"
+        let desc = (c.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return PaneListRow(
+            rowID: id, title: c.title, titleIsIdentifier: true, leading: .glyph("shippingbox"),
+            secondary: desc.isEmpty ? "No description" : desc,
+            secondaryStyle: desc.isEmpty ? .placeholder : .normal,
+            trailingText: c.isAnthropic ? "Anthropic" : nil,
+            trailingSymbol: c.isAnthropic ? "checkmark.seal.fill" : nil,
+            trailingTint: Color.accentColor,
+            selected: selection == id, busy: installingFromCatalog == c.id,
+            items: [
+                PaneRowItem(id: "install", title: "Install", role: .primary, enabled: installingFromCatalog == nil,
+                            help: "Copy it into ~/.claude/plugins, then switch it on.", perform: { Task { await installFromCatalog(c) } }),
+            ],
+            menuLabel: "More actions for \(c.title)", onSelect: { selection = id },
+            showsDetail: selection == id,
+            detail: {
+                VStack(alignment: .leading, spacing: PaneSpace.tight) {
+                    if !desc.isEmpty { Text(desc).lineLimit(8) }
+                    Text([c.author.map { "By \($0)" }, c.marketplace, c.category].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                 }
-                .foregroundStyle(isAnthropic ? Color.accentColor : Color.secondary)
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(
-                    Capsule().fill((isAnthropic ? Color.accentColor : Color.secondary).opacity(0.12))
-                )
-            }
-            if let marketplace, !marketplace.isEmpty {
-                // The one thing here allowed to truncate: it is provenance,
-                // not identity, and it is the longest string on the row.
-                Text(marketplace)
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-        }
-        // Never taller than one line, whatever the width: an author chip that
-        // reflows into a column of letters is what narrow panes produced
-        // before (2026-09-11).
-        .frame(minWidth: 0, alignment: .leading)
-        .clipped()
+                .font(PaneFont.secondary).foregroundStyle(MarvinTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            })
     }
 
-    // MARK: - Marketplace catalog (browse + one-click install)
+    // MARK: Catalog ranking
 
-    /// Not-yet-installed catalog entries matching the search. Ranking: name
+    /// Not-yet-installed catalog entries matching the filter. Ranking: name
     /// prefix first, then name contains, then description/category matches —
     /// so "sec" surfaces `security-*` plugins before ones that merely mention
-    /// security in prose.
+    /// security in prose. Capped, and the cap is named by the group.
     private struct RankedPlugin {
         let plugin: CatalogPlugin
         let rank: Int
     }
 
-    /// Whether the catalog list is a search result rather than the head of
-    /// the list.
-    private var searching: Bool {
-        !catalogSearch.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    /// How many entries the current search actually matched, before the cap.
-    private var matchCount: Int { rankedCatalog.count }
-
     private var filteredCatalog: [CatalogPlugin] {
         let available = catalog.filter { !$0.installed }
-        let q = catalogSearch.trimmingCharacters(in: .whitespaces).lowercased()
+        let q = filter.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return Array(available.prefix(15)) }
         func rank(_ p: CatalogPlugin) -> Int? {
             let name = p.name.lowercased()
@@ -452,11 +496,11 @@ private struct UpdateResponse: Decodable {
         return ranked.prefix(50).map { $0.plugin }
     }
 
-    /// The same ranking, uncapped — only its count is used, so the cap above
-    /// can say what it left out.
+    /// The same match, uncapped — only its count is used, so the cap can say
+    /// what it left out.
     private var rankedCatalog: [CatalogPlugin] {
         let available = catalog.filter { !$0.installed }
-        let q = catalogSearch.trimmingCharacters(in: .whitespaces).lowercased()
+        let q = filter.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return available }
         return available.filter { p in
             let name = p.name.lowercased()
@@ -465,123 +509,6 @@ private struct UpdateResponse: Decodable {
                 || (p.description ?? "").lowercased().contains(q)
                 || (p.category ?? "").lowercased().contains(q)
         }
-    }
-
-    @ViewBuilder
-    private var catalogSection: some View {
-        let availableCount = catalog.filter { !$0.installed }.count
-        let shown = filteredCatalog
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "storefront").foregroundStyle(.tint)
-                Text("Available from marketplaces").font(.headline)
-                Text("\(availableCount)")
-                    .font(.caption.monospaced()).foregroundStyle(.secondary)
-                    .padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                Spacer()
-            }
-            Text("Everything your marketplaces offer (same catalogs as the Claude Code /plugin browser). Install copies the plugin into ~/.claude/plugins; then toggle it on above.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            TextField("Search \(availableCount) plugins…", text: $catalogSearch)
-                .textFieldStyle(.roundedBorder)
-            if shown.isEmpty {
-                Text(catalogSearch.isEmpty ? "Nothing available." : "No match for “\(catalogSearch)”.")
-                    .font(.caption).foregroundStyle(.tertiary)
-            } else {
-                ForEach(shown) { c in catalogRow(c) }
-                // Both caps are now named. The unsearched list was capped at
-                // 15 and said so; a SEARCH capped at 50 said nothing, so a
-                // query matching 80 silently showed 50 (ADR-0114).
-                if searching {
-                    if matchCount > shown.count {
-                        Text("Showing the closest \(shown.count) of \(matchCount) matches — narrow the search to see the rest.")
-                            .font(.system(size: 9.5)).foregroundStyle(.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                } else if availableCount > shown.count {
-                    Text("Showing \(shown.count) of \(availableCount) — search to find more.")
-                        .font(.system(size: 9.5)).foregroundStyle(.tertiary)
-                }
-            }
-        }
-    }
-
-    /// What a row offers beyond enable/disable.
-    ///
-    /// Deliberately NOT an uninstall. MARVIN clones a plugin but records it in
-    /// `~/.claude/plugins/installed_plugins.json`, which Claude Code owns and
-    /// both tools read — removing one from there is a cross-tool destructive
-    /// edit, and Claude Code's own `/plugin` UI is where it belongs. What was
-    /// missing here was any way to *get at* the thing, which is this
-    /// (ADR-0114).
-    @ViewBuilder
-    private func pluginMenu(_ p: PluginSummary) -> some View {
-        if p.source?.updatable != true {
-            Button("Set source…") {
-                installError = nil; marketplacePlugins = []; marketplaceName = nil
-                installURL = p.source?.url ?? ""
-                installSheetOpen = true
-            }
-            .help("MARVIN didn't install this one, so it has no recorded URL to re-fetch from. Installing it through MARVIN once records the source and enables updates.")
-            Divider()
-        }
-        // `/api/plugins` does not send an install path, so this opens the
-        // directory every plugin lives in rather than inventing a field.
-        Button("Reveal the plugins folder") {
-            let root = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".claude/plugins")
-            NSWorkspace.shared.activateFileViewerSelecting([root])
-        }
-        Button("Copy plugin name") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(p.name, forType: .string)
-        }
-        if let url = p.source?.url, !url.isEmpty {
-            Button("Copy source URL") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(url, forType: .string)
-            }
-        }
-        Divider()
-        Button("Uninstalling is Claude Code's /plugin UI") {}
-            .disabled(true)
-    }
-
-    private func catalogRow(_ c: CatalogPlugin) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(c.title).font(.body.monospaced())
-                    if let cat = c.category, !cat.isEmpty {
-                        Text(cat)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.secondary.opacity(0.12)))
-                    }
-                    authorChip(author: c.author, marketplace: c.marketplace)
-                }
-                if let d = c.description, !d.isEmpty {
-                    Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                }
-            }
-            Spacer()
-            Button {
-                Task { await installFromCatalog(c) }
-            } label: {
-                if installingFromCatalog == c.id {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Install")
-                }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(installingFromCatalog != nil)
-        }
-        .padding(.vertical, 2)
     }
 
     // MARK: - Install sheet
@@ -596,7 +523,7 @@ private struct UpdateResponse: Decodable {
                     .keyboardShortcut(.escape, modifiers: [])
             }
             Text("Paste a plugin marketplace or plugin repo URL. MARVIN clones it and copies the plugin into ~/.claude/plugins — nothing from the repo is run at install. Only add sources you trust.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(PaneFont.secondary).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             TextField("https://github.com/owner/marketplace-or-plugin", text: $installURL)
                 .textFieldStyle(.roundedBorder)
@@ -605,7 +532,7 @@ private struct UpdateResponse: Decodable {
             if !marketplacePlugins.isEmpty {
                 MarvinDivider()
                 Text("Marketplace \(marketplaceName.map { "“\($0)”" } ?? "") — pick a plugin to install:")
-                    .font(.caption.weight(.medium))
+                    .font(PaneFont.action)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(marketplacePlugins) { c in
@@ -613,7 +540,7 @@ private struct UpdateResponse: Decodable {
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(c.title).font(.body.monospaced())
                                     if let d = c.description, !d.isEmpty {
-                                        Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                        Text(d).font(PaneFont.secondary).foregroundStyle(.secondary).lineLimit(2)
                                     }
                                 }
                                 Spacer()
@@ -628,7 +555,7 @@ private struct UpdateResponse: Decodable {
             }
 
             if let err = installError {
-                Text(err).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                Text(err).font(PaneFont.secondary).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
 
             HStack {
@@ -690,7 +617,7 @@ private struct UpdateResponse: Decodable {
                     ?? "HTTP \(http.statusCode)"
                 await MainActor.run { fail("Could not install \(c.name)", detail) }
             } else {
-                await MainActor.run { flash("Installed \(c.name) — toggle it on above.") }
+                await MainActor.run { flash("Installed \(c.name). Switch it on in the list.") }
                 await refresh()
             }
         } catch {
@@ -787,7 +714,7 @@ private struct UpdateResponse: Decodable {
             }
             if let installed = decoded?.installed {
                 await MainActor.run {
-                    flash("Installed \(installed.name) — enable it below.")
+                    flash("Installed \(installed.name). Switch it on in the list.")
                     installSheetOpen = false
                     installURL = ""; marketplacePlugins = []; marketplaceName = nil
                 }
@@ -848,6 +775,32 @@ private struct UpdateResponse: Decodable {
         }
     }
 
+    /// Update every plugin the last check found a newer version of, one after
+    /// another, and say once what happened.
+    private func updateAllAvailable() async {
+        let targets = plugins.filter { $0.source?.updatable == true && updateStatus[$0.key] == "update-available" }
+        guard !targets.isEmpty else { return }
+        await MainActor.run { bulkUpdating = true }
+        defer { Task { @MainActor in bulkUpdating = false; updatingKey = nil } }
+        var updated = 0
+        var failed = 0
+        for p in targets {
+            await MainActor.run { updatingKey = p.key }
+            guard let outcome = await postUpdate(body: ["key": p.key])?.results?.first else { failed += 1; continue }
+            await MainActor.run { updateStatus[p.key] = outcome.status }
+            if outcome.status == "updated" || outcome.status == "up-to-date" { updated += 1 } else { failed += 1 }
+        }
+        await MainActor.run {
+            if failed == 0 {
+                flash("Updated \(updated) plugin\(updated == 1 ? "" : "s").")
+            } else {
+                show(PaneNotice(kind: .warning, headline: "Updated \(updated), \(failed) could not be updated.",
+                                detail: "Open the plugin's … menu to check its source."))
+            }
+        }
+        await refresh()
+    }
+
     /// Fetch and install the latest for one plugin.
     private func updateOne(_ p: PluginSummary) async {
         await MainActor.run { updatingKey = p.key }
@@ -871,17 +824,5 @@ private struct UpdateResponse: Decodable {
             }
         }
         if outcome.status == "updated" { await refresh() }
-    }
-
-    /// Kept for the in-section placeholders, which are a sentence in a list
-    /// rather than a whole-pane state (ADR-0114).
-    @ViewBuilder
-    private func emptyView(_ message: String) -> some View {
-        VStack {
-            Spacer()
-            Text(message).foregroundStyle(.secondary)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
     }
 }

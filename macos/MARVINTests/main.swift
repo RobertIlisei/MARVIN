@@ -147,6 +147,194 @@ runner.suite("watch-feed-wait-clock") {
     }
 }
 
+// MARK: - pane standard (kit agent, 2026-11-25)
+//
+// One standard for every side pane: the type scale, the group disclosure state,
+// the row action rule, filter, keyboard movement, and the guards that keep a
+// pane from growing a private header, row or section header again. Rules live in
+// `MARVINLogic/PaneStandard.swift` (+ `PaneSourceScan.swift`, `InstalledGrouping.swift`,
+// `PracticeScoreBand.swift`); `docs/design/pane-standard.md` is the prose. The two
+// guards at the end read `macos/MARVIN/*.swift` from disk.
+
+private let paneStdSources = PaneSourceScan.loadPaneSources(
+    macosDir: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().path)
+
+runner.suite("pane standard") {
+    runner.test("nothing a person must read is below 11 pt") {
+        for (name, pt) in PaneTypeScale.tokens {
+            runner.expect(pt >= PaneTypeScale.minimumPoints, "\(name) is \(pt) pt")
+        }
+        runner.expect(PaneTypeScale.minimumPoints, equals: 11, "the floor")
+    }
+
+    runner.test("the spacing scale only climbs") {
+        let s = PaneSpacing.scale
+        runner.expect(s == s.sorted(), "ascending")
+        runner.expect(Set(s).count, equals: s.count, "no duplicate steps")
+        runner.expect(PaneSpacing.gutter, equals: 10, "the gutter every header, group and row shares")
+    }
+
+    runner.test("a filter matches every word, in any field, ignoring case and accents") {
+        runner.expect(PaneFilter.matches("", in: ["anything"]), "an empty query keeps everything")
+        runner.expect(PaneFilter.matches("  ", in: ["anything"]), "so does a blank one")
+        runner.expect(PaneFilter.matches("graph first", in: ["graphify", "Query the graph first"]), "both words, across fields")
+        runner.expect(!PaneFilter.matches("graph zebra", in: ["graphify", "Query the graph first"]), "one missing word excludes")
+        runner.expect(PaneFilter.matches("CAFE", in: ["Café menu"]), "accents and case fold")
+        runner.expect(PaneFilter.isActive(" x "), "a word is a filter")
+        runner.expect(!PaneFilter.isActive("   "), "blank is not")
+    }
+
+    runner.test("a group is open unless the person closed it, and remembers") {
+        var s = PaneCollapseState()
+        runner.expect(!s.isCollapsed("finished", default: false), "open by default")
+        runner.expect(s.isCollapsed("suggested", default: true), "a group can start closed")
+        s = s.toggled("finished", default: false)
+        runner.expect(s.isCollapsed("finished", default: false), "closed by the person")
+        s = s.toggled("suggested", default: true)
+        runner.expect(!s.isCollapsed("suggested", default: true), "opened by the person")
+        let again = PaneCollapseState(storage: s.storage)
+        runner.expect(again, equals: s, "survives a round trip through its storage")
+        s = s.toggled("finished", default: false)
+        runner.expect(s.storage["finished"] == nil, "back at the default leaves no override behind")
+    }
+
+    runner.test("an active filter shows its matches even in a closed group") {
+        runner.expect(PaneCollapseState.isShown(collapsed: true, filterActive: true), "search opens it")
+        runner.expect(!PaneCollapseState.isShown(collapsed: true, filterActive: false), "closed stays closed")
+        runner.expect(PaneCollapseState.isShown(collapsed: false, filterActive: false), "open is open")
+        runner.expect(PaneCollapseState.defaultsKey(pane: "skills"), equals: "marvin.pane.skills.collapsedGroups", "one key per pane")
+    }
+
+    runner.test("a row shows at most one action; the rest wait in the menu") {
+        let plan = PaneRowActionPlan.plan([
+            PaneRowAction(id: "view", role: .normal),
+            PaneRowAction(id: "update", role: .primary),
+            PaneRowAction(id: "remove", role: .destructive),
+            PaneRowAction(id: "copy", role: .normal),
+            PaneRowAction(id: "build", role: .primary),
+        ])
+        runner.expect(plan.visible, equals: "update", "the first primary is the visible one")
+        runner.expect(plan.menu, equals: ["view", "copy", "build", "remove"], "a second primary joins the menu; destructive goes last")
+    }
+
+    runner.test("no primary means nothing visible, and a destructive is never visible") {
+        let plan = PaneRowActionPlan.plan([
+            PaneRowAction(id: "remove", role: .destructive),
+            PaneRowAction(id: "view", role: .normal),
+        ])
+        runner.expect(plan.visible == nil, "nothing is promoted by guessing")
+        runner.expect(plan.menu, equals: ["view", "remove"], "destructive last")
+        runner.expect(PaneRowActionPlan.plan([]).menu.isEmpty, "no actions, no menu")
+        runner.expect(PaneRowActionPlan.plan([PaneRowAction(id: "a", role: .primary)]).menu.isEmpty, "a lone primary needs no menu")
+    }
+
+    runner.test("a group's bulk action names how many it will touch") {
+        runner.expect(PaneBulkAction.title("Update all", count: 3), equals: "Update all (3)", "count in the label")
+        runner.expect(PaneBulkAction.title("Update all", count: 1), equals: "Update", "one is not 'all'")
+        runner.expect(PaneBulkAction.title("Update all", count: 0), equals: "Update all", "none: the plain label, disabled by the caller")
+    }
+
+    runner.test("arrow keys move a selection and stop at the ends") {
+        let ids = ["a", "b", "c"]
+        runner.expect(PaneKeyNav.move(.down, from: nil, in: ids), equals: "a", "down from nothing lands on the first")
+        runner.expect(PaneKeyNav.move(.up, from: nil, in: ids), equals: "c", "up from nothing lands on the last")
+        runner.expect(PaneKeyNav.move(.down, from: "a", in: ids), equals: "b", "down")
+        runner.expect(PaneKeyNav.move(.down, from: "c", in: ids), equals: "c", "no wrap at the bottom")
+        runner.expect(PaneKeyNav.move(.up, from: "a", in: ids), equals: "a", "no wrap at the top")
+        runner.expect(PaneKeyNav.move(.first, from: "c", in: ids), equals: "a", "home")
+        runner.expect(PaneKeyNav.move(.last, from: "a", in: ids), equals: "c", "end")
+        runner.expect(PaneKeyNav.move(.down, from: "gone", in: ids), equals: "a", "a selection that left the list restarts")
+        runner.expect(PaneKeyNav.move(.down, from: nil, in: []) == nil, "an empty list selects nothing")
+    }
+
+    runner.test("typing jumps to the next title that starts with it") {
+        let rows = [(id: "1", title: "graphify"), (id: "2", title: "grep-tools"), (id: "3", title: "pdf"), (id: "4", title: "pr-review")]
+        var t = PaneTypeAhead()
+        let t0 = Date(timeIntervalSince1970: 1000)
+        runner.expect(t.type("p", at: t0, rows: rows, from: nil), equals: "3", "p goes to pdf")
+        runner.expect(t.type("r", at: t0.addingTimeInterval(0.4), rows: rows, from: "3"), equals: "4", "pr goes to pr-review")
+        runner.expect(t.type("x", at: t0.addingTimeInterval(0.6), rows: rows, from: "4") == nil, "no match keeps the selection")
+        runner.expect(t.type("g", at: t0.addingTimeInterval(5), rows: rows, from: "4"), equals: "1", "a pause starts a new word")
+        runner.expect(t.type("r", at: t0.addingTimeInterval(5.2), rows: rows, from: "1"), equals: "1", "gr is a word; graphify still matches")
+        var u = PaneTypeAhead()
+        runner.expect(u.type("g", at: t0, rows: rows, from: "1"), equals: "2", "one letter again cycles to the next match")
+    }
+
+    runner.test("installed things sort into the same four groups, whatever the pane") {
+        let entries = [
+            InstalledEntry(id: "z", name: "zeta", enabled: true, hasUpdate: false, blocked: false),
+            InstalledEntry(id: "a", name: "Alpha", enabled: true, hasUpdate: false, blocked: false),
+            InstalledEntry(id: "u", name: "upd", enabled: false, hasUpdate: true, blocked: false),
+            InstalledEntry(id: "o", name: "off", enabled: false, hasUpdate: false, blocked: false),
+            InstalledEntry(id: "b", name: "broken", enabled: true, hasUpdate: true, blocked: true),
+        ]
+        let g = InstalledGrouping.group(entries)
+        runner.expect(g.map { $0.group }, equals: [.attention, .needsUpdate, .enabled, .available], "attention first, then updates, on, off")
+        runner.expect(g[0].ids, equals: ["b"], "a skill the loader skipped is not 'on'")
+        runner.expect(g[1].ids, equals: ["u"], "needs update beats off")
+        runner.expect(g[2].ids, equals: ["a", "z"], "case-insensitive by name")
+        runner.expect(InstalledGrouping.group([]).isEmpty, "an empty list has no groups, not four empty ones")
+        runner.expect(InstalledGroup.enabled.title, equals: "On in this project", "title")
+    }
+
+    runner.test("a score is a word first, with the number as the proof") {
+        runner.expect(PracticeScoreBand.band(0.91), equals: .high, "high")
+        runner.expect(PracticeScoreBand.band(0.67), equals: .medium, "meets the 0.6 proposal bar")
+        runner.expect(PracticeScoreBand.band(0.59), equals: .low, "below the bar")
+        runner.expect(PracticeScoreBand.band(0.4, proposalBar: 0.3), equals: .medium, "the bar is the project's own")
+        runner.expect(PracticeScoreBand.summary(0.67), equals: "Medium · 0.67", "word and number")
+        runner.expect(PracticeScoreBand.legend.contains("0 to 1"), "the legend names the scale")
+        runner.expect(PracticeScoreBand.legend.contains("0.60"), "and the bar a finding must clear")
+    }
+
+    runner.test("an empty search and a failed load each say one thing and offer one way out") {
+        let f = PaneEmptyState.filtered(query: "zeta", noun: "skills")
+        runner.expect(f.headline, equals: "No skills match “zeta”", "names the query")
+        runner.expect(f.symbol, equals: "magnifyingglass", "glyph")
+        let e = PaneEmptyState.couldNotLoad("skills", reason: "The sidecar did not answer.")
+        runner.expect(e.headline, equals: "Could not load skills", "one sentence")
+        runner.expect(e.hint, equals: "The sidecar did not answer.", "and the reason")
+    }
+
+    // MARK: guards: a pane never grows its own chrome again
+
+    runner.test("guard: the scan reads the pane files it is named for") {
+        runner.expect(paneStdSources.count >= 15, "found \(paneStdSources.count) pane files")
+        runner.expect(paneStdSources["SkillsPane.swift"] != nil, "SkillsPane.swift is scanned")
+        runner.expect(paneStdSources["PaneHeader.swift"] != nil, "the kit is scanned for text size")
+    }
+
+    runner.test("guard: no pane file defines its own header, row or section header") {
+        let hits = PaneSourceScan.privateChromeViolations(in: paneStdSources, allowlist: PaneSourceScan.migrating)
+        runner.expect(hits.isEmpty, "private chrome outside the kit and the allowlist: \(hits.joined(separator: "; "))")
+        // The scan is not vacuous: it finds the shapes it is named for.
+        runner.expect(!PaneSourceScan.privateChromeViolations(in: ["Fake.swift": "private func sectionHeader(_ t: String) -> some View { Text(t) }"], allowlist: [:]).isEmpty, "a private sectionHeader is caught")
+        runner.expect(!PaneSourceScan.privateChromeViolations(in: ["Fake.swift": "@ViewBuilder\nprivate func installedRow(a: Int) -> some View {\n    HStack { Text(\"\") }\n}"], allowlist: [:]).isEmpty, "a private row is caught")
+        runner.expect(!PaneSourceScan.privateChromeViolations(in: ["Fake.swift": "struct FooRow: View {\n var body: some View { Text(\"\") }\n}"], allowlist: [:]).isEmpty, "a private row type is caught")
+        runner.expect(PaneSourceScan.privateChromeViolations(in: ["Fake.swift": "private func skillRow(a: Int) -> some View {\n    PaneListRow(title: \"x\")\n}"], allowlist: [:]).isEmpty, "a row built from the kit is fine")
+        runner.expect(PaneSourceScan.privateChromeViolations(in: ["Fake.swift": "private func skillRow(a: Int) -> some View { Text(\"\") }"], allowlist: ["Fake.swift": "someone"]).isEmpty, "an allowlisted file is skipped")
+    }
+
+    runner.test("guard: no pane file sets text below 11 pt") {
+        let hits = PaneSourceScan.smallTextViolations(in: paneStdSources, allowlist: PaneSourceScan.migrating)
+        runner.expect(hits.isEmpty, "text under 11 pt: \(hits.joined(separator: "; "))")
+        runner.expect(!PaneSourceScan.smallTextViolations(in: ["Fake.swift": "Text(\"x\").font(.system(size: 9.5))"], allowlist: [:]).isEmpty, "9.5 pt text is caught")
+        runner.expect(!PaneSourceScan.smallTextViolations(in: ["Fake.swift": "Text(\"x\").font(.caption2)"], allowlist: [:]).isEmpty, "caption2 (10 pt) is caught")
+        runner.expect(!PaneSourceScan.smallTextViolations(in: ["Fake.swift": "Text(\"x\").font(.caption.monospaced())"], allowlist: [:]).isEmpty, "caption is 10 pt on macOS")
+        runner.expect(PaneSourceScan.smallTextViolations(in: ["Fake.swift": "Image(systemName: \"chevron.right\")\n    .font(.system(size: 8, weight: .semibold))"], allowlist: [:]).isEmpty, "a glyph is not text")
+        runner.expect(PaneSourceScan.smallTextViolations(in: ["Fake.swift": "Text(\"x\").font(.system(size: 11))"], allowlist: [:]).isEmpty, "11 pt is the floor, not a violation")
+    }
+
+    runner.test("guard: the migrated panes are not on the allowlist") {
+        for done in ["SkillsPane.swift", "PluginsPane.swift", "PracticePane.swift"] {
+            runner.expect(PaneSourceScan.migrating[done] == nil, "\(done) is on the standard")
+        }
+        for (file, owner) in PaneSourceScan.migrating {
+            runner.expect(!owner.isEmpty, "\(file) names who is migrating it")
+        }
+    }
+}
+
 // MARK: - context-tokens (ADR-0022 §2)
 //
 // Pin the cli.event JSON parser. The load-bearing decision is the
