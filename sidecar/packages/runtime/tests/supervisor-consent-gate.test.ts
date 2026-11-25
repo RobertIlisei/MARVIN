@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { answerQuestion } from "../src/confirm-answer";
 import { clearTurnConfirms, getPendingConfirm, registerPendingConfirm, resolvePendingConfirm } from "../src/confirm-registry";
@@ -62,7 +62,10 @@ function gate(strategy: PermissionStrategy, mode: AgentMode = "agent", tree: Ses
   return makeLivePostureGate({ turnId: TURN, permissionStrategy: strategy, mode, gateFor, consent: { cwd, treeMode: tree.mode, ...(onConfirmRequest ? { onConfirmRequest } : {}) } });
 }
 
-const settle = () => new Promise((r) => setTimeout(r, 20));
+// The gate's checks are async (file and git lookups), so a call takes longer to
+// settle on a loaded machine. Wait for the condition each caller needs, never
+// for a guessed delay (the 20 ms sleep this replaced is the flaky shape).
+const until = (cond: () => boolean) => vi.waitFor(() => expect(cond()).toBe(true), { timeout: 15_000 });
 
 /** Run a call; report whether it is waiting on a user-only card. */
 async function probe(g: ReturnType<typeof gate>, toolName: string, input: Record<string, unknown>, id: string, agentID?: string) {
@@ -70,7 +73,8 @@ async function probe(g: ReturnType<typeof gate>, toolName: string, input: Record
   void Promise.resolve(g(toolName, input, opts(id, agentID))).then((r) => {
     result = r as { behavior: string };
   });
-  await settle();
+  // A call is done when it answered or when it is waiting on a card.
+  await until(() => result !== undefined || getPendingConfirm(TURN, id) !== undefined);
   const pending = getPendingConfirm(TURN, id);
   return { result, raisedBy: pending?.raisedBy ?? null, userOnly: pending ? isUserOnlyConfirm(TURN, id) : false };
 }
@@ -112,9 +116,9 @@ describe("what the user's consent leads to", () => {
     void Promise.resolve(gate("gated")("Bash", { command: "git push origin x" }, opts("push-1"))).then((r) => {
       result = r as { behavior: string };
     });
-    await settle();
+    await until(() => getPendingConfirm(TURN, "push-1") !== undefined);
     expect(resolvePendingConfirm(TURN, "push-1", { behavior: "allow", updatedInput: { command: "git push origin x" } })).toBe(true);
-    await settle();
+    await until(() => result !== undefined);
     expect(cards).toHaveLength(1);
     expect(result?.behavior).toBeDefined();
   });
@@ -125,9 +129,9 @@ describe("what the user's consent leads to", () => {
     void Promise.resolve(gate("full")("Bash", { command: "git push" }, opts("push-2"))).then((r) => {
       result = r as { behavior: string };
     });
-    await settle();
+    await until(() => getPendingConfirm(TURN, "push-2") !== undefined);
     resolvePendingConfirm(TURN, "push-2", { behavior: "deny", message: "no", interrupt: false });
-    await settle();
+    await until(() => result !== undefined);
     expect(result?.behavior).toBe("deny");
   });
 

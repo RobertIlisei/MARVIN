@@ -242,7 +242,7 @@ describe("spend: a supervisor-started tab turn counts against the supervisor's c
     await send.sendAsSupervisor(message);
     // The send returns once the turn has started; spend lands at its end.
     const { getLiveTurn } = await import("@marvin/runtime/turn-registry");
-    await vi.waitFor(() => expect(getLiveTurn("tab-s")?.ended ?? true).toBe(true));
+    await vi.waitFor(() => expect(getLiveTurn("tab-s")?.ended ?? true).toBe(true), { timeout: 15_000 });
     const st = state.getSupervisorState("proj");
     expect(st.spend.tabsUsd).toBeCloseTo(0.25);
     expect(st.spend.usd).toBeCloseTo(0.25);

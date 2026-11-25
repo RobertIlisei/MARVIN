@@ -98,7 +98,9 @@ describe("a scope-met claim the ADR-0057 guard rejects is not scope met", () => 
 // ADR-0127 §5 — a supervisor cancel names its author everywhere it leaves a
 // record, and parks the tab for the user rather than reading as their Stop.
 describe("a supervisor cancel is the supervisor's, never the user's Stop", () => {
-  it("transcript, meta, watch row and send refusal all say so", async () => {
+  // The bound below is a hang detector on a real detached turn; a loaded machine needs
+  // more than the 5 s default to get there.
+  it("transcript, meta, watch row and send refusal all say so", { timeout: 30_000 }, async () => {
     let markStarted!: () => void;
     const started = new Promise<void>((r) => (markStarted = r));
     runAgentOverride = async (input) => {
@@ -118,7 +120,7 @@ describe("a supervisor cancel is the supervisor's, never the user's Stop", () =>
     const running = runDetachedTurn({ liveTurn, projectId: "proj", marvinSessionId: "tab-s", turnId: "tc", message: "m", cwd: workDir, workDir, model: base.model, permissionStrategy: "auto", mode: "agent", thinkingMode: "high", appendSystemPrompt: "", personality: "ultron" });
     await Promise.race([
       started,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("runAgent was never reached: the turn did not start")), 4_000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("runAgent was never reached: the turn did not start")), 15_000)),
     ]);
     expect(cancelLiveTurn("tab-s", "supervisor")).toBe(true);
     await running;
