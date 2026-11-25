@@ -410,6 +410,22 @@ runner.suite("source control: changes as a tree") {
         runner.expect(ChangeTree.move(.end, from: "g|changes", rows: rows), equals: .select("changes|f|z.swift"), "end")
         runner.expect(ChangeTree.move(.home, from: "changes|f|z.swift", rows: rows), equals: .select("g|changes"), "home")
     }
+    runner.test("five thousand changed files build their list in a few milliseconds (measured, printed)") {
+        var many: [ChangeItem] = []
+        for d in 0..<400 { for f in 0..<12 { many.append(item("pkg\(d % 40)/mod\(d)/sub/file\(f).swift")) } }
+        let start = Date()
+        var rows = 0
+        for _ in 0..<20 {
+            rows = ChangeTree.flatten(groups: [(.changes, many)], filter: "", collapsedGroups: [], overrides: [:]).count
+        }
+        let closedMs = Date().timeIntervalSince(start) * 1000 / 20
+        let open = Date()
+        let all = ChangeTree.rows(items: many, group: .changes, filter: "", overrides: [:], autoCollapseAbove: .max).count
+        let openMs = Date().timeIntervalSince(open) * 1000
+        print("[measure] 4,800 files: closed list \(rows) rows in \(String(format: "%.1f", closedMs)) ms; fully open \(all) rows in \(String(format: "%.1f", openMs)) ms")
+        runner.expect(rows < 100, "a group of thousands opens closed: a few dozen rows, not thousands")
+        runner.expect(closedMs < 250, "the closed list is cheap enough to rebuild on a keypress")
+    }
     runner.test("left and right: collapse and expand, step into children, step out to the parent") {
         let rows = ChangeTree.flatten(groups: [(.changes, [item("a/x.swift"), item("z.swift")])], filter: "", collapsedGroups: [], overrides: [:])
         runner.expect(ChangeTree.move(.left, from: "changes|d|a", rows: rows), equals: .toggle(id: "changes|d|a", collapse: true), "left closes an open directory")
@@ -508,6 +524,12 @@ runner.suite("source control: what a confirmation says") {
         runner.expect(t.title, equals: "Delete 2 untracked files in the project checkout (main)?", "title")
         runner.expect(t.message.contains("no copy"), "no copy anywhere")
         runner.expect(t.confirmLabel, equals: "Delete 2 files", "button")
+    }
+    runner.test("a force-push names the tree and the lease") {
+        let t = SourceControlConfirmText.forcePush(target: tab)
+        runner.expect(t.title, equals: "Force-push in tab B54 security (marvin/tab/b54)?", "title")
+        runner.expect(t.message.contains("cannot be undone"), "irreversible")
+        runner.expect(t.message.contains("someone pushed"), "the lease")
     }
     runner.test("merge all names the target branch and says nothing is pushed") {
         let t = SourceControlConfirmText.mergeAll(readyCount: 3, targetBranch: "main")

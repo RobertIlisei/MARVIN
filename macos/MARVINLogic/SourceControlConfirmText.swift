@@ -33,6 +33,13 @@ public struct SourceControlConfirmText: Equatable, Sendable {
             confirmLabel: "Discard \(files(count))")
     }
 
+    public static func forcePush(target: String) -> SourceControlConfirmText {
+        SourceControlConfirmText(
+            title: "Force-push \(target)?",
+            message: "Replaces the remote branch with this one, refused if someone pushed to it since you last fetched. Commits that exist only on the remote are lost. This cannot be undone from here.",
+            confirmLabel: "Force-push")
+    }
+
     public static func mergeAll(readyCount: Int, targetBranch: String?) -> SourceControlConfirmText {
         let into = targetBranch ?? "the current branch"
         return SourceControlConfirmText(

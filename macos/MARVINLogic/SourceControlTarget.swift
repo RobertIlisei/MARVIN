@@ -109,7 +109,7 @@ public struct SourceControlTarget: Equatable, Sendable {
         switch pin {
         case .project:
             let differs = hasOwnTree
-            let note = differs ? "Pinned to the project checkout. \(tabLabel) works in its own worktree, which this view is not showing." : nil
+            let note = differs ? "Pinned to the project checkout. \(tabLabel) works in its own worktree, which is not shown here." : nil
             return project(notice: note, pinned: true, differs: differs)
 
         case .worktree(let path, let branch, let name):
