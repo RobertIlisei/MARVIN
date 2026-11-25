@@ -8,6 +8,79 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-11-25 — v1.1.3: supervising fourteen tabs from the app: a fleet view that tells the truth, panes on one standard, skills a brief names are checked.**
+
+  *Where it came from.* A UX review of MARVIN with fourteen tabs open
+  ([`docs/reviews/2026-11-24-ux-review/`](../reviews/2026-11-24-ux-review/),
+  two rounds, findings numbered W-, S-, M-, R-, N-, F- and R2-). The work was
+  done in parallel on isolated worktrees and merged one at a time; 58 commits
+  since v1.1.2.
+
+  *The fleet read the wrong clock.* Measured first (S-01): a tab's wait
+  (`waitingOn`) reaches the app only in the watch snapshot, no feed event
+  carries it, and a new turn clears it, so every tab that ran a turn after
+  the last snapshot read as idle. The sidecar now sends an honest wait clock
+  and a structural restart mark on the watch row (R2-04, R2-10, `8bbfc0f`);
+  the app re-reads rows when a turn ends and once a minute, shows the
+  unbroken wait on every surface, and says when a restart re-queued the wait.
+  Waiting tabs read as waiting (clock in the tab strip, amber from 15 min,
+  oldest first); the status bar says "N tabs, N working, N waiting, N needs
+  you" and opens Sessions; the rail icon carries a needs-you badge. Every live
+  session is in the fleet under one name, rows are two lines, and a
+  finished-unreviewed tab keeps its own group until it has been looked at.
+  `Go > Next Tab That Needs Me` (option-command-]) walks needs-you, failed or
+  cut off, finished, longest wait. A review pass (pr-review) found that a
+  session a snapshot never listed could vanish from the fleet; only a session
+  a snapshot once listed can now. Later in the range the Sessions pane folds
+  its groups, Finished is quiet with mark-all and undo, and the badge counts
+  only what needs a person.
+
+  *Tab strip, notifications, chat.* The strip stays readable at fourteen tabs
+  (titles derived from the first message, 128 pt then scroll, needs-you tabs
+  pinned). A tab that finishes, fails, is cut off or needs you posts one
+  notification titled with the tab, bursts coalesced over 2 s; the confirm
+  names its tab and branch; the launch window has a safety net and the
+  start-up screens say what is happening. The chat takes the empty middle of
+  the window; one collapsible status strip replaces the stack of chips, the
+  header state dot tells the truth, job reports and wakeups are labelled
+  system instead of you, and the branch chip is cut at a word. App-level
+  menu items sit where macOS puts them.
+
+  *Panes on one standard.* `docs/design/pane-standard.md` states the pane
+  (header, filter, groups, rows, notice strip, empty and error states) and
+  the kit implements it (`PaneListRow`, `PaneGroup`, `PaneScrollList`,
+  `PaneOverflowMenu`, `PaneMetrics`); guard tests fail a pane that drifts.
+  Skills, Plugins and Practice were rebuilt on it, then Sessions, the Project
+  Backlog window (search, groups, detail, status filter with removable chips,
+  bulk review behind the confirm) and Plans (steps with four states). Source
+  Control is in two scopes, this tab's own tree and the project, with a
+  change tree for large sets, worktree sections and a diff preview; every
+  destructive action names its target in the confirmation. Panes fill their
+  height: the last open section takes the rest and History goes to the
+  bottom.
+
+  *Skills a brief names (ADR-0138).* Every `Skill` call is recorded; a
+  practice rule takes any skill and commit paths; a `Skills:` line in a
+  brief is recorded by the sidecar and a scope-met close is refused while a
+  named skill never ran; start skills (`first`) gate the first change and the
+  turn reminder names the ones not yet run. Watch rows and the Sessions pane
+  show `skills 2/3`.
+
+  *Two bugs of the last hour.* The idle brain was throttled to 10 fps once
+  idle had settled, which read as a stutter beside the 60 fps states; it
+  now stays at 30. The chat header's state dot used a `repeatForever`
+  implicit animation: a layout change in the same transaction picked it up and
+  the dot slid sideways over the text on both sides, idle included. It now
+  pulses from the clock and cannot move.
+
+  *Not done, on file.* Queue position (W-02) needs a sidecar contract and an
+  ADR. The review's own evidence says the fleet changes were built against
+  scratch builds and a replayed feed, not yet against fourteen live tabs.
+
+  *Verification.* Full `pnpm typecheck --force`, `npx vitest run` and
+  `swift run MARVINTests` on the merged tree before the tag; the pane guard
+  tests run in the Swift suite.
+
 - **2026-11-24 — v1.1.2: a tab's commit is judged on the tab's own work; graphify 0.9.118.**
 
   *The gate read the wrong directory* (`13d95b1`). On the afternoon v1.1.1

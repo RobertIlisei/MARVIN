@@ -2,8 +2,8 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v1.1.2
-(2026-11-11). Where this document and the repository disagree, the
+code. Written for contributors and deep evaluators. Covers v1.1.3
+(2026-11-25). Where this document and the repository disagree, the
 repository wins.*
 
 > **Since v0.1.55.** Subsystems added after this document's original scope,
@@ -72,6 +72,18 @@ repository wins.*
 > and a Helpers section in the Models dialog. **Claude's server-side advisor**
 > (ADR-0125) is a role too: off by default, `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`
 > when off, `settings.advisorModel` when on.
+> v1.1.3 (2026-11-25): **the fleet view and the pane standard (native app).**
+> The watch row carries an honest wait clock (`waitingOn` with its start) and a
+> structural restart mark; the app re-reads rows when a turn ends and once a
+> minute, because no feed event carries a wait. Derived app state: waiting,
+> needs-you, finished-unreviewed (kept per project in `marvin.reviewed.<pid>`),
+> a fleet summary in the status bar, `Go > Next Tab That Needs Me`. Panes
+> follow `docs/design/pane-standard.md`; the kit is `PaneListRow`, `PaneGroup`,
+> `PaneScrollList`, `PaneOverflowMenu`, `PaneMetrics`, `PaneControls`, with a
+> guard test in `MARVINTests`. Source Control has a *viewed tree* (this tab's
+> worktree or the project) and a change tree for large sets. ADR-0138's
+> `builtin:skills-named` and `builtin:skills-first` gate the skills a brief
+> names. Details: `docs/history/CHANGELOG.md`, v1.1.3.
 > v1.1.2 (2026-11-24): **the gate's directory, and graphify 0.9.118.** `checkShipReview`,
 > `checkShipImpactRequired`, the practice facts and `shipReviewTreeState` use
 > `ctx.sessionCwd` (the tab's worktree; the project root for a shared tab), not
@@ -1296,5 +1308,5 @@ repo:
 ---
 
 *Compiled against the 2026-07-02 full feature inventory (51 ADRs,
-v0.1.55) and brought forward to v1.1.2 (137 ADRs, 2026-11-24). Corrections welcome — the ADRs are the authoritative record,
+v0.1.55) and brought forward to v1.1.3 (138 ADRs, 2026-11-25). Corrections welcome — the ADRs are the authoritative record,
 and this document cites them everywhere it can.*

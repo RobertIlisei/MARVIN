@@ -57,7 +57,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v1.1.2**). `main` and `development` are fast-forwarded together at each
+> **v1.1.3**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -305,7 +305,7 @@ Everything below is a real, unedited session on MARVIN's own repository.
 - 🕐 Session history — click any past session in the header to restore it
 - 🎛️ One vocabulary across the seven left panes — Files · Search · Source Control · Sessions · Skills · Plugins · Practice share one control set: a chip that presses and hovers, one section header with its count, real empty states that say what a pane is for, and an outcome strip that distinguishes a success from a warning from a failure and keeps the failure on screen (ADR-0114)
 - 🔭 Supervisor — an optional per-project session that watches your tabs and answers what is already decided; its workspace (opened from its rail item) holds the conversation, its Brain, its log, per-tab delegation and settings, and *Needs you* in the Sessions pane stays the one inbox (raw act first) — anything it may not do on its own comes back as the inbox card itself, settled by your click, and it can follow a tab it opened for you and report back. Off by default, then shadow, then autonomy per category by your switch; no text is ever consent (ADR-0127 · ADR-0128 · [guide](./docs/guides/supervisor.md#talking-to-the-supervisor))
-- 🗂️ Several sessions at once — every new tab works on its **own branch** in its own worktree (or as a shared tab on your checkout); the tab strip is the only switcher, History keeps closed sessions, and the Sessions pane shows what needs you, what is working, and what is **ready to integrate** — Merge, Merge all, Sync, Prepare MR — answering a hidden tab's confirm inline. Nothing survives a closed tab unless it holds a commit, and the backlog is one live store every tab claims from (ADR-0107 · 0111 · 0112 · 0113 · [guide](./docs/guides/worktrees.md))
+- 🗂️ Several sessions at once — every new tab works on its **own branch** in its own worktree (or as a shared tab on your checkout); the tab strip is the only switcher, History keeps closed sessions, and the Sessions pane (groups fold; Finished is quiet; the badge counts what needs a person; waiting tabs show their wait) shows what needs you, what is working, and what is **ready to integrate** — Merge, Merge all, Sync, Prepare MR — answering a hidden tab's confirm inline. Nothing survives a closed tab unless it holds a commit, and the backlog is one live store every tab claims from (ADR-0107 · 0111 · 0112 · 0113 · [guide](./docs/guides/worktrees.md))
 - 🧠 MARVIN brain — live animated state indicator (idle / thinking / tool / writing / error)
 - 📎 Image paste in chat (⌘V, screenshots, dragged images)
 - 🌓 Light / dark theme — respects system preference
@@ -387,6 +387,8 @@ docs/
 ---
 
 ## Status
+
+**v1.1.3 — supervising fourteen tabs from inside the app.** A two-round UX review of MARVIN with fourteen tabs open drove 58 commits. The fleet view now tells the truth: the sidecar sends an honest wait clock and a restart mark, so a tab that waits on its own job reads as waiting (clock in the tab strip, amber from 15 minutes), the status bar says how many tabs are working, waiting or need you, the Sessions rail icon carries a badge for what needs a person, a finished tab keeps its own group until you have looked at it, and **Go > Next Tab That Needs Me** (⌥⌘]) walks the queue. Tab notifications are named, a confirm names its tab and branch, the chat has one collapsible status strip and takes the empty middle of the window. Panes follow one written standard ([`docs/design/pane-standard.md`](./docs/design/pane-standard.md)) with a kit and guard tests; Skills, Plugins, Practice, Sessions, the Project Backlog window (search, groups, status filter) and Plans are on it, and Source Control works in two scopes (this tab's tree, the project) with a change tree and a confirmation that names every destructive target. The skills a brief names are recorded and checked at the scope-met close ([ADR-0138](./docs/decisions/0138-skills-a-brief-names-are-recorded-and-checked-at-the-close.md)). The idle brain stays at 30 fps and the chat state dot no longer slides over its neighbours.
 
 **v1.1.2 — a tab's commit is judged on the tab's own work, and graphify 0.9.118.** The review gate read the project's main folder instead of the tab's checkout, so a one-file docs commit was refused for 50 files a merge had staged elsewhere; it now reads the session's own checkout, and reviews are kept per checkout. MARVIN works with graphify 0.9.118 (an update after 20 changed files takes 51 s where it took 244 s, and 14 s when nothing changed) and limits the map builder to half the cores, at most six.
 

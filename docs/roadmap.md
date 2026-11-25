@@ -148,6 +148,8 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
+**v1.1.3** (2026-11-25) — supervising fourteen tabs from inside the app, from a two-round UX review. The fleet view is truthful: the sidecar sends an honest wait clock and a restart mark, waiting tabs read as waiting, the status bar and the Sessions badge count what needs a person, `Go > Next Tab That Needs Me` walks the queue, and a finished-unreviewed tab keeps its own group. Tab notifications are named, the chat has one status strip, and the empty work area goes to the chat. Panes follow one written standard (`docs/design/pane-standard.md`) with a kit and guard tests; Skills, Plugins, Practice, Sessions, the Project Backlog window and Plans are on it, and Source Control has two scopes and names every destructive target. The skills a brief names are recorded and checked at the close (ADR-0138). The idle brain stays at 30 fps and the chat state dot no longer slides.
+
 **v1.1.2** (2026-11-24) — two fixes from the first day on a faster machine. The ship-review gate, the impact gate and the practice facts read the session's own checkout (`sessionCwd`), not the project root: a worktree tab's commit had been judged on whatever was staged in the main checkout, and one tab's review covered every tab's commit. graphify 0.9.118 is supported (missing-`mcp`-extra hint, ambiguous-name candidates kept, `$graphify-root$_` cache ids resolved) and `graphifyEnv` caps `GRAPHIFY_MAX_WORKERS` at half the cores, between 2 and 6.
 
 **v1.1.1** (2026-11-24) — four fixes from one night of supervising a real project. The sidecar's git reads never hold a checkout's index lock (`GIT_OPTIONAL_LOCKS=0`; a merge had been refused with "Unable to write index" three times in a month). The ship-review gate does not lift by repetition on a security-boundary path (ADR-0135; 134 commits had waited it out). A fix or rule keeps the rate it was accepted at, the Practice pane shows "was X %, now Y %", and the nightly loop is opt-in (ADR-0136). At a scope-met close the backlog is checked: claimed items gate the close, open items naming an edited file are suggested (ADR-0137). The open-items rail is 500. Not built: ADR-0137 part 3, an item resolved from an unmerged branch shown as "done, waiting to merge".
@@ -313,6 +315,10 @@ switch has no known cause, only new telemetry that will name it next time.
 ## Recent milestones
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
+
+### 2026-11-25 — v1.1.3: supervising fourteen tabs from the app; panes on one standard
+
+_Shipped. 58 commits from a two-round UX review ([`docs/reviews/2026-11-24-ux-review/`](./reviews/2026-11-24-ux-review/)): an honest wait clock and a truthful fleet view, named tab notifications, one chat status strip, panes on [one standard](./design/pane-standard.md) with a kit and guard tests, Source Control in two scopes, the Project Backlog window and Plans, and the skills a brief names checked at the close ([ADR-0138](./decisions/0138-skills-a-brief-names-are-recorded-and-checked-at-the-close.md)). Detail in the [changelog](./history/CHANGELOG.md)._
 
 ### 2026-11-24 — v1.1.2: a tab's commit is judged on the tab's own work; graphify 0.9.118
 
