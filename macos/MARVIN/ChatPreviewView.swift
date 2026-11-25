@@ -2359,7 +2359,13 @@ final class ChatPreviewModel {
     /// Local only — the durable record is the report file on disk.
     @State private var handledFindings: Set<String> = []
 
-    var body: some View {
+    // The body is split in four on purpose: one modifier chain this long
+    // exceeds Xcode 16.4's type-checker budget ("unable to type-check this
+    // expression in reasonable time", the v1.1.3 release build), while a newer
+    // compiler takes it. Each stage is its own expression.
+    var body: some View { chatStageD }
+
+    private var chatStageA: some View {
         VStack(spacing: 0) {
             sessionTabs
             MarvinDivider()
@@ -2451,6 +2457,10 @@ final class ChatPreviewModel {
             statusCardsFlipped = []
         }
         .preferredColorScheme(bridge.preferredColorScheme)
+    }
+
+    private var chatStageB: some View {
+        chatStageA
         // Names the scope by count before anything dies. "Stop everything?"
         // is a question a user cannot answer — one of those jobs might be a
         // forty-minute build they forgot was running.
@@ -2552,6 +2562,10 @@ final class ChatPreviewModel {
         .onChange(of: bridge.sessionAuditTriggerCount) { _, _ in
             Task { await runSessionAudit() }
         }
+    }
+
+    private var chatStageC: some View {
+        chatStageB
         // Phase 2e — present the head of the confirm queue as a
         // modal sheet. We use isPresented bound to "is there a
         // pending confirm" (set: false denies the head) so the user
@@ -2639,6 +2653,10 @@ final class ChatPreviewModel {
         } message: {
             Text("\(filePickCandidates.count) files share that name.")
         }
+    }
+
+    private var chatStageD: some View {
+        chatStageC
         .onReceive(NotificationCenter.default.publisher(for: .marvinRequestBacklogPanel)) { _ in
             backlogStartsAtReview = false
             backlogPanelOpen = true
