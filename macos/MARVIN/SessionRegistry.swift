@@ -58,6 +58,7 @@ final class SessionRegistry {
         ensureFeed(projectId: pid)
         ensureClock()
         SupervisorModel.shared.start(projectId: pid)
+        BacklogLiveStore.shared.start(projectId: pid)
     }
 
     func stop() {
@@ -65,6 +66,7 @@ final class SessionRegistry {
         feedTask = nil
         clockTask?.cancel()
         clockTask = nil
+        BacklogLiveStore.shared.stop()
         stateRefreshTask?.cancel()
         stateRefreshTask = nil
         feedConnected = false
@@ -325,8 +327,14 @@ final class SessionRegistry {
 
     func refreshSnapshot() {
         refreshStates()
+        refreshClaims()
+    }
+
+    /// ADR-0113 — what each tab holds in the backlog, for the row subtitle.
+    /// Also re-read whenever the backlog store hears a change (ADR-0044
+    /// addendum): a claim made or released elsewhere shows without a restart.
+    func refreshClaims() {
         guard let pid = projectId else { return }
-        // ADR-0113 — what each tab holds in the backlog, for the row subtitle.
         Task { @MainActor in
             guard let cwd = MarvinBridge.shared.projectWorkDir,
                   let items = try? await BacklogService.shared.fetch(workDir: cwd, status: "doing"),
@@ -435,6 +443,9 @@ final class SessionRegistry {
                 // outside one has no event either; a minute is the worst lag.
                 ticks += 1
                 if ticks % 4 == 0 { self?.refreshStates() }
+                // The backlog's safety net (ADR-0044 addendum): the stream is
+                // the mechanism, this is for the event that never arrived.
+                if ticks % 20 == 0 { BacklogLiveStore.shared.refresh() }
             }
         }
     }

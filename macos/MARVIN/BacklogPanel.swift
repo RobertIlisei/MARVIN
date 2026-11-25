@@ -87,7 +87,13 @@ import SwiftUI
 
     // MARK: Derived
 
-    private var counts: BacklogCounts { BacklogBrowse.counts(items) }
+    /// The scope counts are the project's one set of numbers (ADR-0044
+    /// addendum): the same ones the chat's strip shows, so the two agree. Only
+    /// before the store has heard anything do they come from the loaded list.
+    private var counts: BacklogCounts {
+        let store = BacklogLiveStore.shared
+        return store.hasData ? store.counts.scopeCounts : BacklogBrowse.counts(items)
+    }
     private var flaggedIds: Set<String> { Set(findings.map(\.id)) }
     private var hiddenKinds: Set<String> {
         Set(hiddenKindsRaw.split(separator: ",").map(String.init)).subtracting([""])
@@ -105,10 +111,7 @@ import SwiftUI
     }
 
     private var subtitle: String {
-        let c = counts
-        var parts = ["\(c.open) open"]
-        if c.review > 0 { parts.append("\(c.review) to review") }
-        return parts.joined(separator: " · ")
+        BacklogSurface.windowSubtitle(counts)
     }
 
     // MARK: Body
@@ -142,6 +145,9 @@ import SwiftUI
             adjustInitialScope()
         }
         .onChange(of: filter) { _, _ in selection.formIntersection(visibleIds) }
+        // Another tab (or a hand edit) changed the backlog while this window is
+        // open: bring the list up to date in place (ADR-0044 addendum).
+        .onChange(of: BacklogLiveStore.shared.generation) { _, _ in Task { await reloadQuietly() } }
         .confirmationDialog(
             bulk.map { BacklogBulk.confirmTitle($0, bulkTargets) } ?? "",
             isPresented: Binding(get: { bulk != nil }, set: { if !$0 { bulk = nil } }),
@@ -603,6 +609,14 @@ import SwiftUI
             loadError = error.localizedDescription
             if !items.isEmpty { post(PaneNotice(kind: .error, headline: "Couldn’t refresh the backlog.", detail: error.localizedDescription)) }
         }
+    }
+
+    /// Re-read the list after the backlog changed somewhere else. No skeleton,
+    /// no notice on failure, and nothing is assigned when nothing differs — the
+    /// window must not blink for a change it already shows.
+    private func reloadQuietly() async {
+        guard hasLoaded, !isLoading, let fresh = try? await BacklogService.shared.fetch(workDir: workDir) else { return }
+        if fresh != items { items = fresh }
     }
 
     /// Done / Dismiss / Keep / Reopen: change the row where it is, then tell the

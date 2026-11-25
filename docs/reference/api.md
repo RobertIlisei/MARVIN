@@ -65,6 +65,8 @@ Reconnect an SSE stream to an already-running turn (e.g. after browser reload). 
 
 Always-on SSE the client holds open for the whole time a project is loaded (ADR-0043). Emits `announce.attached` on connect, then a `turn.registered` `{ marvinSessionId, projectId, turnId, startedAt }` event for **every** turn registered in that project — including server-initiated ones (background-job completion, ADR-0038; timed wakeups, ADR-0031). An idle client that holds no live stream uses this to learn a turn it didn't start has begun and re-attach via `/api/chat/resume`, so the result renders without a session switch. A ~25 s heartbeat keeps the connection warm; read-only — it never starts/cancels/mutates a turn.
 
+It also carries the project's backlog counts (ADR-0044 amendment, 2026-11-25): a `backlog.changed` `{ projectId, revision, reason: "snapshot" | "change", counts: { provisional, open, doing, done, dismissed, blocked, active } }` right after `announce.attached` (the state now, so a reconnect resyncs), then one per debounced (300 ms quiet, 1.5 s max wait) change of the project's `.marvin/backlog/` from any origin — the MCP tool, the `/api/backlog` routes, a hand edit, a git checkout. Counts and a revision only: no path, no title (this stream holds no token).
+
 ## Confirm gate
 
 ### `POST /api/confirm`
@@ -208,6 +210,10 @@ The project backlog (ADR-0044) — actionable deferred work parked under `<workD
 ### `GET /api/backlog?workDir=…&status=…`
 
 List backlog items, optionally filtered by `status` (`open` | `doing` | `done` | `dismissed`). **Response:** `{ workDir, items: BacklogItem[] }`.
+
+### `GET /api/backlog/counts?workDir=…`
+
+The project's counts by status, from an incremental counter (stat per file, re-read only what changed) rather than a parse of every item. **Response:** `{ workDir, revision, counts: { provisional, open, doing, done, dismissed, blocked, active } }`; `403` for a `workDir` that is not a registered project. The app's one backlog store normally learns of changes from `backlog.changed` on `/api/chat/announce`; this is its re-read (window back to the front, a slow safety net).
 
 ### `POST /api/backlog`
 
