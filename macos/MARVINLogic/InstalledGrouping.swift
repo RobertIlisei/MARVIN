@@ -37,9 +37,6 @@ public enum InstalledGroup: String, CaseIterable, Sendable {
 
     /// Stable key for the persisted disclosure state.
     public var key: String { rawValue }
-
-    /// Off by default is the long tail; everything above it is the pane's point.
-    public var startsCollapsed: Bool { false }
 }
 
 public enum InstalledGrouping {

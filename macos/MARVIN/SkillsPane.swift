@@ -150,7 +150,6 @@ private struct SkillsIndexResponse: Decodable {
     @State private var loadError: String?
     @State private var isLoading: Bool = false
     @State private var inFlightAction: String?
-    @State private var explainSuggestion: SkillsIndexResponse.Suggestion?
     /// The outcome of the last action, with its kind (ADR-0114).
     ///
     /// Every outcome used to render in one clipboard-icon strip that cleared
