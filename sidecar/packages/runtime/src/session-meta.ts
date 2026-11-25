@@ -105,6 +105,10 @@ export interface SessionMeta {
   /** ADR-0138 — every skill this session has run, by normalised name. Persisted
    *  so a session resumed after a MARVIN restart does not forget what ran. */
   skillsRun?: string[];
+  /** ADR-0121 addendum — scope-met closes each own-change backlog item has
+   *  refused, by item id: the ADR-0104 brake (two, then the close is allowed).
+   *  On the meta so a restart does not reset it. */
+  ownConsequenceBlocks?: Record<string, number>;
   /**
    * ADR-0127 §9 — a posture set through `PUT /api/sessions/posture`, without a
    * turn. `postureRevision` counts those changes; `postureOverride` holds the

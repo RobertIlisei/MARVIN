@@ -50,3 +50,23 @@ Not done, deliberately: a separate built-in practice row for the impact gate (on
 - [x] `personality.ts` Phase 7 and backlog wording; the edited-ADR matcher covers `docs/adr/`
 - [x] Runtime and graphify-bridge suites green, typecheck clean
 - [x] App rebuilt and restarted with the change (`0.1.114+964ad3aa`)
+
+## Addendum 2026-11-26 — a hand-over, and a brake
+
+**What happened.** One tab (a terms rewrite on a real project) finished and committed. A provisional item it had parked named the redline it wrote, so decision 3 sent it back at every scope-met close, five times in four hours (23:08, 23:59, 00:46, 01:15, 01:39). The item waited on a branch the tab may not merge, and the supervisor had taken it over ("not part of this tab's scope any more"). None of (a) fix it, (b) keep it as pre-existing, (c) leave it and do not claim scope met is true of that item, and (c) *is* the loop: leaving it open and not closing, for ever. The tab never wrote the marker; its branch was queued by hand. The check had no brake (every other close gate here has ADR-0104's: two refusals, then through), and no answer for "this is someone else's".
+
+**Decision.**
+
+1. **`Handed over: <item-id> to <who> — <reason>`**, one line of the final message, the same shape as ADR-0138's `Skill not used:`. For an item in the gap it writes a dated `> note` on the item (`handed over to <who>: <reason>`, never more than 300 characters of reason), leaves it `provisional`, and ends the question. It is not `keep` and not `dismissed`: consent to keep or dismiss stays with the user (ADR-0047), and a model's own say-so never promotes it. A recipient and a reason are both required, a line naming an item that is not in the gap writes nothing, and a note the item cannot take (the notes cap) leaves the item asked about. Machine turns need no special case: the corrective turn is a wakeup and its final message is read the same way, so a supervised tab with no human present can answer.
+2. **The brake.** One item refuses a session's close at most twice (`OWN_CONSEQUENCE_MAX_BLOCKS`, counted on the session meta as `ownConsequenceBlocks`, so a restart does not reset it). The third close is allowed; `own.consequence.bypass` is logged and a dated note says so on the item, which stays provisional for the user. `own.consequence.block` and `.handover` are logged too, beside the existing `workflow.reconcile` line.
+3. **The refusal says what may be answered**: (a) fix, (b) keep as independent, (c) the `Handed over:` line, (d) leave it and do not claim scope met, and the brake sentence. The prompt and tool descriptions are unchanged (`personality.ts` only says the guard sends consequences back).
+
+`own-consequence-close.ts` holds the I/O, `workflow-guard.ts` the pure parts. Not done: a Practice-pane row for this check (still one gate, as in the original decision), and any change to what the matcher flags.
+
+### Scope of Done (addendum)
+
+- [x] A hand-over line ends the asking and writes a dated note; the item stays `provisional`.
+- [x] Two refusals per item per session, then the close is allowed and the bypass is logged and noted; the count survives a restart.
+- [x] The refusal text names the line and the brake; items the tab can resolve are still asked about.
+- [x] 11 tests in `tests/own-consequence-close.test.ts`; the existing guard tests unchanged.
+
