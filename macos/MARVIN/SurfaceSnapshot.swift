@@ -555,6 +555,15 @@ enum SurfaceSnapshot {
             return true
         }
 
+        if which == "window-editor" {
+            guard let outPath = env["MARVIN_SNAPSHOT_OUT"], !outPath.isEmpty else {
+                fail("MARVIN_SNAPSHOT_OUT=<directory> is required")
+                return true
+            }
+            EditorSnapshot.run(out: URL(fileURLWithPath: outPath, isDirectory: true))
+            return true
+        }
+
         if which == "window-left-pane" {
             guard let outPath = env["MARVIN_SNAPSHOT_OUT"], !outPath.isEmpty else {
                 fail("MARVIN_SNAPSHOT_OUT=<directory> is required")
