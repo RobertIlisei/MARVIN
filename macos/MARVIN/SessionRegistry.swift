@@ -52,6 +52,7 @@ final class SessionRegistry {
         projectId = pid
         loadOpenTabs(projectId: pid)
         loadReviewed(projectId: pid)
+        loadGroupCollapse(projectId: pid)
         for id in openTabs { ledger.ensure(id) }
         refreshSnapshot()
         ensureFeed(projectId: pid)
@@ -71,6 +72,9 @@ final class SessionRegistry {
         openTabs = []
         draftIds.removeAll()
         reviewedAt = [:]
+        groupCollapse = SessionGroupCollapse()
+        reviewUndo = nil
+        undoExpiry?.cancel()
         dismissedCutOffs = []
         firstMessages = [:]
         snapshotSeen = []
@@ -96,19 +100,79 @@ final class SessionRegistry {
     /// are not asked for a review (see `FinishedReview.isUnreviewed`).
     private var reviewBaseline = Date()
 
-    /// The tab on screen is being looked at, so it is never "unreviewed".
+    /// The tab on screen is being looked at, so it is never "unreviewed". A
+    /// session nobody can select (no tab) stops being "unreviewed" by itself
+    /// once `FinishedPolicy` says nobody will look: derived from the clock, so
+    /// no mark is written and nothing is lost.
     private func isUnreviewed(_ e: SessionEntry) -> Bool {
         if e.id == MarvinBridge.shared.activeMarvinSessionId { return false }
+        if FinishedPolicy.isSettled(hasTab: isOpenTab(e.id), merged: e.isMergedOrGone, endedAt: e.lastTurnAt, now: now) { return false }
         return FinishedReview.isUnreviewed(lastTurnAt: e.lastTurnAt, reviewedAt: reviewedAt[e.id], baseline: reviewBaseline)
     }
 
     /// Record that the person has seen the tab as it is now.
     func markReviewed(_ id: String) {
-        guard projectId != nil else { return }
-        let seen = max(Date(), ledger[id]?.lastTurnAt ?? .distantPast)
-        guard reviewedAt[id].map({ $0 < seen }) ?? true else { return }
+        guard projectId != nil,
+              let seen = ReviewMarks.mark(existing: reviewedAt[id], lastTurnAt: ledger[id]?.lastTurnAt, now: Date()) else { return }
         reviewedAt[id] = seen
         persistReviewed()
+    }
+
+    /// The last bulk review, until it expires or is undone. The pane offers
+    /// Undo while it is set.
+    private(set) var reviewUndo: (count: Int, undo: ReviewUndo)?
+    private var undoExpiry: Task<Void, Never>?
+    /// How long Undo is offered.
+    private static let undoWindow: UInt64 = 8_000_000_000
+
+    /// Mark these sessions reviewed in one step. Writes reviewed marks and
+    /// nothing else: no tab is closed, no worktree touched.
+    func markAllReviewed(_ ids: [String]) {
+        guard projectId != nil else { return }
+        let out = ReviewMarks.markAll(ids: ids, reviewed: reviewedAt, lastTurnAt: { self.ledger[$0]?.lastTurnAt }, now: Date())
+        guard !out.undo.isEmpty else { return }
+        reviewedAt = out.reviewed
+        persistReviewed()
+        reviewUndo = (out.undo.changes.count, out.undo)
+        undoExpiry?.cancel()
+        undoExpiry = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.undoWindow)
+            guard !Task.isCancelled else { return }
+            self?.reviewUndo = nil
+        }
+    }
+
+    func undoMarkAllReviewed() {
+        guard let pending = reviewUndo else { return }
+        reviewedAt = ReviewMarks.undo(pending.undo, reviewed: reviewedAt)
+        persistReviewed()
+        undoExpiry?.cancel()
+        reviewUndo = nil
+    }
+
+    // MARK: - Group collapse (remembered per project)
+
+    private(set) var groupCollapse = SessionGroupCollapse()
+
+    func isGroupCollapsed(_ id: SessionGroupId) -> Bool { groupCollapse.isCollapsed(id) }
+
+    func setGroup(_ id: SessionGroupId, collapsed: Bool) {
+        groupCollapse.set(id, collapsed: collapsed)
+        persistGroupCollapse()
+    }
+
+    func toggleGroup(_ id: SessionGroupId) {
+        groupCollapse.toggle(id)
+        persistGroupCollapse()
+    }
+
+    private func loadGroupCollapse(projectId pid: String) {
+        groupCollapse = SessionGroupCollapse(stored: UserDefaults.standard.stringArray(forKey: SessionGroupCollapse.storageKey(projectId: pid)))
+    }
+
+    private func persistGroupCollapse() {
+        guard let pid = projectId else { return }
+        UserDefaults.standard.set(groupCollapse.stored, forKey: SessionGroupCollapse.storageKey(projectId: pid))
     }
 
     /// Selection moved: the tab being left was seen up to now, the one
@@ -133,7 +197,9 @@ final class SessionRegistry {
 
     /// Working / waiting / needs-you / long waits / finished-unreviewed over `fleetSessionIds`.
     var fleet: FleetCounts {
-        SessionFleet.counts(fleetSessionIds.map { FleetItem(state: rowState($0), waitingSince: ledger[$0]?.waitSince) }, now: now)
+        SessionFleet.counts(fleetSessionIds.map {
+            FleetItem(state: rowState($0), waitingSince: ledger[$0]?.waitSince, hasTab: isOpenTab($0), endedAt: ledger[$0]?.lastTurnAt)
+        }, now: now)
     }
 
     /// Whether the session is a tab in the strip. A fleet member that is not

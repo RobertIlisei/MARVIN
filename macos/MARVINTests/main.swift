@@ -6930,7 +6930,7 @@ runner.suite("session-fleet") {
 
     runner.test("counts are per derived state, and the total is every row") {
         let c = SessionFleet.counts([.working, .waiting, .waiting, .needsYou(2), .idle, .done, .failed, .draft])
-        runner.expect(c, equals: FleetCounts(total: 8, working: 1, waiting: 2, needsYou: 1), "a session with two confirms is one session that needs you")
+        runner.expect(c, equals: FleetCounts(total: 8, working: 1, waiting: 2, needsYou: 1, attention: 1), "a session with two confirms is one session that needs you")
         runner.expect(SessionFleet.counts([]), equals: FleetCounts(total: 0, working: 0, waiting: 0, needsYou: 0), "empty")
     }
     runner.test("the summary reads in full, drops zero parts, and degrades without cutting a word") {
@@ -7278,6 +7278,109 @@ runner.suite("status-bar-text-r2-14") {
         runner.expect(text.contains("164 graph lookups") && text.contains("273 file reads"), "both numbers in words")
         runner.expect(text.contains("not an error"), "and the word that stops it reading as one")
         runner.expect(text.contains("Reads outpace graph lookups"), "the existing hint stays")
+    }
+}
+
+// ─── Sessions pane, round 3 (25.11.2026): every group collapses, Finished is quiet, the badge counts what needs a person ───
+
+runner.suite("sessions-groups-r3") {
+    let now = Date(timeIntervalSince1970: 3_000_000)
+    func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
+
+    runner.test("groups appear in the order attention asks for them") {
+        runner.expect(SessionGroupId.displayOrder.map(\.rawValue),
+                      equals: ["needsYou", "working", "waiting", "finished", "integrate", "idle", "history"],
+                      "Needs you, Working, Waiting, Finished, then the quiet ones")
+    }
+    runner.test("collapse state toggles, and survives a round trip through storage, per project") {
+        var c = SessionGroupCollapse()
+        runner.expect(!c.isCollapsed(.finished), "everything starts open")
+        c.toggle(.finished)
+        runner.expect(c.isCollapsed(.finished), "toggled shut")
+        runner.expect(!c.isCollapsed(.idle), "only that group")
+        let back = SessionGroupCollapse(stored: c.stored)
+        runner.expect(back, equals: c, "restored from what was stored")
+        runner.expect(SessionGroupCollapse(stored: ["finished", "nonsense"]).isCollapsed(.finished), "an unknown name is ignored, the known one kept")
+        runner.expect(SessionGroupCollapse(stored: nil), equals: SessionGroupCollapse(), "nothing stored, nothing collapsed")
+        c.toggle(.finished)
+        runner.expect(!c.isCollapsed(.finished), "toggled open again")
+        runner.expect(SessionGroupCollapse.storageKey(projectId: "p1") != SessionGroupCollapse.storageKey(projectId: "p2"), "one key per project")
+    }
+    runner.test("a finished session nobody can select leaves after an hour, and a merged one after minutes") {
+        runner.expect(!FinishedPolicy.isSettled(hasTab: false, merged: false, endedAt: ago(59), now: now), "59 minutes: still worth a glance")
+        runner.expect(FinishedPolicy.isSettled(hasTab: false, merged: false, endedAt: ago(61), now: now), "an hour: nobody is going to look")
+        runner.expect(!FinishedPolicy.isSettled(hasTab: false, merged: true, endedAt: ago(2), now: now), "merged two minutes ago: the person may still want to see it land")
+        runner.expect(FinishedPolicy.isSettled(hasTab: false, merged: true, endedAt: ago(6), now: now), "merged and six minutes old: gone")
+        runner.expect(!FinishedPolicy.isSettled(hasTab: true, merged: true, endedAt: ago(5_000), now: now), "a tab is still a reminder, however old and however merged")
+        runner.expect(!FinishedPolicy.isSettled(hasTab: false, merged: false, endedAt: nil, now: now), "no end time makes no claim")
+    }
+    runner.test("Finished shows the five most recent, merged ones last, and says how many it holds back") {
+        var rows: [FinishedPolicy.Row] = (0..<8).map { FinishedPolicy.Row(id: "r\($0)", endedAt: ago(Double($0) + 1), hasTab: true, merged: false) }
+        rows.append(.init(id: "merged-new", endedAt: ago(0.5), hasTab: true, merged: true))
+        let quiet = FinishedPolicy.plan(rows, showAll: false)
+        runner.expect(quiet.shown, equals: ["r0", "r1", "r2", "r3", "r4"], "newest first, the merged one does not take a place")
+        runner.expect(quiet.hiddenCount, equals: 4, "three more plus the merged one")
+        runner.expect(FinishedPolicy.plan(rows, showAll: true).shown.count, equals: 9, "Show all shows all")
+        runner.expect(FinishedPolicy.plan(rows, showAll: true).shown.last, equals: "merged-new", "the merged one is still last")
+        runner.expect(FinishedPolicy.plan(Array(rows.prefix(5)), showAll: false).hiddenCount, equals: 0, "five or fewer: nothing to reveal")
+        runner.expect(FinishedPolicy.plan([], showAll: false).shown, equals: [], "empty")
+    }
+    runner.test("marking everything reviewed writes marks only, and Undo puts back exactly what was there") {
+        let reviewed: [String: Date] = ["b": ago(500)]
+        let ended: [String: Date] = ["a": ago(30), "b": ago(20), "c": ago(10)]
+        let out = ReviewMarks.markAll(ids: ["a", "b", "c"], reviewed: reviewed, lastTurnAt: { ended[$0] }, now: now)
+        runner.expect(out.reviewed["a"], equals: now, "a is marked at now")
+        runner.expect(out.reviewed["b"], equals: now, "b's older mark moves forward")
+        runner.expect(out.reviewed.count, equals: 3, "nothing else gained a mark")
+        let undone = ReviewMarks.undo(out.undo, reviewed: out.reviewed)
+        runner.expect(undone, equals: reviewed, "back to one old mark, the other two have none again")
+        var touched = out.reviewed
+        touched["a"] = now.addingTimeInterval(60)
+        runner.expect(ReviewMarks.undo(out.undo, reviewed: touched)["a"], equals: now.addingTimeInterval(60), "a mark made since is not taken back")
+        let again = ReviewMarks.markAll(ids: ["a"], reviewed: out.reviewed, lastTurnAt: { ended[$0] }, now: now)
+        runner.expect(again.undo.isEmpty, "nothing changed, nothing to undo")
+    }
+    runner.test("merged and removed worktrees say so, in a word, on the row") {
+        func entry(_ mutate: (inout SessionEntry) -> Void) -> SessionEntry {
+            var e = SessionEntry(id: "x"); e.lastTurnAt = ago(30); e.diff = SessionDiffSummary(added: 3, removed: 1, files: 2); mutate(&e); return e
+        }
+        let merged = entry { $0.worktree = .init(slug: "s", branch: "marvin/tab/x", state: "merged", commits: 2, dirty: false, mergedInto: "main") }
+        runner.expect(merged.isMergedOrGone, "merged")
+        runner.expect(SessionRowText.keyFact(.finished, merged, now: now), equals: "merged", "named on line 2")
+        let gone = entry { $0.tree = SessionTreeWire(mode: .worktree, slug: "s", branch: "marvin/tab/x", present: false) }
+        runner.expect(gone.isMergedOrGone, "the checkout is gone")
+        runner.expect(SessionRowText.keyFact(.finished, gone, now: now), equals: "worktree gone", "named on line 2")
+        let live = entry { $0.tree = SessionTreeWire(mode: .worktree, slug: "s", branch: "marvin/tab/x", present: true) }
+        runner.expect(!live.isMergedOrGone, "a present checkout is not gone")
+        runner.expect(!entry { _ in }.isMergedOrGone, "a shared checkout has nothing to lose")
+        runner.expect(SessionRowText.keyFact(.finished, live, now: now), equals: "2 files \u{B7} +3 \u{2212}1", "an ordinary finished row keeps its changes line")
+    }
+    runner.test("a narrow Finished row drops the word its group header already says") {
+        var e = SessionEntry(id: "x"); e.lastTurnAt = ago(14 * 60)
+        runner.expect(SessionRowText.narrowSentence(.finished, e, now: now), equals: "14h ago", "just the age")
+        runner.expect(SessionRowText.stateSentence(.finished, e, now: now), equals: "Finished 14h ago", "the full sentence is unchanged")
+        runner.expect(SessionRowText.narrowSentence(.waiting, e, now: now), equals: SessionRowText.stateSentence(.waiting, e, now: now), "other states keep theirs")
+        runner.expect(SessionRowText.narrowSentence(.finished, SessionEntry(id: "y"), now: now), equals: "Finished", "no end time, no invented age")
+    }
+    runner.test("the rail badge counts what needs a person, not history") {
+        let items: [FleetItem] =
+            [FleetItem(state: .needsYou(1))]
+            + [FleetItem(state: .failed, hasTab: true, endedAt: ago(600))]
+            + [FleetItem(state: .interrupted, hasTab: false, endedAt: ago(10))]
+            + [FleetItem(state: .failed, hasTab: false, endedAt: ago(600))]
+            + (0..<3).map { _ in FleetItem(state: .finished, hasTab: true) }
+            + (0..<45).map { _ in FleetItem(state: .finished, hasTab: false) }
+            + [FleetItem(state: .waiting, waitingSince: ago(20))]
+        let c = SessionFleet.counts(items, now: now)
+        runner.expect(c.finished, equals: 3, "finished counts the ones with a tab; the 45 without are history")
+        runner.expect(c.attention, equals: 2, "a failure with a tab, and a fresh cut-off without one; a stale tabless failure is history")
+        let badge = SessionFleet.badge(c)
+        runner.expect(badge?.count, equals: 1 + 2 + 3 + 1, "needs you, failed/cut off, finished with a tab, long wait")
+        runner.expect(badge?.tone, equals: .urgent, "a person is wanted")
+        runner.expect(badge?.help.contains("2 failed or cut off") == true, "and the tooltip says what the number is")
+        runner.expect(SessionFleet.summary(c, detail: .full).contains("3 finished"), "the status bar reads the same finished count as the badge")
+        runner.expect(SessionFleet.summary(c, detail: .full).contains("2 failed"), "and the failures, which the badge also counts")
+        runner.expect(SessionFleet.badge(SessionFleet.counts([FleetItem(state: .finished, hasTab: false)], now: now)) == nil, "a tabless finished session alone lights nothing")
     }
 }
 

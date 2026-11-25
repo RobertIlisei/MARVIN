@@ -45,6 +45,15 @@ public enum SessionRowText {
         }
     }
 
+    /// The sentence for a row whose group header already names its state and
+    /// whose pane is narrow: Finished rows say only how long ago ("3m ago"), so
+    /// the fact beside it ("merged") still fits at 260 pt. Every other state
+    /// keeps its full sentence.
+    public static func narrowSentence(_ state: SessionRowState, _ e: SessionEntry, now: Date) -> String {
+        guard state == .finished, let ended = e.lastTurnAt else { return stateSentence(state, e, now: now) }
+        return "\(ago(ended, now: now)) ago"
+    }
+
     // MARK: - Line 2: the one fact
 
     public static func keyFact(_ state: SessionRowState, _ e: SessionEntry, now: Date) -> String? {
@@ -67,6 +76,10 @@ public enum SessionRowText {
         case .waiting:
             guard let w = e.waitingOn else { return nil }
             return SessionWait.label(kind: w.kind, label: w.label, cause: w.cause)
+        case .finished where e.isMergedOrGone:
+            // One short word, so a 260 pt row keeps it: there is nothing left to
+            // review in the tree. Where it merged to is on the hover card.
+            return e.worktree?.mergedInto != nil || e.worktree?.state == "merged" ? "merged" : "worktree gone"
         case .finished, .done:
             if let into = e.worktree?.mergedInto { return "merged into \(into); close the tab to reclaim the branch" }
             return changes(e) ?? planLine(e, now: now, withAge: false) ?? (state == .done ? "scope met" : "its turn completed")

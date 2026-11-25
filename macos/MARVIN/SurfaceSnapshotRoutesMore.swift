@@ -11,7 +11,7 @@ enum SurfaceRoutesMore {
             .json(json.replacingOccurrences(of: "@ROOT@", with: root))
         }
         switch path {
-        case "/api/sessions/watch": return ok(watchJSON())
+        case "/api/sessions/watch": return ok(SurfaceSessionsFleet.active ? SurfaceSessionsFleet.watchJSON() : watchJSON())
         case "/api/chat/announce": return announce()
         case "/api/worktrees": return ok(method == "POST" ? previewJSON : worktreeList)
         case "/api/skills": return ok(skills)
@@ -93,7 +93,7 @@ enum SurfaceRoutesMore {
         var r = FixtureSidecar.Response.stream()
         r.body = Data("""
         event: session.activity
-        data: {"marvinSessionId":"\(openIds[0])","turnId":"t-a1","state":"tool","tool":"Bash"}
+        data: {"marvinSessionId":"\(SurfaceSessionsFleet.active ? SurfaceSessionsFleet.openIds[0] : openIds[0])","turnId":"t-a1","state":"tool","tool":"Bash"}
 
 
         """.utf8)
