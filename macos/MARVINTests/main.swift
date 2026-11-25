@@ -7250,6 +7250,293 @@ runner.suite("session-row-text-r2-11") {
     }
 }
 
+// MARK: - Backlog window and plans panel (pane standard, 25.11.2026)
+
+runner.suite("backlog-browse-pane-standard") {
+    let now = ISO8601DateFormatter().date(from: "2026-11-25T12:00:00Z")!
+    func item(_ id: String, _ title: String, status: String = "open", severity: String = "med",
+              created: String = "2026-11-20", kind: String? = nil, blocked: Bool? = nil, blockedOn: String? = nil,
+              body: String = "", claimedBy: String? = nil, claimedBranch: String? = nil) -> BacklogItem {
+        BacklogItem(id: id, title: title, body: body, status: status, severity: severity, created: created,
+                    kind: kind, blocked: blocked, blockedOn: blockedOn, claimedBy: claimedBy, claimedBranch: claimedBranch)
+    }
+    let items = [
+        item("a", "Fix retry jitter", severity: "high", created: "2026-11-24", kind: "bug"),
+        item("b", "Document the groom review", severity: "low", created: "2026-10-01", kind: "docs"),
+        item("c", "Rotate the signing key", severity: "high", created: "2026-09-01", blocked: true, blockedOn: "accountant sign-off"),
+        item("d", "Auto-captured: flaky cache test", status: "provisional", severity: "med", created: "2026-11-25"),
+        item("e", "Auto-captured: dead config key", status: "provisional", severity: "low", created: "2026-11-25"),
+        item("f", "Shipped thing", status: "done", severity: "med", created: "2026-08-01"),
+        item("g", "In flight", status: "doing", severity: "med", created: "2026-11-10", claimedBy: "8cb24ed6aaaa", claimedBranch: "marvin/tab/fix-the-thing"),
+    ]
+
+    runner.test("scopes split the list by status and count it") {
+        let c = BacklogBrowse.counts(items)
+        runner.expect(c.open, equals: 4, "open + doing")
+        runner.expect(c.review, equals: 2, "provisional")
+        runner.expect(c.resolved, equals: 1, "done + dismissed")
+        let open = BacklogBrowse.filter(items, BacklogFilter(scope: .open))
+        runner.expect(open.map(\.id), equals: ["a", "b", "c", "g"], "open scope keeps open and doing, in input order")
+        runner.expect(BacklogBrowse.filter(items, BacklogFilter(scope: .review)).map(\.id), equals: ["d", "e"], "review scope is the provisional items")
+    }
+
+    runner.test("search needs every word, ignores case, and looks in body, kind and id") {
+        let with = items + [item("h", "Unrelated", body: "mentions the Signing Key rotation")]
+        runner.expect(BacklogBrowse.filter(with, BacklogFilter(query: "signing")).map(\.id), equals: ["c", "h"], "title and body")
+        runner.expect(BacklogBrowse.filter(with, BacklogFilter(query: "SIGNING key rotate")).map(\.id), equals: ["c"], "every word, any case")
+        runner.expect(BacklogBrowse.filter(with, BacklogFilter(query: "bug")).map(\.id), equals: ["a"], "kind is searchable")
+        runner.expect(BacklogBrowse.filter(with, BacklogFilter(query: "   ")).count, equals: 5, "blank query matches all")
+        runner.expect(BacklogBrowse.filter(with, BacklogFilter(query: "nothing like this")).isEmpty, "no match is empty")
+    }
+
+    runner.test("severity, kind and blocked filters narrow, and are counted") {
+        var f = BacklogFilter()
+        runner.expect(f.activeFilterCount, equals: 0, "default filter narrows nothing")
+        f.severities = ["high"]
+        runner.expect(BacklogBrowse.filter(items, f).map(\.id), equals: ["a", "c"], "high only")
+        runner.expect(f.activeFilterCount, equals: 1, "counted")
+        f.blocked = .hide
+        runner.expect(BacklogBrowse.filter(items, f).map(\.id), equals: ["a"], "hide blocked")
+        f.blocked = .only
+        f.severities = ["high", "med", "low"]
+        runner.expect(BacklogBrowse.filter(items, f).map(\.id), equals: ["c"], "only blocked")
+        f.blocked = .all
+        f.hiddenKinds = ["bug", "docs"]
+        runner.expect(BacklogBrowse.filter(items, f).map(\.id), equals: ["c", "g"], "hidden kinds drop out, unclassified stays")
+        f.onlyIds = ["g"]
+        runner.expect(BacklogBrowse.filter(items, f).map(\.id), equals: ["g"], "flagged-only narrows")
+        runner.expect(f.activeFilterCount, equals: 2, "kinds and flagged both counted")
+        runner.expect(f.isNarrowed, "a filter narrows")
+        runner.expect(!BacklogFilter(scope: .resolved).isNarrowed, "a scope alone is not a narrowing")
+        runner.expect(BacklogFilter(query: "x").isNarrowed, "a search narrows")
+    }
+
+    runner.test("sorting is by severity then newest, or by age, or by title, and is stable") {
+        let open = BacklogBrowse.filter(items, BacklogFilter(scope: .open))
+        runner.expect(BacklogBrowse.sort(open, by: .severity).map(\.id), equals: ["a", "c", "g", "b"], "severity, newest first within a band")
+        runner.expect(BacklogBrowse.sort(open, by: .newest).map(\.id), equals: ["a", "g", "b", "c"], "newest")
+        runner.expect(BacklogBrowse.sort(open, by: .oldest).map(\.id), equals: ["c", "b", "g", "a"], "oldest")
+        runner.expect(BacklogBrowse.sort(open, by: .title).map(\.id), equals: ["b", "a", "g", "c"], "title")
+        let ties = [item("z", "Same", created: "2026-11-01"), item("y", "Same", created: "2026-11-01")]
+        runner.expect(BacklogBrowse.sort(ties, by: .oldest).map(\.id), equals: ["y", "z"], "equal keys fall back to the id")
+    }
+
+    runner.test("groups carry a title and a count, empty bands vanish, order is fixed") {
+        let open = BacklogBrowse.sort(BacklogBrowse.filter(items, BacklogFilter(scope: .open)), by: .severity)
+        let bySeverity = BacklogBrowse.sections(open, group: .severity, now: now)
+        runner.expect(bySeverity.map(\.title), equals: ["High", "Medium", "Low"], "severity bands in rank order")
+        runner.expect(bySeverity.map { $0.items.count }, equals: [2, 1, 1], "counts")
+        let byKind = BacklogBrowse.sections(open, group: .kind, now: now)
+        runner.expect(byKind.map(\.title), equals: ["Bug", "Docs", "Unclassified"], "kind order, unclassified last")
+        let byStatus = BacklogBrowse.sections(open, group: .status, now: now)
+        runner.expect(byStatus.map(\.title), equals: ["In progress", "Open"], "status bands")
+        let byAge = BacklogBrowse.sections(open, group: .age, now: now)
+        runner.expect(byAge.map(\.title), equals: ["Added this week", "Added this month", "Older"], "age bands")
+        runner.expect(byAge.map { $0.items.map(\.id) }, equals: [["a"], ["g"], ["c", "b"]], "age membership")
+        let none = BacklogBrowse.sections(open, group: .none, now: now)
+        runner.expect(none.count, equals: 1, "one untitled band")
+        runner.expect(none[0].title, equals: "", "untitled")
+        runner.expect(BacklogBrowse.sections([], group: .severity, now: now).isEmpty, "nothing to band")
+        runner.expect(BacklogBrowse.sections([], group: .none, now: now).isEmpty, "nothing, no empty band")
+    }
+
+    runner.test("a row's second line says severity, kind, age and what it waits on") {
+        runner.expect(BacklogRowText.secondary(items[0], now: now), equals: "High · bug · 1d", "severity, kind, age")
+        runner.expect(BacklogRowText.secondary(items[2], now: now), equals: "High · 2mo · waits on accountant sign-off", "blocked with its reason; no kind, nothing invented")
+        runner.expect(BacklogRowText.secondary(item("x", "x", blocked: true), now: now), equals: "Medium · 5d · blocked", "blocked without a reason says so")
+        runner.expect(BacklogRowText.secondary(items[6], now: now), equals: "Medium · 2w · in progress · tab: fix-the-thing", "who holds it")
+        runner.expect(BacklogRowText.secondary(items[3], now: now), equals: "Medium · today · auto-captured", "provisional")
+        runner.expect(BacklogRowText.secondary(items[5], now: now), equals: "Medium · 3mo · done", "resolved")
+        runner.expect(BacklogRowText.secondary(item("w", "w", created: "garbage"), now: now), equals: "Medium", "an unreadable date is left out")
+    }
+
+    runner.test("age is as short as a line allows") {
+        func age(_ d: String) -> String? { BacklogAge.label(created: d, now: now) }
+        runner.expect(age("2026-11-25"), equals: "today", "same day")
+        runner.expect(age("2026-11-24"), equals: "1d", "a day")
+        runner.expect(age("2026-11-11"), equals: "2w", "two weeks")
+        runner.expect(age("2026-09-25"), equals: "2mo", "two months")
+        runner.expect(age("2024-01-01"), equals: "2y", "two years")
+        runner.expect(age("2026-11-25T10:00:00.000Z"), equals: "today", "a full timestamp reads too")
+        runner.expect(age("2027-01-01"), equals: "today", "a future date is not negative")
+        runner.expect(age("") == nil, "empty is unknown")
+    }
+
+    runner.test("each status offers exactly one visible action and the rest in the menu") {
+        let prov = BacklogRowActions.forStatus("provisional")
+        runner.expect(prov.primary, equals: .keep, "a capture is kept or not")
+        runner.expect(prov.menu, equals: [.dismiss], "dismiss is away from keep")
+        let open = BacklogRowActions.forStatus("open")
+        runner.expect(open.primary, equals: .plan, "open work is planned")
+        runner.expect(open.menu, equals: [.done, .export, .dismiss], "the rest")
+        runner.expect(BacklogRowActions.forStatus("doing").primary, equals: .done, "work in flight is finished")
+        runner.expect(BacklogRowActions.forStatus("done").primary, equals: .reopen, "a resolved item reopens")
+        runner.expect(BacklogRowActions.forStatus("dismissed").menu.isEmpty, "nothing else on a resolved row")
+        runner.expect(BacklogAction.dismiss.isDestructive, "dismiss is the destructive one")
+        runner.expect(!BacklogAction.done.isDestructive, "done is not")
+        runner.expect(BacklogAction.keep.targetStatus, equals: "open", "keep opens it")
+        runner.expect(BacklogAction.dismiss.targetStatus, equals: "dismissed", "dismiss dismisses")
+        runner.expect(BacklogAction.plan.targetStatus == nil, "planning is not a status change here")
+    }
+
+    runner.test("a bulk review names its count, and only ever touches captures") {
+        let shown = BacklogBrowse.filter(items, BacklogFilter(scope: .review))
+        let all = BacklogBulk.targets(selected: [], shown: shown)
+        runner.expect(all.items.map(\.id), equals: ["d", "e"], "nothing selected: every capture shown")
+        runner.expect(!all.fromSelection, "not from a selection")
+        runner.expect(BacklogBulk.buttonTitle(.keep, all), equals: "Keep all 2…", "the count is on the button")
+        runner.expect(BacklogBulk.confirmTitle(.dismiss, all), equals: "Dismiss all 2 auto-captured items?", "and in the question")
+        let one = BacklogBulk.targets(selected: ["d"], shown: shown)
+        runner.expect(one.items.count, equals: 2, "a single selected item is not a bulk subject")
+        let sel = BacklogBulk.targets(selected: ["d", "e", "a"], shown: shown + [items[0]])
+        runner.expect(sel.items.map(\.id), equals: ["d", "e"], "a non-capture in the selection is ignored")
+        runner.expect(sel.fromSelection, "two captures selected: the selection is the subject")
+        runner.expect(BacklogBulk.buttonTitle(.dismiss, sel), equals: "Dismiss 2 selected…", "selected wording")
+        runner.expect(BacklogBulk.confirmTitle(.keep, sel), equals: "Keep the 2 selected auto-captured items?", "selected question")
+        runner.expect(BacklogBulk.targets(selected: ["a", "b"], shown: [items[0], items[1]]).items.isEmpty, "open items are never a bulk target")
+        runner.expect(BacklogBulk.Kind.keep.status, equals: "open", "keep opens")
+        runner.expect(BacklogBulk.Kind.dismiss.status, equals: "dismissed", "dismiss dismisses")
+    }
+
+    runner.test("a body splits into description, dated notes and links") {
+        let body = """
+        The capped delay synchronises clients. See https://example.com/issue/12.
+
+        > note 2026-11-10 — waiting on the retry design
+        > dismissed — superseded by the new client
+        > a free line
+
+        <!-- marvin:links -->
+        **Related:** [ADR-0044](docs/decisions/0044.md) · [[backlog-groom]]
+        """
+        let p = BacklogBody.parse(body)
+        runner.expect(p.text, equals: "The capped delay synchronises clients. See https://example.com/issue/12.", "description without notes or trailer")
+        runner.expect(p.notes.count, equals: 3, "three notes")
+        runner.expect(p.notes[0], equals: BacklogNote(date: "2026-11-10", label: "note", text: "waiting on the retry design"), "dated note")
+        runner.expect(p.notes[1], equals: BacklogNote(date: nil, label: "dismissed", text: "superseded by the new client"), "resolution note")
+        runner.expect(p.notes[2], equals: BacklogNote(date: nil, label: "note", text: "a free line"), "free note")
+        runner.expect(p.links.map(\.target), equals: ["docs/decisions/0044.md", "backlog-groom", "https://example.com/issue/12"], "related links first, then bare urls, trailing dot dropped")
+        runner.expect(p.links[0].label, equals: "ADR-0044", "link label")
+        runner.expect(BacklogBody.parse("").text, equals: "", "empty body")
+    }
+
+    runner.test("folded groups are remembered, and the default can be folded too") {
+        var d = BrowseDisclosure(raw: "")
+        runner.expect(!d.isCollapsed("high"), "open by default")
+        d.toggle("high")
+        runner.expect(d.isCollapsed("high"), "folded")
+        runner.expect(BrowseDisclosure(raw: d.raw).isCollapsed("high"), "survives a string round trip")
+        d.toggle("high")
+        runner.expect(d.raw, equals: "", "back to default stores nothing")
+        runner.expect(d.isCollapsed("older", defaultCollapsed: true), "folded by default")
+        d.toggle("older", defaultCollapsed: true)
+        runner.expect(!d.isCollapsed("older", defaultCollapsed: true), "opened")
+        runner.expect(!BrowseDisclosure(raw: d.raw).isCollapsed("older", defaultCollapsed: true), "an opened default-folded group stays open")
+        d.prune(keeping: ["high"])
+        runner.expect(d.raw, equals: "", "choices about vanished groups are dropped")
+    }
+
+    runner.test("the remembered window size survives, clamped to what the window allows") {
+        runner.expect(WindowSizeMemory.encode(width: 940.4, height: 700), equals: "940,700", "encode")
+        let ok = WindowSizeMemory.decode("940,700", minWidth: 720, minHeight: 520)
+        runner.expect(ok?.width == 940 && ok?.height == 700, "decode")
+        let small = WindowSizeMemory.decode("300,200", minWidth: 720, minHeight: 520)
+        runner.expect(small?.width == 720 && small?.height == 520, "never below the minimum")
+        runner.expect(WindowSizeMemory.decode("garbage", minWidth: 1, minHeight: 1) == nil, "garbage is ignored")
+        runner.expect(WindowSizeMemory.decode("", minWidth: 1, minHeight: 1) == nil, "empty is ignored")
+    }
+}
+
+runner.suite("plans-pane-standard") {
+    let now = ISO8601DateFormatter().date(from: "2026-11-25T12:00:00Z")!
+    func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
+    func plan(_ id: String, _ title: String, done: Int, of total: Int) -> Plan {
+        let steps = (1...max(total, 1)).map { PlanStep(content: "Step \($0) of \(title)", status: $0 <= done ? "completed" : "pending") }
+        return Plan(id: id, title: title, text: "", path: nil, steps: total == 0 ? [] : steps)
+    }
+
+    runner.test("a step state has its own glyph and its own word, so colour is never the only cue") {
+        let states = ["pending", "in_progress", "completed", TodoItem.superseded].map(PlanStepState.init(status:))
+        runner.expect(states, equals: [.pending, .inProgress, .completed, .superseded], "mapping")
+        runner.expect(Set(states.map(\.glyph)).count, equals: 4, "four different glyphs")
+        runner.expect(Set(states.map(\.word)).count, equals: 4, "four different words")
+        runner.expect(PlanStepState.superseded.word, equals: "Superseded", "superseded reads as superseded")
+        runner.expect(PlanStepState.superseded.glyph != PlanStepState.completed.glyph, "never the tick of a done step")
+        runner.expect(PlanStepState(status: "something else"), equals: .pending, "unknown reads as pending")
+        runner.expect(PlanStepState.superseded.isClosed && PlanStepState.completed.isClosed, "both are out of the way")
+        runner.expect(!PlanStepState.superseded.countsAsDone, "superseded is not done")
+    }
+
+    runner.test("progress is done over total, and a sub-step count leaves out superseded ones") {
+        runner.expect(PlanProgressText.text(done: 3, total: 12), equals: "3 / 12", "done / total")
+        runner.expect(PlanProgressText.fraction(done: 3, total: 12), equals: 0.25, "bar fill")
+        runner.expect(PlanProgressText.fraction(done: 0, total: 0), equals: 0, "no steps, no divide")
+        let step = PlanStep(content: "x", status: "in_progress", subtasks: [
+            TodoItem(content: "a", status: "completed", activeForm: nil),
+            TodoItem(content: "b", status: "pending", activeForm: nil),
+            TodoItem(content: "c", status: TodoItem.superseded, activeForm: nil),
+        ])
+        let sub = PlanProgressText.sub(step)
+        runner.expect(sub.done == 1 && sub.total == 2 && sub.superseded == 1, "1 of 2, one superseded set aside")
+    }
+
+    runner.test("a long step shows its lead and keeps the whole text one click away") {
+        let long = "**Wire the gate.** The gate reads the diff the commit seals and refuses a boundary path without both reviews, then logs the refusal for the practice loop."
+        runner.expect(PlanStepDisplay.lead(long), equals: "Wire the gate.", "the bold lead")
+        runner.expect(PlanStepDisplay.hasMore(long), "the rest can be expanded")
+        runner.expect(!PlanStepDisplay.hasMore("Add the retry test"), "a short step has nothing to expand")
+        runner.expect(!PlanStepDisplay.hasMore("**Add the retry test**"), "emphasis alone is not 'more'")
+        runner.expect(PlanStepDisplay.full(long), equals: "Wire the gate. The gate reads the diff the commit seals and refuses a boundary path without both reviews, then logs the refusal for the practice loop.", "emphasis markers are dropped from the full text")
+    }
+
+    runner.test("a plan says how fresh it is, and flags one that has gone quiet") {
+        runner.expect(PlanFreshness.label(updated: ago(0.2), now: now), equals: "updated just now", "seconds")
+        runner.expect(PlanFreshness.label(updated: ago(12), now: now), equals: "updated 12m ago", "minutes")
+        runner.expect(PlanFreshness.label(updated: ago(180), now: now), equals: "updated 3h ago", "hours")
+        runner.expect(PlanFreshness.label(updated: ago(60 * 50), now: now), equals: "updated 2d ago", "days")
+        runner.expect(PlanFreshness.label(updated: nil, now: now) == nil, "no date, no claim")
+        runner.expect(PlanFreshness.isStale(updated: ago(45), complete: false, now: now), "an unfinished plan quiet for 45 minutes is stale")
+        runner.expect(!PlanFreshness.isStale(updated: ago(12), complete: false, now: now), "12 minutes is not")
+        runner.expect(!PlanFreshness.isStale(updated: ago(60 * 40), complete: true, now: now), "a finished plan is never stale")
+        runner.expect(!PlanFreshness.isStale(updated: nil, complete: false, now: now), "unknown is not flagged")
+    }
+
+    runner.test("past plans are grouped active, recent, older, newest first") {
+        let plans = [
+            plan("old1", "Old finished", done: 4, of: 4),
+            plan("act", "Retry backoff", done: 3, of: 12),
+            plan("rec1", "Recent finished", done: 2, of: 2),
+            plan("rec2", "Recent unfinished", done: 1, of: 5),
+            plan("nodate-open", "No date, unfinished", done: 0, of: 3),
+            plan("nodate-done", "No date, finished", done: 3, of: 3),
+        ]
+        let dates: [String: Date] = ["old1": ago(60 * 24 * 20), "act": ago(3), "rec1": ago(60 * 24 * 2), "rec2": ago(60 * 5)]
+        let s = PlanBrowse.sections(plans, activeId: "act", updated: { dates[$0.id] }, now: now, query: "")
+        runner.expect(s.map(\.kind), equals: [.active, .recent, .older], "three groups")
+        runner.expect(s[0].plans.map(\.id), equals: ["act"], "the active plan is alone in its group")
+        runner.expect(s[1].plans.map(\.id), equals: ["rec2", "rec1", "nodate-open"], "recent, newest first, undated unfinished last")
+        runner.expect(s[2].plans.map(\.id), equals: ["old1", "nodate-done"], "older, undated finished last")
+        runner.expect(PlanGroupKind.older.title, equals: "Older", "title")
+        runner.expect(PlanGroupKind.older.startsCollapsed && !PlanGroupKind.active.startsCollapsed && !PlanGroupKind.recent.startsCollapsed, "only older starts folded")
+    }
+
+    runner.test("a search narrows by title or step text, and an empty group vanishes") {
+        let plans = [plan("a", "Retry backoff", done: 1, of: 3), plan("b", "Cache layer", done: 0, of: 2)]
+        let s = PlanBrowse.sections(plans, activeId: nil, updated: { _ in nil }, now: now, query: "cache")
+        runner.expect(s.flatMap { $0.plans.map(\.id) }, equals: ["b"], "title match")
+        runner.expect(PlanBrowse.sections(plans, activeId: nil, updated: { _ in nil }, now: now, query: "step 2 of retry").flatMap { $0.plans.map(\.id) }, equals: ["a"], "a step's text matches")
+        runner.expect(PlanBrowse.sections(plans, activeId: nil, updated: { _ in nil }, now: now, query: "zzz").isEmpty, "nothing matches, nothing shows")
+        runner.expect(PlanBrowse.sections([], activeId: nil, updated: { _ in nil }, now: now, query: "").isEmpty, "no plans")
+    }
+
+    runner.test("a finished plan is one line; an unfinished one shows its steps; the active one always does") {
+        runner.expect(PlanBrowse.startsExpanded(plan("a", "A", done: 2, of: 2), isActive: false) == false, "finished and not active: folded")
+        runner.expect(PlanBrowse.startsExpanded(plan("a", "A", done: 2, of: 2), isActive: true) == false, "finished is folded even when active")
+        runner.expect(PlanBrowse.startsExpanded(plan("a", "A", done: 1, of: 2), isActive: true), "active and unfinished: open")
+        runner.expect(PlanBrowse.startsExpanded(plan("a", "A", done: 1, of: 2), isActive: false) == false, "unfinished but not active: folded")
+    }
+}
+
 runner.suite("status-bar-text-r2-14") {
     runner.test("the context figure states its limit") {
         runner.expect(StatusBarText.windowLabel(1_000_000), equals: "1M", "a million")
