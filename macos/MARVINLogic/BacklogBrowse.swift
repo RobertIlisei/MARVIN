@@ -507,7 +507,9 @@ public enum BacklogBody {
             }
             text.append(raw)
         }
-        let plain = text.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        var plain = text.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Taking the notes and the trailer out leaves their blank lines behind.
+        while plain.contains("\n\n\n") { plain = plain.replacingOccurrences(of: "\n\n\n", with: "\n\n") }
         for url in urls(in: plain) { addLink(BacklogLink(label: url, target: url)) }
         return BacklogBodyParts(text: plain, notes: notes, links: links)
     }

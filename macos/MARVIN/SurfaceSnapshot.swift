@@ -281,21 +281,8 @@ enum SurfaceSnapshot {
                     onDismiss: {}))
             }]
 
-        let backlog: [Surface] =
-            pair("backlog-panel", "Backlog panel", widths: [420, 640], height: 640, empty: "the list loads from the sidecar") {
-                AnyView(BacklogPanel(workDir: SurfaceFixtures.project, onPromote: { _ in }, onClose: {}, onChanged: {}))
-            }
-            // At the panel's real width (its minimum is 720), with a description
-            // longer than the row's three-line preview.
-            + [Surface("backlog-panel-long", "Backlog panel — long description, at its real width",
-                       .populated, widths: [720, 920], height: 640) {
-                AnyView(BacklogPanel(workDir: SurfaceFixtures.project, onPromote: { _ in }, onClose: {}, onChanged: {}))
-            }]
-            + [Surface("backlog-detail", "Backlog item detail", .fixture, widths: [460, 640], height: 560) {
-                guard let item = SurfaceFixtures.backlogItem else { return nil }
-                return AnyView(BacklogDetailView(workDir: SurfaceFixtures.project, item: item,
-                                                 onPromote: { _ in }, onChanged: {}, onDismissSheet: {}))
-            }]
+        // The Backlog window and the Plans surfaces: SurfaceSnapshotBacklogPlans.swift.
+        let backlog: [Surface] = BacklogPlansFixtures.surfaces()
 
         let settings: [Surface] =
             pair("settings", "Settings", widths: [520, 760], height: 620, empty: "default bridge, offline health") {

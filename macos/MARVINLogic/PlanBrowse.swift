@@ -186,4 +186,9 @@ public enum PlanBrowse {
     public static func startsExpanded(_ plan: Plan, isActive: Bool) -> Bool {
         isActive && !plan.isComplete
     }
+
+    /// A step's `[N.M]` sub-steps are noise once the step is done.
+    public static func subStepsStartOpen(_ step: PlanStep) -> Bool {
+        step.status != "completed"
+    }
 }

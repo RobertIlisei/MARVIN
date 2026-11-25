@@ -64,8 +64,6 @@ import SwiftUI
     /// Height at the moment the current drag began — see `resizeGrip`.
     @State private var dragStartHeight: Double = 132
     @State private var dragging = false
-    /// R2-08 — a plan shows its first few steps; the rest are one click away.
-    @State private var showAllSteps = false
     private static let stepCap = 5
 
     /// Tier 2 (plan-backed) vs tier 1 (bare task list). Drives every
@@ -113,14 +111,9 @@ import SwiftUI
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                // "0/3" beside a list with two ticks read as a contradiction:
-                // the count is of top-level steps, the ticks are sub-tasks
-                // (U20). Say what is counted.
-                Text(isPlan ? "\(done) of \(total) steps" : "\(done) of \(total)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+                // "3 / 12" and a quiet bar. The count is of top-level steps
+                // (sub-steps never drive it, ADR-0046); the bar says it at a glance.
+                PlanProgressMeter(done: done, total: total, tint: tint, barWidth: 44)
                 // ADR-0046 — switch the active plan when more than one exists,
                 // so a newer plan never strands the earlier ones.
                 if isPlan, plans.count > 1, let onSelectPlan {
@@ -183,24 +176,11 @@ import SwiftUI
                     VStack(alignment: .leading, spacing: 2) {
                         if let steps {
                             // Tier 2 — top-level steps, each with its nested
-                            // sub-tasks indented beneath (ADR-0046).
-                            // R2-08 — five rows, then "Show all N": a plan of eight
-                            // paragraphs read as a wall inside a scrolling card.
-                            ForEach(showAllSteps ? steps : Array(steps.prefix(Self.stepCap))) { step in
-                                row(TodoItem(content: step.content, status: step.status, activeForm: step.activeForm))
-                                ForEach(Array(step.subtasks.enumerated()), id: \.offset) { _, sub in
-                                    row(sub, indent: true)
-                                }
-                            }
-                            if steps.count > Self.stepCap {
-                                Button(showAllSteps ? "Show fewer" : "Show all \(steps.count)") {
-                                    MarvinMotion.with(.easeOut(duration: 0.15)) { showAllSteps.toggle() }
-                                }
-                                .buttonStyle(.plain)
-                                .font(.system(size: 10))
-                                .foregroundStyle(tint)
-                                .padding(.leading, 17)
-                            }
+                            // sub-tasks beneath (ADR-0046). Five rows, then
+                            // "Show all N" (R2-08): eight paragraphs read as a
+                            // wall inside a scrolling card. A step is its lead;
+                            // the whole text is one click away.
+                            PlanStepsView(steps: steps, limit: Self.stepCap, tint: tint, compact: true)
                         } else {
                             ForEach(Array(todos.enumerated()), id: \.offset) { _, item in
                                 row(item)
@@ -288,9 +268,7 @@ import SwiftUI
         // it came from. The whole text stays in the tooltip.
         let label = PlanStepTitle.lead(full)
         return HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: statusIcon(item.status))
-                .font(.system(size: indent ? 10 : 11))
-                .foregroundStyle(statusColour(item.status))
+            PlanStateGlyph(state: PlanStepState(status: item.status), tint: tint, size: indent ? 10 : 11)
             // The tick already says "done", so a finished step is dimmed, not
             // struck through (a struck-through paragraph is the loudest thing in
             // the strip), and the step in progress is the one at full weight.
@@ -308,22 +286,5 @@ import SwiftUI
         // the MARVIN_SNAPSHOT_TODO probe bisect, 2026-09-08 — same lesson as
         // v0.1.93's WidthReporter: don't insert views to do geometry's job).
         .padding(.leading, indent ? 20 : 0)
-    }
-
-    private func statusIcon(_ s: String) -> String {
-        switch s {
-        case "completed": return "checkmark.circle.fill"
-        case "in_progress": return "circle.dotted"
-        case TodoItem.superseded: return "minus.circle"
-        default: return "circle"
-        }
-    }
-
-    private func statusColour(_ s: String) -> Color {
-        switch s {
-        case "completed": return .green
-        case "in_progress": return tint
-        default: return .secondary
-        }
     }
 }

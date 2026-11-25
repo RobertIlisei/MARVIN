@@ -2346,6 +2346,9 @@ final class ChatPreviewModel {
     @State private var columnHeight: CGFloat = 0
     /// ADR-0044 — backlog browser sheet.
     @State private var backlogPanelOpen = false
+    /// The chat's "N backlog items parked" line opens the window at the
+    /// auto-captured review (it falls back to Open when there is none).
+    @State private var backlogStartsAtReview = false
     @State private var plansPanelOpen = false
     // ADR-0059 — session auditor. `auditReport` drives the findings sheet;
     // the audit runs out-of-band and never touches the executor's context.
@@ -2637,7 +2640,11 @@ final class ChatPreviewModel {
             Text("\(filePickCandidates.count) files share that name.")
         }
         .onReceive(NotificationCenter.default.publisher(for: .marvinRequestBacklogPanel)) { _ in
+            backlogStartsAtReview = false
             backlogPanelOpen = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .marvinRequestPlansPanel)) { _ in
+            plansPanelOpen = true
         }
         // Editor right-click AI actions. Queued when a turn is in flight rather
         // than dropped — `sendControl` guards on `!isSending`, and the backlog
@@ -2659,6 +2666,7 @@ final class ChatPreviewModel {
             if let wd = bridge.projectWorkDir {
                 BacklogPanel(
                     workDir: wd,
+                    startAtReview: backlogStartsAtReview,
                     onPromote: { item in promoteBacklog(item, workDir: wd) },
                     onClose: { backlogPanelOpen = false },
                     onChanged: { model.refreshBacklogCount() }
@@ -4713,7 +4721,7 @@ final class ChatPreviewModel {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
             Spacer()
-            Button("Open") { backlogPanelOpen = true }
+            Button("Open") { backlogStartsAtReview = true; backlogPanelOpen = true }
                 .font(.system(size: 11))
         }
         .padding(.horizontal, 12)

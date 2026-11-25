@@ -1,42 +1,31 @@
-// BacklogPanel — ADR-0044.
-// A browsable sheet over the project backlog: open/doing items with per-row
-// Done / Dismiss / Promote-to-plan / (optional) Export-to-issue, plus a manual
-// add row. A PARKING LOT the user revisits — promotion to a turn is always a
-// user action (never auto-drained). Mirrors SkillsPane's sheet conventions.
+// BacklogPanel — the Project Backlog window (ADR-0044, ADR-0047, ADR-0063,
+// ADR-0064).
+//
+// A project's backlog is hundreds of items, so the window is a browser, not a
+// scroll of cards: a scope switch (Open / To review / Resolved), a search
+// field, sort / group / filter menus, groups with a count and a disclosure,
+// rows on the pane standard (title, one secondary line, one visible action,
+// the rest in a menu), and a detail area for the selected item. It is a
+// PARKING LOT the user revisits — promotion to a turn is always a user act,
+// and so is keep / dismiss of an auto-captured item: capture stays un-gated,
+// the bulk review names its count and asks first.
+//
+// What is shown, in which order, under which heading, and which action a row
+// leads with are decided in `MARVINLogic/BacklogBrowse.swift` and tested
+// there. This file draws the result.
+//
+// Keyboard: ⌘F focuses the search field, ↑↓ moves through the list, Return
+// does the selected row's visible action, ⌘-click / ⇧-click select several,
+// Esc (or ⌘W) closes — Esc clears the search first when it has text.
 
 import MARVINLogic
 import SwiftUI
 
-/// How the active list is ordered. Persisted via @AppStorage.
-enum BacklogSort: String, CaseIterable, Identifiable {
-    case severity, newest, oldest, title
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .severity: return "Severity"
-        case .newest:   return "Newest"
-        case .oldest:   return "Oldest"
-        case .title:    return "Title"
-        }
-    }
-}
-
-/// Optional banding of the active list.
-enum BacklogGroup: String, CaseIterable, Identifiable {
-    case none, severity, status, kind
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .none:     return "None"
-        case .severity: return "Severity"
-        case .status:   return "Status"
-        case .kind:     return "Kind"
-        }
-    }
-}
-
 @MainActor struct BacklogPanel: View {
     let workDir: String
+    /// Open on "To review" — the chat's "N backlog items parked" line asks for
+    /// this. It only applies when there is something to review.
+    var startAtReview = false
     /// Parent seeds a turn from the item (model.sendControl) + flips it to `doing`.
     let onPromote: (BacklogItem) -> Void
     let onClose: () -> Void
@@ -48,92 +37,495 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
     /// The first fetch has finished (successfully or not) — until then the
     /// list shows a skeleton, never the empty state.
     @State private var hasLoaded = false
-    @State private var error: String?
-    /// A success is not an error: "Filed: url" used to go through the red
-    /// error text (audit K25).
-    @State private var filedNote: String?
-    /// Possible-duplicate notice after a manual add (ADR-0044 addendum).
-    /// Separate from `error` because the add SUCCEEDED — conflating the two
-    /// would read as a rejection.
-    @State private var duplicateHint: String?
-    /// Groom findings (ADR-0063), keyed to items by id. Empty until the user
-    /// presses Review; cleared explicitly. Purely an annotation layer — no
-    /// code path turns a finding into a mutation.
+    @State private var loadError: String?
+    @State private var notice: PaneNotice?
+    /// Groom findings (ADR-0063), keyed to items by id. Purely an annotation
+    /// layer — no code path turns a finding into a mutation.
     @State private var findings: [BacklogFinding] = []
     @State private var isGrooming = false
     @State private var groomTruncated = false
-    /// Narrow the list to flagged items. Turned ON automatically by a review
-    /// that finds something — pressing Review means "show me what's wrong", and
-    /// leaving the user to hunt for annotations in a 66-row list does not.
     @State private var onlyFlagged = false
-    /// Hide items waiting on something outside the repo (ADR-0064). Off by
-    /// default — hiding work silently is worse than showing it marked.
-    @State private var hideBlocked = false
+
+    @State private var scope: BacklogScope
+    @State private var query = ""
+    @State private var selection: Set<String> = []
     @State private var newTitle = ""
-    /// Item opened in the detail sheet (severity/body editing, resolve
-    /// with note). Nested sheet on the panel sheet — macOS stacks fine.
-    @State private var detailItem: BacklogItem?
-    @State private var bulkAction: BulkReview?
+    @State private var bulk: BacklogBulk.Kind?
+    @State private var containerWidth: CGFloat = 0
+    @State private var dragStartWidth: Double?
+    @FocusState private var searchFocused: Bool
 
-    // Sort / group / filter — persisted so the user's view survives a
-    // relaunch (mirrors the localStorage-backed prefs the web shell used).
-    @AppStorage("marvin.backlog.sort")  private var sort: BacklogSort = .severity
-    @AppStorage("marvin.backlog.group") private var group: BacklogGroup = .none
-    @AppStorage("marvin.backlog.showHigh")     private var showHigh = true
-    @AppStorage("marvin.backlog.showMed")      private var showMed = true
-    @AppStorage("marvin.backlog.showLow")      private var showLow = true
-    @AppStorage("marvin.backlog.showResolved") private var showResolved = false
-    /// Kinds the user has switched OFF, comma-joined (ADR-0064). Stored as one
-    /// string rather than a flag per kind so adding a kind later doesn't strand
-    /// a new @AppStorage key — and an empty string means "show everything",
-    /// which is the right default for a filter nobody has touched.
+    // Sort / group / filter — persisted so the view survives a relaunch.
+    @AppStorage("marvin.backlog.sort") private var sort: BacklogSort = .severity
+    @AppStorage("marvin.backlog.group") private var group: BacklogGroup = .severity
+    @AppStorage("marvin.backlog.showHigh") private var showHigh = true
+    @AppStorage("marvin.backlog.showMed") private var showMed = true
+    @AppStorage("marvin.backlog.showLow") private var showLow = true
+    /// Kinds switched OFF, comma-joined (ADR-0064): empty means "show everything".
     @AppStorage("marvin.backlog.hiddenKinds") private var hiddenKindsRaw = ""
+    @AppStorage("marvin.backlog.blocked") private var blocked: BacklogBlockedFilter = .all
+    @AppStorage("marvin.backlog.folded") private var foldedRaw = ""
+    @AppStorage("marvin.backlog.listWidth") private var listWidth: Double = 420
 
-    /// Actionable items (open+doing), unfiltered — drives the header badge.
-    private var active: [BacklogItem] {
-        items.filter { $0.status == "open" || $0.status == "doing" }
-    }
-    /// ADR-0047 — auto-captured items awaiting the user's keep/dismiss.
-    private var provisional: [BacklogItem] {
-        items.filter { $0.status == "provisional" }
-    }
+    private static let minList: Double = 320
+    private static let minDetail: Double = 300
 
-    /// Any non-provisional item exists → the sort/group/filter strip is worth
-    /// showing (and an empty visible-set means "filtered out", not "empty").
-    private var hasControllable: Bool {
-        items.contains { ["open", "doing", "done", "dismissed"].contains($0.status) }
-    }
-
-    /// The active list after status-scope + severity filter + sort. Provisional
-    /// items are handled in their own review band and never appear here.
-    private var visible: [BacklogItem] {
-        // Hoisted: each of these re-read defaults / rebuilt a set per ITEM.
-        let flagged = flaggedIds
-        let hidden = hiddenKinds
-        let (high, med, low) = (showHigh, showMed, showLow)
-        return items
-            .filter { item in
-                switch item.status {
-                case "open", "doing":     return true
-                case "done", "dismissed": return showResolved
-                default:                  return false
-                }
-            }
-            .filter { item in
-                switch item.severity { case "high": return high; case "low": return low; default: return med }
-            }
-            // Review focus (ADR-0063 addendum). Findings land on stale and
-            // duplicated items, which are OLD by definition — under the default
-            // "Newest" sort every one of them sinks below the fold. A count with
-            // no way to reach it reads as "22 findings and I can't see any".
-            .filter { !onlyFlagged || flagged.contains($0.id) }
-            .filter { !hideBlocked || !$0.isBlocked }
-            .filter { !hidden.contains($0.kindOrUnspecified) }
-            .sorted(by: sortComparator)
+    init(workDir: String, startAtReview: Bool = false, initialSelection: String? = nil,
+         onPromote: @escaping (BacklogItem) -> Void,
+         onClose: @escaping () -> Void,
+         onChanged: @escaping () -> Void) {
+        self.workDir = workDir
+        self.startAtReview = startAtReview
+        self.onPromote = onPromote
+        self.onClose = onClose
+        self.onChanged = onChanged
+        _scope = State(initialValue: startAtReview ? .review : .open)
+        _selection = State(initialValue: initialSelection.map { [$0] } ?? [])
     }
 
+    // MARK: Derived
+
+    private var counts: BacklogCounts { BacklogBrowse.counts(items) }
+    private var flaggedIds: Set<String> { Set(findings.map(\.id)) }
     private var hiddenKinds: Set<String> {
         Set(hiddenKindsRaw.split(separator: ",").map(String.init)).subtracting([""])
+    }
+
+    private var filter: BacklogFilter {
+        var sev: Set<String> = []
+        if showHigh { sev.insert("high") }
+        if showMed { sev.insert("med") }
+        if showLow { sev.insert("low") }
+        return BacklogFilter(scope: scope, query: query, severities: sev, hiddenKinds: hiddenKinds,
+                             blocked: blocked, onlyIds: onlyFlagged ? flaggedIds : nil)
+    }
+
+    private var subtitle: String {
+        let c = counts
+        var parts = ["\(c.open) open"]
+        if c.review > 0 { parts.append("\(c.review) to review") }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: Body
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PaneHeader(title: "Project backlog", symbol: "tray.full", uppercase: false, subtitle: hasLoaded ? subtitle : nil) {
+                Button(action: onClose) { Image(systemName: "xmark") }
+                    .paneIconButton(10)
+                    .help("Close (Esc)")
+                    .accessibilityLabel("Close the backlog")
+            }
+            MarvinDivider()
+            toolbar
+            MarvinDivider()
+            if !findings.isEmpty { groomStrip }
+            if let notice {
+                PaneNoticeStrip(notice: notice, onDismiss: { self.notice = nil })
+                    .padding(.bottom, 4)
+            }
+            content
+        }
+        .frame(minWidth: 720, idealWidth: 940, maxWidth: .infinity,
+               minHeight: 520, idealHeight: 700, maxHeight: .infinity)
+        .background(MarvinTheme.panel)
+        .background(PaneWindowMemory(key: "marvin.backlog.windowSize", minWidth: 720, minHeight: 520))
+        .background { shortcuts }
+        .task {
+            await refresh()
+            adjustInitialScope()
+        }
+        .onChange(of: filter) { _, _ in selection.formIntersection(visibleIds) }
+        .confirmationDialog(
+            bulk.map { BacklogBulk.confirmTitle($0, bulkTargets) } ?? "",
+            isPresented: Binding(get: { bulk != nil }, set: { if !$0 { bulk = nil } }),
+            titleVisibility: .visible
+        ) {
+            if let kind = bulk {
+                Button("\(kind.verb) \(bulkTargets.items.count)", role: kind == .dismiss ? .destructive : nil) {
+                    let ids = bulkTargets.items.map(\.id)
+                    bulk = nil
+                    Task { await setStatuses(ids, kind.status) }
+                }
+            }
+            Button("Cancel", role: .cancel) { bulk = nil }
+        } message: {
+            Text(bulk?.explanation ?? "")
+        }
+    }
+
+    /// Hidden buttons carry the window's shortcuts so they work wherever focus is.
+    private var shortcuts: some View {
+        VStack {
+            Button("Search") { searchFocused = true }.keyboardShortcut("f", modifiers: .command)
+            Button("Close") { onClose() }.keyboardShortcut("w", modifiers: .command)
+            Button("Close") { onClose() }.keyboardShortcut(.cancelAction)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: Toolbar
+
+    private var toolbar: some View {
+        HStack(spacing: 10) {
+            Picker("Show", selection: $scope) {
+                ForEach(BacklogScope.allCases) { s in
+                    Text(hasLoaded ? "\(s.title) \(counts.count(s))" : s.title).tag(s)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("Open items, auto-captured items waiting for a decision, or resolved items")
+
+            Spacer(minLength: 8)
+
+            // Icons with tooltips, as a Mac toolbar does: at the window's
+            // minimum width the labels would not fit.
+            PaneSearchField(text: $query, prompt: "Search backlog", width: nil, focus: $searchFocused)
+                .frame(minWidth: 140, idealWidth: 200, maxWidth: 220)
+
+            Menu {
+                Picker("Sort by", selection: $sort) {
+                    ForEach(BacklogSort.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.inline)
+            } label: { Label("Sort", systemImage: "arrow.up.arrow.down").labelStyle(.iconOnly) }
+                .menuStyle(.borderlessButton).fixedSize()
+                .help("Sort: \(sort.label)")
+                .accessibilityLabel("Sort, currently \(sort.label)")
+
+            Menu {
+                Picker("Group by", selection: $group) {
+                    ForEach(BacklogGroup.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.inline)
+                if group != .none {
+                    Divider()
+                    Button("Fold All Groups") { foldAll(true) }
+                    Button("Unfold All Groups") { foldAll(false) }
+                }
+            } label: { Label("Group", systemImage: "square.stack.3d.up").labelStyle(.iconOnly) }
+                .menuStyle(.borderlessButton).fixedSize()
+                .help("Group: \(group.label)")
+                .accessibilityLabel("Group, currently \(group.label)")
+
+            Menu {
+                Section("Severity") {
+                    Toggle("High", isOn: $showHigh)
+                    Toggle("Medium", isOn: $showMed)
+                    Toggle("Low", isOn: $showLow)
+                }
+                Section("Kind") {
+                    ForEach(BacklogBrowse.kindOrder, id: \.self) { k in
+                        Toggle(BacklogBrowse.kindTitle(k), isOn: Binding(
+                            get: { !hiddenKinds.contains(k) }, set: { _ in toggleKind(k) }))
+                    }
+                }
+                Section("Waiting") {
+                    Picker("Blocked", selection: $blocked) {
+                        ForEach(BacklogBlockedFilter.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                }
+                if filter.activeFilterCount > 0 {
+                    Divider()
+                    Button("Clear Filters") { clearFilters() }
+                }
+            } label: {
+                // A non-default filter shows its count, so a list that silently
+                // omits rows is never mistaken for an empty backlog.
+                HStack(spacing: 3) {
+                    Image(systemName: filter.activeFilterCount > 0
+                          ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    if filter.activeFilterCount > 0 { Text("\(filter.activeFilterCount)").monospacedDigit() }
+                }
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+            .help(filter.activeFilterCount > 0 ? "Filters are narrowing the list" : "Filter by severity, kind or blocked")
+            .accessibilityLabel(filter.activeFilterCount > 0 ? "Filter, \(filter.activeFilterCount) active" : "Filter")
+
+            // Review (ADR-0063) is read-only: it annotates rows with findings
+            // and changes nothing.
+            Button {
+                Task { await runGroom() }
+            } label: {
+                if isGrooming { ProgressView().controlSize(.small).scaleEffect(0.7) }
+                else { Label("Review", systemImage: "checklist") }
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(MarvinTheme.textPrimary)
+            .disabled(isGrooming)
+            .help("Look for duplicates, stale items, unreviewed captures and references to files that no longer exist. Read-only.")
+        }
+        .font(.system(size: 11))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
+    /// The review's own strip: what it found, and one action to focus on it.
+    private var groomStrip: some View {
+        PaneNoticeStrip(
+            notice: PaneNotice(
+                kind: .warning,
+                headline: "\(findings.count) finding\(findings.count == 1 ? "" : "s")"
+                    + (groomTruncated ? " (capped — more remain)" : "")
+                    + " on \(flaggedIds.count) item\(flaggedIds.count == 1 ? "" : "s") — suggestions, nothing was changed.",
+                detail: onlyFlagged ? "Showing only the flagged items." : nil),
+            actionTitle: onlyFlagged ? "Show all" : "Only flagged",
+            onAction: { onlyFlagged.toggle() },
+            onDismiss: { findings = []; groomTruncated = false; onlyFlagged = false }
+        )
+        .padding(.bottom, 4)
+    }
+
+    // MARK: Content
+
+    @ViewBuilder private var content: some View {
+        if !hasLoaded && items.isEmpty {
+            ScrollView { SkeletonRows(count: 9, detailLines: 1).padding(14) }
+                .scrollDisabled(true)
+        } else if items.isEmpty, let loadError {
+            PaneEmptyView(
+                state: PaneEmptyState(headline: "Couldn’t load the backlog", hint: loadError, symbol: "exclamationmark.triangle"),
+                actionTitle: "Try Again", action: { Task { await refresh() } })
+                .frame(maxHeight: .infinity)
+        } else {
+            split
+        }
+    }
+
+    private var effectiveListWidth: CGFloat {
+        let wanted = CGFloat(liveWidth ?? listWidth)
+        guard containerWidth > 0 else { return max(wanted, CGFloat(Self.minList)) }
+        return min(max(wanted, CGFloat(Self.minList)), max(CGFloat(Self.minList), containerWidth - CGFloat(Self.minDetail) - 1))
+    }
+
+    /// The width while a drag is in flight; nil otherwise.
+    @State private var liveWidth: Double?
+
+    @ViewBuilder private var split: some View {
+        if items.isEmpty {
+            // Nothing parked: the empty state and the add field, not an empty detail pane.
+            listPane
+        } else {
+            HStack(spacing: 0) {
+                listPane.frame(width: effectiveListWidth)
+                splitHandle
+                detailPane.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
+        }
+    }
+
+    /// A 1pt line with a wider grab area. The width is remembered, so the next
+    /// time the window opens the list is as wide as it was left.
+    private var splitHandle: some View {
+        Rectangle()
+            .fill(MarvinTheme.border)
+            .frame(width: 1)
+            .contentShape(Rectangle().inset(by: -4))
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { v in
+                        if dragStartWidth == nil { dragStartWidth = listWidth }
+                        let maxW = max(Self.minList, Double(containerWidth) - Self.minDetail - 1)
+                        liveWidth = min(max((dragStartWidth ?? listWidth) + Double(v.translation.width), Self.minList), maxW)
+                    }
+                    .onEnded { _ in
+                        if let liveWidth { listWidth = liveWidth }
+                        liveWidth = nil
+                        dragStartWidth = nil
+                    }
+            )
+            .accessibilityLabel("Resize the list")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: listWidth += 24
+                case .decrement: listWidth = max(Self.minList, listWidth - 24)
+                @unknown default: break
+                }
+            }
+    }
+
+    // MARK: List pane
+
+    private var listPane: some View {
+        VStack(spacing: 0) {
+            listBody
+            if scope == .review, !bulkTargets.items.isEmpty { bulkBar }
+            if scope == .open { MarvinDivider(); addRow }
+        }
+    }
+
+    @ViewBuilder private var listBody: some View {
+        let sections = BacklogBrowse.view(items, filter: filter, sort: sort, group: group)
+        if sections.isEmpty {
+            emptyState.frame(maxHeight: .infinity)
+        } else {
+            let byId = Dictionary(grouping: findings, by: \.id)
+            let now = Date()
+            List(selection: $selection) {
+                ForEach(sections) { section in
+                    let key = foldKey(section)
+                    let folded = !section.title.isEmpty && BrowseDisclosure(raw: foldedRaw).isCollapsed(key)
+                    if !section.title.isEmpty {
+                        Button { toggleFold(key) } label: {
+                            PaneSectionHeader(section.title, count: section.items.count, collapsed: folded)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
+                        .accessibilityLabel("\(section.title), \(section.items.count) items, \(folded ? "folded" : "unfolded")")
+                        .accessibilityHint("Folds or unfolds the group")
+                    }
+                    if !folded {
+                        ForEach(section.items) { item in
+                            BacklogRowView(item: item, now: now, findings: byId[item.id] ?? [],
+                                           selected: selection.contains(item.id),
+                                           onAction: { act(item, $0) })
+                                .tag(item.id)
+                                .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .onKeyPress(.return) {
+                guard selection.count == 1, let id = selection.first,
+                      let item = items.first(where: { $0.id == id }),
+                      let primary = BacklogRowActions.forStatus(item.status).primary else { return .ignored }
+                act(item, primary)
+                return .handled
+            }
+        }
+    }
+
+    @ViewBuilder private var emptyState: some View {
+        if filter.isNarrowed {
+            // Something is hiding items; say what, and offer the way back.
+            PaneEmptyView(
+                state: PaneEmptyState(
+                    headline: filter.isSearching ? "No results for “\(query.trimmingCharacters(in: .whitespaces))”" : "No items match the filters",
+                    hint: "\(counts.count(scope)) \(scope.title.lowercased()) item\(counts.count(scope) == 1 ? " is" : "s are") hidden. Clear the search or loosen the filters.",
+                    symbol: "magnifyingglass"),
+                actionTitle: "Clear Search and Filters", action: { query = ""; clearFilters() })
+        } else {
+            switch scope {
+            case .open:
+                PaneEmptyView(state: PaneEmptyState(
+                    headline: "Nothing parked",
+                    hint: "Follow-ups MARVIN notices while it works are parked here and resurface next session. Add one below.",
+                    symbol: "tray"))
+            case .review:
+                PaneEmptyView(state: PaneEmptyState(
+                    headline: "Nothing to review",
+                    hint: "Items MARVIN captures on its own wait here for a keep or a dismiss.",
+                    symbol: "checkmark.circle"))
+            case .resolved:
+                PaneEmptyView(state: PaneEmptyState(
+                    headline: "Nothing resolved yet",
+                    hint: "Done and dismissed items are kept here as history.",
+                    symbol: "archivebox"))
+            }
+        }
+    }
+
+    // MARK: Bulk review
+
+    private var bulkTargets: BacklogBulk.Targets {
+        BacklogBulk.targets(selected: selection, shown: BacklogBrowse.filter(items, filter))
+    }
+
+    /// ADR-0047 puts the bloat control at THIS pass. Both bulk acts name their
+    /// count on the button and in the question, and only captures are ever in it.
+    private var bulkBar: some View {
+        let t = bulkTargets
+        return VStack(spacing: 0) {
+            MarvinDivider()
+            HStack(spacing: 8) {
+                Text("\(t.items.count) to review")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(MarvinTheme.textMuted)
+                Spacer(minLength: 0)
+                Button(BacklogBulk.buttonTitle(.dismiss, t)) { bulk = .dismiss }.chip(.neutral)
+                Button(BacklogBulk.buttonTitle(.keep, t)) { bulk = .keep }.chip(.primary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+        }
+    }
+
+    private var addRow: some View {
+        HStack(spacing: 8) {
+            TextField("Add an item…", text: $newTitle)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11.5))
+                .onSubmit { Task { await addNew() } }
+            Button("Add") { Task { await addNew() } }
+                .rowChip(.neutral)
+                .disabled(newTitle.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
+
+    // MARK: Detail pane
+
+    @ViewBuilder private var detailPane: some View {
+        if selection.count == 1, let id = selection.first, let item = items.first(where: { $0.id == id }) {
+            BacklogDetailView(
+                workDir: workDir, item: item,
+                findings: findings.filter { $0.id == item.id },
+                onPromote: { onPromote($0); onClose() },
+                onChanged: { Task { await refresh(); onChanged() } },
+                onDismissSheet: { selection = [] }
+            )
+            .id(item.id)
+        } else if selection.count > 1 {
+            PaneEmptyView(state: PaneEmptyState(
+                headline: "\(selection.count) items selected",
+                hint: scope == .review ? "Use the buttons under the list to keep or dismiss them." : "Select one item to read it.",
+                symbol: "checklist"))
+        } else {
+            PaneEmptyView(state: PaneEmptyState(
+                headline: "No item selected",
+                hint: "Choose an item to read its description, notes and links.",
+                symbol: "sidebar.right"))
+        }
+    }
+
+    // MARK: Disclosure
+
+    private func foldKey(_ s: BacklogSection) -> String { "\(group.rawValue):\(s.id)" }
+
+    private func toggleFold(_ key: String) {
+        var d = BrowseDisclosure(raw: foldedRaw)
+        d.toggle(key)
+        foldedRaw = d.raw
+    }
+
+    private func foldAll(_ fold: Bool) {
+        var d = BrowseDisclosure(raw: foldedRaw)
+        let sections = BacklogBrowse.view(items, filter: filter, sort: sort, group: group)
+        for s in sections where !s.title.isEmpty {
+            let key = foldKey(s)
+            if d.isCollapsed(key) != fold { d.toggle(key) }
+        }
+        foldedRaw = d.raw
+    }
+
+    // MARK: Filter helpers
+
+    private var visibleIds: Set<String> {
+        Set(BacklogBrowse.filter(items, filter).map(\.id))
     }
 
     private func toggleKind(_ k: String) {
@@ -142,584 +534,93 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
         hiddenKindsRaw = h.sorted().joined(separator: ",")
     }
 
-    /// Item ids carrying at least one finding.
-    private var flaggedIds: Set<String> { Set(findings.map(\.id)) }
+    private func clearFilters() {
+        (showHigh, showMed, showLow) = (true, true, true)
+        hiddenKindsRaw = ""
+        blocked = .all
+        onlyFlagged = false
+    }
 
-    /// Grouped view of `visible`. `.none` collapses to a single untitled band.
-    private var groupedSections: [(title: String, items: [BacklogItem])] { sections(of: visible) }
+    /// Opened on Open with nothing in it but captures waiting: land where the work is.
+    private func adjustInitialScope() {
+        let c = counts
+        if scope == .open, c.open == 0, c.review > 0 { scope = .review }
+        if scope == .review, c.review == 0 { scope = .open }
+    }
 
-    private func sections(of v: [BacklogItem]) -> [(title: String, items: [BacklogItem])] {
-        switch group {
-        case .none:
-            return [("", v)]
-        case .severity:
-            return ["high", "med", "low"].compactMap { sev in
-                let g = v.filter { $0.severity == sev }
-                return g.isEmpty ? nil : (severityLabel(sev), g)
-            }
-        case .status:
-            return ["doing", "open", "done", "dismissed"].compactMap { st in
-                let g = v.filter { $0.status == st }
-                return g.isEmpty ? nil : (statusLabel(st), g)
-            }
-        case .kind:
-            // ADR-0064. `unspecified` sorts LAST — it's the pre-classification
-            // default on 430 existing items, so leading with it would bury the
-            // groups that carry information.
-            let order = ["bug", "feature", "investigate", "test", "docs", "chore", "unspecified"]
-            return order.compactMap { k in
-                let g = v.filter { $0.kindOrUnspecified == k }
-                return g.isEmpty ? nil : (k == "unspecified" ? "Unclassified" : k.capitalized, g)
+    // MARK: Actions
+
+    private func post(_ n: PaneNotice) {
+        notice = n
+        if case .auto(let seconds) = n.dismissal {
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if notice == n { notice = nil }
             }
         }
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            MarvinDivider()
-            if hasControllable {
-                controlStrip
-                MarvinDivider()
-            }
-            if let error {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 12).padding(.top, 8)
-            }
-            if let filedNote {
-                Text(filedNote)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12).padding(.top, 8)
-            }
-            // Possible-duplicate hint (ADR-0044 addendum). Advisory, not an
-            // error: the item was added. Orange, dismissible, and it never
-            // resolves anything on the user's behalf.
-            if let duplicateHint {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "arrow.triangle.merge")
-                        .foregroundStyle(.orange)
-                    Text(duplicateHint)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                    Button {
-                        self.duplicateHint = nil
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tertiary)
-                    .help("Dismiss")
-                }
-                .padding(.horizontal, 12).padding(.top, 8)
-            }
-            if !findings.isEmpty {
-                groomSummary
-                MarvinDivider()
-            }
-            content
-            MarvinDivider()
-            addRow
-        }
-        .frame(minWidth: 720, idealWidth: 920, minHeight: 520, idealHeight: 720)
-        .task { await refresh() }
-        .sheet(item: $detailItem) { item in
-            BacklogDetailView(
-                workDir: workDir,
-                item: item,
-                onPromote: { onPromote($0); detailItem = nil; onClose() },
-                onChanged: {
-                    Task { await refresh(); onChanged() }
-                },
-                onDismissSheet: { detailItem = nil }
-            )
+    private func act(_ item: BacklogItem, _ action: BacklogAction) {
+        switch action {
+        case .plan:
+            onPromote(item)
+            onClose()
+        case .export:
+            Task { await exportIssue(item) }
+        default:
+            if let status = action.targetStatus { Task { await setStatus(item, status) } }
         }
     }
-
-    private var header: some View {
-        HStack {
-            Image(systemName: "tray.full")
-            Text("Project backlog").font(.headline)
-            if !active.isEmpty {
-                Text("\(active.count)")
-                    .font(.caption.monospacedDigit())
-                    .padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(Color.blue.opacity(0.15), in: Capsule())
-            }
-            Spacer()
-            Button("Close") { onClose() }
-                .keyboardShortcut(.escape, modifiers: [])
-        }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor))
-    }
-
-    /// Sort / group / filter menus. Compact borderless-button menus so the
-    /// strip reads as chrome, not primary content.
-    private var controlStrip: some View {
-        HStack(spacing: 14) {
-            Menu {
-                Picker("Sort", selection: $sort) {
-                    ForEach(BacklogSort.allCases) { Text($0.label).tag($0) }
-                }
-            } label: {
-                Label("Sort: \(sort.label)", systemImage: "arrow.up.arrow.down")
-            }
-            .menuStyle(.borderlessButton).fixedSize()
-
-            Menu {
-                Picker("Group", selection: $group) {
-                    ForEach(BacklogGroup.allCases) { Text($0.label).tag($0) }
-                }
-            } label: {
-                Label("Group: \(group.label)", systemImage: "square.stack.3d.up")
-            }
-            .menuStyle(.borderlessButton).fixedSize()
-
-            Menu {
-                Section("Severity") {
-                    Toggle("High", isOn: $showHigh)
-                    Toggle("Med",  isOn: $showMed)
-                    Toggle("Low",  isOn: $showLow)
-                }
-                Divider()
-                Section("Kind") {
-                    ForEach(["bug", "feature", "investigate", "test", "docs", "chore", "unspecified"], id: \.self) { k in
-                        Toggle(
-                            k == "unspecified" ? "Unclassified" : k.capitalized,
-                            isOn: Binding(
-                                get: { !hiddenKinds.contains(k) },
-                                set: { _ in toggleKind(k) }
-                            )
-                        )
-                    }
-                }
-                Divider()
-                Toggle("Show resolved", isOn: $showResolved)
-                Toggle("Hide blocked", isOn: $hideBlocked)
-            } label: {
-                Label(filterLabel, systemImage: "line.3.horizontal.decrease.circle")
-            }
-            .menuStyle(.borderlessButton).fixedSize()
-
-            Spacer()
-
-            // Groom (ADR-0063). Read-only: it annotates rows with findings and
-            // changes nothing. Acting on a finding stays an explicit action
-            // through the row's existing controls.
-            if !findings.isEmpty {
-                Button {
-                    findings = []
-                    groomTruncated = false
-                    onlyFlagged = false
-                } label: {
-                    Label("Clear findings", systemImage: "xmark.circle")
-                }
-                .buttonStyle(.borderless)
-                .help("Dismiss the review annotations. Nothing was changed.")
-            }
-            Button {
-                Task { await runGroom() }
-            } label: {
-                if isGrooming {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Label("Review", systemImage: "checklist")
-                }
-            }
-            .buttonStyle(.borderless)
-            .disabled(isGrooming)
-            .help("Review the backlog for duplicates, stale items, unreviewed captures, "
-                  + "and references to files that no longer exist. Read-only.")
-        }
-        .font(.caption)
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.4))
-    }
-
-    /// Summary bar shown after a review. Findings are heuristics, so this
-    /// states what was found and leaves every decision to the user.
-    private var groomSummary: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "checklist").foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(
-                    "\(findings.count) finding\(findings.count == 1 ? "" : "s")"
-                        + (groomTruncated ? " (capped — more remain)" : "")
-                        + " on \(flaggedIds.count) item\(flaggedIds.count == 1 ? "" : "s")"
-                        + " — these are suggestions, nothing was changed."
-                )
-                .font(.caption.weight(.semibold))
-                Text(
-                    onlyFlagged
-                        ? "Showing only flagged items. Details are on each row."
-                        : "Showing the whole backlog — flagged items are marked in orange."
-                )
-                .font(.caption2).foregroundStyle(.secondary)
-                if let unmatched = unmatchedFindingSummary {
-                    // A finding whose item another filter hides would otherwise
-                    // be invisible — a silent partial view.
-                    Text(unmatched).font(.caption2).foregroundStyle(.orange)
-                }
-            }
-            Spacer(minLength: 0)
-            Toggle("Only flagged", isOn: $onlyFlagged)
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .font(.caption2)
-                .help("Narrow the list to the items this review flagged.")
-        }
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(Color.orange.opacity(0.08))
-    }
-
-    /// Findings whose item is hidden by the OTHER filters (severity, resolved),
-    /// so the count in the summary never implies rows the user can't reach.
-    /// Deliberately ignores `onlyFlagged` — that one narrows TO the findings.
-    private var unmatchedFindingSummary: String? {
-        let reachable = Set(
-            items
-                .filter { $0.status == "open" || $0.status == "doing" || showResolved }
-                .filter { severityAllowed($0.severity) }
-                .map(\.id)
-        ).union(provisional.map(\.id))
-        let hidden = findings.filter { !reachable.contains($0.id) }
-        guard !hidden.isEmpty else { return nil }
-        return "\(hidden.count) relate to items hidden by the severity / resolved filters."
-    }
-
-    @ViewBuilder private var content: some View {
-        // Filter + sort once per render and hand the result down: `visible` (a
-        // sort of every item) was evaluated twice here and again per group, and
-        // `provisional` four times (audit K16).
-        let vis = visible
-        let prov = provisional
-        if items.isEmpty && (isLoading || !hasLoaded) {
-            // First load in flight. The empty state below used to show here,
-            // telling the user "No open backlog items" for the 10–15 s it took
-            // to load 1,076 of them (2026-09-30).
-            ScrollView {
-                SkeletonRows(count: 7, detailLines: 2, card: true).padding(12)
-            }
-            .scrollDisabled(true)
-        } else if vis.isEmpty && prov.isEmpty {
-            VStack(spacing: 6) {
-                Image(systemName: "checkmark.circle").font(.title2).foregroundStyle(.secondary)
-                if hasControllable {
-                    // Items exist but the filter hides them all.
-                    Text("No items match the current filter.").font(.callout).foregroundStyle(.secondary)
-                    Text("Loosen the severity filter, or turn on “Show resolved”.")
-                        .font(.caption).foregroundStyle(.tertiary)
-                } else {
-                    Text("No open backlog items.").font(.callout).foregroundStyle(.secondary)
-                    Text("Parked follow-ups appear here and resurface next session.")
-                        .font(.caption).foregroundStyle(.tertiary)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            // Lazy: only rows on screen are built. The eager VStack built every
-            // row — each with five buttons and selectable text — on every pass.
-            let byId = Dictionary(grouping: findings, by: \.id)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    if !prov.isEmpty { provisionalSection(byId) }
-                    ForEach(sections(of: vis), id: \.title) { section in
-                        if !section.title.isEmpty {
-                            groupHeader(section.title, count: section.items.count)
-                        }
-                        ForEach(section.items) { item in row(item, findings: byId[item.id] ?? []) }
-                    }
-                }
-                .padding(12)
-            }
-        }
-    }
-
-    private func groupHeader(_ title: String, count: Int) -> some View {
-        HStack(spacing: 6) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text("\(count)")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.tertiary)
-            Spacer()
-        }
-        .padding(.top, 4)
-    }
-
-    /// ADR-0047 — items auto-captured this/last session, surfaced for a quick
-    /// keep/dismiss pass so the parking lot doesn't accrete unreviewed noise.
-    private func provisionalSection(_ byId: [String: [BacklogFinding]]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "questionmark.circle").foregroundStyle(.purple)
-                Text("Auto-captured — review").font(.subheadline.weight(.semibold))
-                Text("\(provisional.count)")
-                    .font(.caption.monospacedDigit())
-                    .padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(Color.purple.opacity(0.15), in: Capsule())
-                Spacer()
-                // ADR-0047 puts the bloat control at THIS review — capture is
-                // deliberately un-gated, so this pass is the only thing standing
-                // between "noticed in flight" and a permanent open item. A
-                // one-click "Keep all" turns that control into a rubber stamp:
-                // on 2026-08-29 eight items were promoted in a single click,
-                // two minutes after capture, with no per-item judgement. Both
-                // bulk actions now name what they are about to do and ask.
-                Button("Keep all") { bulkAction = .keep }
-                    .controlSize(.small)
-                Button("Dismiss all") { bulkAction = .dismiss }
-                    .controlSize(.small)
-            }
-            ForEach(provisional) { item in provisionalRow(item, findings: byId[item.id] ?? []) }
-            MarvinDivider().padding(.vertical, 2)
-        }
-        .confirmationDialog(
-            bulkAction.map { "\($0.verb) all \(provisional.count) auto-captured items?" } ?? "",
-            isPresented: Binding(get: { bulkAction != nil }, set: { if !$0 { bulkAction = nil } }),
-            titleVisibility: .visible
-        ) {
-            if let action = bulkAction {
-                Button(action.confirmLabel, role: action == .dismiss ? .destructive : nil) {
-                    let target = action.status
-                    Task {
-                        await mutate {
-                            for i in provisional {
-                                try await BacklogService.shared.setStatus(
-                                    workDir: workDir, id: i.id, status: target)
-                            }
-                        }
-                    }
-                    bulkAction = nil
-                }
-            }
-            Button("Cancel", role: .cancel) { bulkAction = nil }
-        } message: {
-            Text(bulkAction?.explanation ?? "")
-        }
-    }
-
-    /// Which bulk review action is awaiting confirmation. `nil` = none pending.
-    private enum BulkReview {
-        case keep, dismiss
-
-        var status: String { self == .keep ? "open" : "dismissed" }
-        var verb: String { self == .keep ? "Keep" : "Dismiss" }
-        var confirmLabel: String { self == .keep ? "Keep all" : "Dismiss all" }
-        var explanation: String {
-            self == .keep
-                ? "They become open backlog items. Reviewing them one by one is "
-                    + "how the list stays worth reading."
-                : "They are marked dismissed. The files stay on disk as history, "
-                    + "but they leave the active list."
-        }
-    }
-
-    /// Review annotations for one item (ADR-0063). Advisory — each states what
-    /// was observed and what the user MIGHT do; none of it is applied, and the
-    /// row's own buttons stay the only way to act. Shared by both row builders
-    /// so a finding can't be counted in the summary yet render nowhere.
-    @ViewBuilder
-    private func findingAnnotations(_ itemFindings: [BacklogFinding]) -> some View {
-        ForEach(itemFindings, id: \.findingId) { f in
-            HStack(alignment: .top, spacing: 6) {
-                Text(f.badge)
-                    .font(.system(size: 10, weight: .semibold))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(Color.orange.opacity(0.18), in: Capsule())
-                    .foregroundStyle(.orange)
-                Text("\(f.detail) → \(f.suggestion)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.top, 1)
-        }
-    }
-
-    private func provisionalRow(_ item: BacklogItem, findings itemFindings: [BacklogFinding]) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: severityIcon(item.severity))
-                .foregroundStyle(severityColor(item.severity))
-                .help("severity: \(item.severity)")
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(item.title).font(.body.weight(.semibold))
-                    // The full row already carries this; the review row is
-                    // exactly where "is this a bug or a chore?" decides keep
-                    // vs dismiss, so it belongs here more than there.
-                    if item.kindOrUnspecified != "unspecified" {
-                        statusBadge(item.kindOrUnspecified, kindColor(item.kindOrUnspecified))
-                    }
-                }
-                if !item.body.isEmpty {
-                    Text(item.body).font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(3).textSelection(.enabled)
-                }
-                // Provisional rows carry findings too — `unreviewed` targets
-                // them specifically, so without this the one finding kind aimed
-                // at this section would be counted and never shown.
-                findingAnnotations(itemFindings)
-                HStack(spacing: 8) {
-                    Button("Keep") { Task { await setStatus(item, "open") } }
-                        .controlSize(.small)
-                    Button("Dismiss") { Task { await setStatus(item, "dismissed") } }
-                        .controlSize(.small)
-                }
-                .padding(.top, 2)
-            }
-            Spacer()
-        }
-        .padding(8)
-        .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
-    }
-
-    private func row(_ item: BacklogItem, findings itemFindings: [BacklogFinding]) -> some View {
-        let resolved = item.status == "done" || item.status == "dismissed"
-        return HStack(alignment: .top, spacing: 10) {
-            // Severity is the default sort, so the row says it in words as well
-            // as a glyph and a colour (U13).
-            VStack(spacing: 2) {
-                Image(systemName: severityIcon(item.severity))
-                    .foregroundStyle(severityColor(item.severity))
-                Text(severityLabel(item.severity))
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: 28)
-            .help("severity: \(item.severity)")
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Severity \(severityLabel(item.severity))")
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(item.title).font(.body.weight(.semibold))
-                        .strikethrough(resolved, color: .secondary)
-                    if item.status == "doing" {
-                        // ADR-0113 — who holds it, so a second tab does not start it.
-                        statusBadge(item.holderLabel.map { "in progress · \($0)" } ?? "in progress", .orange)
-                            .help(item.holderLabel.map { "Being worked by \($0). Promote here asks before taking it over." } ?? "In progress")
-                    } else if resolved {
-                        statusBadge(item.status, .secondary)
-                    }
-                    // ADR-0064 — kind + blocked. Blocked is shown even when the
-                    // kind isn't set: "you can't act on this" is the more
-                    // load-bearing fact of the two.
-                    if item.kindOrUnspecified != "unspecified" {
-                        statusBadge(item.kindOrUnspecified, kindColor(item.kindOrUnspecified))
-                    }
-                    if item.isBlocked {
-                        statusBadge("blocked", .purple)
-                            .help(item.blockedOn?.isEmpty == false
-                                  ? "Waiting on: \(item.blockedOn!)"
-                                  : "Blocked, but no note on what unblocks it")
-                    }
-                    Image(systemName: "chevron.right.circle")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .help("Open details")
-                }
-                if !item.body.isEmpty {
-                    // Not selectable: a click on selectable text draws all of it
-                    // while its frame stays three lines tall, so lines 4+ were
-                    // drawn under the actions. The click opens Details instead,
-                    // where the whole body is shown and can be selected.
-                    Text(item.body).font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(3)
-                }
-                findingAnnotations(itemFindings)
-                // Two actions in the row, the rest behind "…": five buttons of one
-                // weight made every row a toolbar, and Done sat beside Dismiss
-                // with nothing to tell them apart (U13). Dismiss is in the menu,
-                // away from Done.
-                HStack(spacing: 8) {
-                    if resolved {
-                        Button("Reopen") { Task { await setStatus(item, "open") } }
-                            .controlSize(.small)
-                    } else {
-                        Button("Promote to plan") { onPromote(item); onClose() }
-                            .controlSize(.small)
-                        Button("Done") { Task { await setStatus(item, "done") } }
-                            .controlSize(.small)
-                    }
-                    Menu {
-                        Button("Details") { detailItem = item }
-                        if !resolved {
-                            Button("Export to issue") { Task { await exportIssue(item) } }
-                            Divider()
-                            Button("Dismiss", role: .destructive) { Task { await setStatus(item, "dismissed") } }
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .frame(width: 22, height: 18)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("More: details, export to an issue, dismiss")
-                    .accessibilityLabel("More actions for \(item.title)")
-                }
-                .padding(.top, 2)
-            }
-            Spacer()
-        }
-        .opacity(resolved ? 0.6 : 1)
-        .padding(8)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-        .contentShape(RoundedRectangle(cornerRadius: 6))
-        .onTapGesture { detailItem = item }
-    }
-
-    private func statusBadge(_ text: String, _ tint: Color) -> some View {
-        Text(text)
-            .font(.caption2)
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(tint.opacity(0.15), in: Capsule())
-    }
-
-    private var addRow: some View {
-        HStack(spacing: 8) {
-            TextField("Add an item…", text: $newTitle)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { Task { await addNew() } }
-            Button("Add") { Task { await addNew() } }
-                .disabled(newTitle.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-        .padding(12)
-    }
-
-    // MARK: - Actions
 
     private func refresh() async {
-        isLoading = true; defer { isLoading = false; hasLoaded = true }
-        do { items = try await BacklogService.shared.fetch(workDir: workDir) }
-        catch { self.error = "Failed to load backlog: \(error.localizedDescription)" }
-    }
-
-    private func mutate(_ op: @escaping () async throws -> Void) async {
-        do { try await op(); await refresh(); onChanged() }
-        catch { self.error = error.localizedDescription }
+        isLoading = true
+        defer { isLoading = false; hasLoaded = true }
+        do {
+            items = try await BacklogService.shared.fetch(workDir: workDir)
+            loadError = nil
+        } catch {
+            loadError = error.localizedDescription
+            if !items.isEmpty { post(PaneNotice(kind: .error, headline: "Couldn’t refresh the backlog.", detail: error.localizedDescription)) }
+        }
     }
 
     /// Done / Dismiss / Keep / Reopen: change the row where it is, then tell the
-    /// server. These went through `mutate`, which refetched all 1,076 items
-    /// (1.6 MB) and rebuilt the list after every click — the panel "barely
-    /// moved" (2026-09-30). On failure the row is put back and the error shown.
+    /// server — a refetch of the whole list after every click made the window
+    /// "barely move" (2026-09-30). On failure the row is put back.
     private func setStatus(_ item: BacklogItem, _ status: String) async {
         guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
         let previous = items[idx].status
         items[idx].status = status
+        selection.remove(item.id)
         do {
             try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: status)
             onChanged()
         } catch {
             if let i = items.firstIndex(where: { $0.id == item.id }) { items[i].status = previous }
-            self.error = error.localizedDescription
+            post(PaneNotice(kind: .error, headline: "Couldn’t update “\(item.title)”.", detail: error.localizedDescription))
+        }
+    }
+
+    /// The bulk review. Only reached through the confirm that named the count.
+    private func setStatuses(_ ids: [String], _ status: String) async {
+        var failed = 0
+        for id in ids {
+            guard let idx = items.firstIndex(where: { $0.id == id }) else { continue }
+            let previous = items[idx].status
+            items[idx].status = status
+            do {
+                try await BacklogService.shared.setStatus(workDir: workDir, id: id, status: status)
+            } catch {
+                failed += 1
+                if let i = items.firstIndex(where: { $0.id == id }) { items[i].status = previous }
+            }
+        }
+        selection = []
+        onChanged()
+        if failed > 0 {
+            post(PaneNotice(kind: .warning, headline: "\(ids.count - failed) of \(ids.count) updated; \(failed) failed.", detail: nil))
+        } else {
+            post(PaneNotice(kind: .success, headline: "\(ids.count) item\(ids.count == 1 ? "" : "s") \(status == "open" ? "kept" : "dismissed")."))
         }
     }
 
@@ -731,17 +632,14 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
             let result = try await BacklogService.shared.groom(workDir: workDir)
             findings = result.findings
             groomTruncated = result.truncated
-            // Focus the list on what was found. Reversible from the summary bar.
             onlyFlagged = !result.findings.isEmpty
             if result.findings.isEmpty {
-                // Say so explicitly — an empty annotation layer is
-                // indistinguishable from "the button didn't work".
-                duplicateHint = "Reviewed — nothing stale, duplicated, or unreviewed."
-            } else {
-                duplicateHint = nil
+                // An empty annotation layer is indistinguishable from "the
+                // button didn't work", so say so.
+                post(PaneNotice(kind: .info, headline: "Reviewed — nothing stale, duplicated or unreviewed."))
             }
         } catch {
-            self.error = "Review failed: \(error.localizedDescription)"
+            post(PaneNotice(kind: .error, headline: "The review failed.", detail: error.localizedDescription))
         }
     }
 
@@ -749,380 +647,31 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
         let title = newTitle.trimmingCharacters(in: .whitespaces)
         guard !title.isEmpty else { return }
         newTitle = ""
-        duplicateHint = nil
         do {
-            let related = try await BacklogService.shared.add(
-                workDir: workDir,
-                title: title,
-                body: nil,
-                severity: nil
-            )
+            let related = try await BacklogService.shared.add(workDir: workDir, title: title, body: nil, severity: nil)
             await refresh()
             onChanged()
-            // The item IS added — this is a hint, not a rejection. Exact-title
-            // dedup can't see a reworded duplicate (ADR-0044 addendum), so say
-            // so and let the user merge or resolve; nothing is touched for them.
+            // The item IS added — a possible duplicate is a hint, not a
+            // rejection (ADR-0044 addendum). Nothing is touched for the user.
             if !related.isEmpty {
                 let titles = related.map { "“\($0.title)”" }.joined(separator: ", ")
-                duplicateHint = related.count == 1
+                post(PaneNotice(kind: .warning, headline: related.count == 1
                     ? "Added. This looks like the same work as \(titles) — merge or resolve one?"
-                    : "Added. This looks like the same work as \(related.count) existing items: \(titles)."
+                    : "Added. This looks like the same work as \(related.count) existing items: \(titles)."))
             }
         } catch {
-            self.error = error.localizedDescription
+            post(PaneNotice(kind: .error, headline: "Couldn’t add the item.", detail: error.localizedDescription))
         }
     }
 
     private func exportIssue(_ item: BacklogItem) async {
         do {
             let url = try await BacklogService.shared.promoteIssue(workDir: workDir, id: item.id)
-            filedNote = "Filed: \(url)"
-            await refresh(); onChanged()
-        } catch {
-            self.error = "Export failed: \(error.localizedDescription)"
-        }
-    }
-
-    /// Kind → tint. Bug reads as a problem (red), investigate as an open
-    /// question (blue), the rest neutral — the palette should not imply
-    /// urgency, which is severity's job.
-    private func kindColor(_ k: String) -> Color {
-        switch k {
-        case "bug":         return .red
-        case "investigate": return .blue
-        case "feature":     return .green
-        case "test":        return .teal
-        case "docs":        return .gray
-        case "chore":       return .secondary
-        default:            return .secondary
-        }
-    }
-
-    private func severityIcon(_ s: String) -> String {
-        switch s {
-        case "high": return "exclamationmark.2"
-        case "low": return "minus.circle"
-        default: return "circle.fill"
-        }
-    }
-    private func severityColor(_ s: String) -> Color {
-        switch s {
-        case "high": return .red
-        case "low": return .secondary
-        default: return .orange
-        }
-    }
-
-    // MARK: - Sort / group / filter helpers
-
-    private func sortComparator(_ a: BacklogItem, _ b: BacklogItem) -> Bool {
-        switch sort {
-        case .severity:
-            let ra = severityRank(a.severity), rb = severityRank(b.severity)
-            if ra != rb { return ra < rb }
-            return a.created > b.created          // tiebreak: newest first
-        case .newest: return a.created > b.created
-        case .oldest: return a.created < b.created
-        case .title:  return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
-        }
-    }
-
-    private func severityRank(_ s: String) -> Int {
-        switch s { case "high": return 0; case "med": return 1; default: return 2 }
-    }
-
-    private func severityAllowed(_ s: String) -> Bool {
-        switch s { case "high": return showHigh; case "low": return showLow; default: return showMed }
-    }
-
-    private func severityLabel(_ s: String) -> String {
-        switch s { case "high": return "High"; case "med": return "Med"; case "low": return "Low"; default: return s.capitalized }
-    }
-
-    private func statusLabel(_ s: String) -> String {
-        switch s {
-        case "doing":     return "In progress"
-        case "open":      return "Open"
-        case "done":      return "Done"
-        case "dismissed": return "Dismissed"
-        default:          return s.capitalized
-        }
-    }
-
-    /// Menu label reflecting active filters, so a non-default filter is
-    /// visible without opening the menu.
-    private var filterLabel: String {
-        var parts: [String] = []
-        if !(showHigh && showMed && showLow) {
-            let on = ["high", "med", "low"].filter(severityAllowed)
-            parts.append(on.isEmpty ? "none" : on.map(severityLabel).joined(separator: "/"))
-        }
-        // A hidden kind or a hidden blocked set must show in the label —
-        // otherwise the list silently omits rows and reads as an empty backlog.
-        if !hiddenKinds.isEmpty {
-            parts.append("-\(hiddenKinds.sorted().joined(separator: "/"))")
-        }
-        if hideBlocked { parts.append("-blocked") }
-        if showResolved { parts.append("+resolved") }
-        return parts.isEmpty ? "Filter" : "Filter: \(parts.joined(separator: " "))"
-    }
-}
-
-/// Detail sheet for one backlog item: full body (editable), severity
-/// picker, resolve with an optional note, promote/export. Title stays
-/// read-only — the slug/id/filename derive from it, so a rename is a
-/// new item, not an edit (backlog.ts `updateBacklogItem`).
-@MainActor struct BacklogDetailView: View {
-    let workDir: String
-    let item: BacklogItem
-    let onPromote: (BacklogItem) -> Void
-    /// Parent refreshes its list + the tray chip after any mutation.
-    let onChanged: () -> Void
-    let onDismissSheet: () -> Void
-
-    @State private var severity: String
-    @State private var bodyText: String
-    /// ADR-0064 — classification, editable here because this is where the user
-    /// already reads the item closely enough to judge it.
-    @State private var kind: String
-    @State private var blocked: Bool
-    @State private var blockedOn: String
-    @State private var resolveNote = ""
-    @State private var error: String?
-    @State private var savedFlash = false
-
-    init(workDir: String, item: BacklogItem,
-         onPromote: @escaping (BacklogItem) -> Void,
-         onChanged: @escaping () -> Void,
-         onDismissSheet: @escaping () -> Void) {
-        self.workDir = workDir
-        self.item = item
-        _kind = State(initialValue: item.kindOrUnspecified)
-        _blocked = State(initialValue: item.isBlocked)
-        _blockedOn = State(initialValue: item.blockedOn ?? "")
-        self.onPromote = onPromote
-        self.onChanged = onChanged
-        self.onDismissSheet = onDismissSheet
-        _severity = State(initialValue: item.severity)
-        _bodyText = State(initialValue: item.body)
-    }
-
-    private var bodyDirty: Bool { bodyText != item.body }
-
-    @State private var confirmingDiscard = false
-
-    private func requestClose() {
-        switch UnsavedCloseDecision.decide(isDirty: bodyDirty) {
-        case .close: onDismissSheet()
-        case .askDiscard: confirmingDiscard = true
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            MarvinDivider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    metaRow
-                    bodyEditor
-                    resolveSection
-                    if let error {
-                        Text(error).font(.caption).foregroundStyle(.red)
-                    }
-                }
-                .padding(14)
-            }
-        }
-        .frame(minWidth: 680, idealWidth: 820, minHeight: 520, idealHeight: 660)
-        .confirmationDialog(
-            "Discard your edits to this item?",
-            isPresented: $confirmingDiscard,
-            titleVisibility: .visible
-        ) {
-            Button("Discard Edits", role: .destructive) { onDismissSheet() }
-            Button("Keep Editing", role: .cancel) {}
-        } message: {
-            Text("The body has changes that are not saved.")
-        }
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "tray.full")
-            Text(item.title)
-                .font(.headline)
-                .lineLimit(2)
-                .textSelection(.enabled)
-                .help("Titles are immutable — the item's id derives from the title.")
-            Spacer()
-            // Esc / Close used to drop an unsaved body edit without a word (K2).
-            Button("Close") { requestClose() }
-                .keyboardShortcut(.escape, modifiers: [])
-        }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor))
-    }
-
-    /// Severity / kind / status on one line, blocked on its own.
-    ///
-    /// These were one HStack — severity picker, kind picker, a long-labelled
-    /// toggle, its text field, a caption AND the status badge. At the sheet's
-    /// width that cannot fit, so SwiftUI collapsed the toggle's label into a
-    /// one-word-per-line column. Anything carrying prose gets its own row.
-    private var metaRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 14) {
-                Picker("Severity", selection: $severity) {
-                    Text("low").tag("low")
-                    Text("med").tag("med")
-                    Text("high").tag("high")
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 200)
-                .onChange(of: severity) { _, next in
-                    guard next != item.severity else { return }
-                    Task { await save(severity: next) }
-                }
-
-                // ADR-0064 — saved immediately on change, like severity: the
-                // sheet has no explicit Save for these and a silently-discarded
-                // edit is worse than an eager write.
-                Picker("Kind", selection: $kind) {
-                    Text("unspecified").tag("unspecified")
-                    Text("bug").tag("bug")
-                    Text("feature").tag("feature")
-                    Text("investigate").tag("investigate")
-                    Text("test").tag("test")
-                    Text("docs").tag("docs")
-                    Text("chore").tag("chore")
-                }
-                .frame(width: 210)
-                .onChange(of: kind) { _, next in
-                    guard next != item.kindOrUnspecified else { return }
-                    Task { await classify(kind: next) }
-                }
-
-                Spacer(minLength: 8)
-
-                Text(item.status)
-                    .font(.caption)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.blue.opacity(0.12), in: Capsule())
-                Text("added \(item.created.prefix(10))")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-
-            Toggle("Blocked — waiting on something outside the repo", isOn: $blocked)
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
-                .onChange(of: blocked) { _, next in
-                    guard next != item.isBlocked else { return }
-                    Task { await classify(blocked: next) }
-                }
-            if blocked {
-                TextField("What unblocks it? (e.g. accountant sign-off)", text: $blockedOn)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 460)
-                    .onSubmit { Task { await classify(blockedOn: blockedOn) } }
-                Text("Recorded so the groomer can tell a waiting item from a forgotten one.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-            }
-        }
-    }
-    private var bodyEditor: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Details").font(.subheadline.weight(.semibold))
-                Spacer()
-                if savedFlash {
-                    Text("Saved").font(.caption).foregroundStyle(.green)
-                }
-                Button("Save details") { Task { await save(body: bodyText) } }
-                    .controlSize(.small)
-                    .disabled(!bodyDirty)
-            }
-            TextEditor(text: $bodyText)
-                .font(.system(size: 12))
-                .frame(minHeight: 240)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-                )
-        }
-    }
-
-    private var resolveSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Resolve").font(.subheadline.weight(.semibold))
-            TextField("Optional note (appended to the item)", text: $resolveNote)
-                .textFieldStyle(.roundedBorder)
-            HStack(spacing: 8) {
-                Button("Promote to plan") { onPromote(item) }
-                Button("Done") { Task { await resolve("done") } }
-                Button("Dismiss") { Task { await resolve("dismissed") } }
-                if item.status == "doing" {
-                    Button("Back to open") { Task { await resolve("open") } }
-                }
-                Spacer()
-            }
-            .controlSize(.small)
-        }
-    }
-
-    // MARK: - Actions
-
-    /// ADR-0064 — persist a classification edit. Metadata only: it never
-    /// touches status, so nothing can be resolved by a mis-click here.
-    private func classify(kind: String? = nil, blocked: Bool? = nil, blockedOn: String? = nil) async {
-        do {
-            try await BacklogService.shared.classify(
-                workDir: workDir,
-                id: item.id,
-                kind: kind,
-                blocked: blocked,
-                blockedOn: blockedOn
-            )
-            savedFlash = true
+            post(PaneNotice(kind: .success, headline: "Filed as an issue.", detail: url))
+            await refresh()
             onChanged()
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            savedFlash = false
         } catch {
-            self.error = error.localizedDescription
-        }
-    }
-
-    private func save(severity: String? = nil, body: String? = nil) async {
-        do {
-            try await BacklogService.shared.update(
-                workDir: workDir, id: item.id, severity: severity, body: body)
-            onChanged()
-            if body != nil {
-                savedFlash = true
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                savedFlash = false
-            }
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-
-    private func resolve(_ status: String) async {
-        do {
-            // Persist an unsaved body edit first so it isn't lost, then
-            // transition (the note appends to the just-saved body).
-            if bodyDirty {
-                try await BacklogService.shared.update(workDir: workDir, id: item.id, body: bodyText)
-            }
-            let note = resolveNote.trimmingCharacters(in: .whitespaces)
-            try await BacklogService.shared.setStatus(
-                workDir: workDir, id: item.id, status: status,
-                note: note.isEmpty ? nil : note)
-            onChanged()
-            onDismissSheet()
-        } catch {
-            self.error = error.localizedDescription
+            post(PaneNotice(kind: .error, headline: "Export failed.", detail: error.localizedDescription))
         }
     }
 }

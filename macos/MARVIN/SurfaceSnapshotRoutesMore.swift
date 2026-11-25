@@ -17,7 +17,7 @@ enum SurfaceRoutesMore {
         case "/api/skills": return ok(skills)
         case "/api/plugins": return ok(plugins)
         case "/api/practice": return ok(practice)
-        case "/api/backlog": return ok(backlog)
+        case "/api/backlog": return ok(BacklogPlansFixtures.backlogJSON())
         case "/api/models": return ok(models)
         case "/api/models/roles": return ok(modelRoles)
         case "/api/auth/config": return ok(authConfig)

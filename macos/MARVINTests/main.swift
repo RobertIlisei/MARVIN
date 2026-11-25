@@ -7418,6 +7418,7 @@ runner.suite("backlog-browse-pane-standard") {
         runner.expect(p.links.map(\.target), equals: ["docs/decisions/0044.md", "backlog-groom", "https://example.com/issue/12"], "related links first, then bare urls, trailing dot dropped")
         runner.expect(p.links[0].label, equals: "ADR-0044", "link label")
         runner.expect(BacklogBody.parse("").text, equals: "", "empty body")
+        runner.expect(BacklogBody.parse("One.\n\n\n\n> note x\n\n\nTwo.").text, equals: "One.\n\nTwo.", "the gaps notes leave behind are closed")
     }
 
     runner.test("folded groups are remembered, and the default can be folded too") {
@@ -7534,6 +7535,13 @@ runner.suite("plans-pane-standard") {
         runner.expect(PlanBrowse.startsExpanded(plan("a", "A", done: 2, of: 2), isActive: true) == false, "finished is folded even when active")
         runner.expect(PlanBrowse.startsExpanded(plan("a", "A", done: 1, of: 2), isActive: true), "active and unfinished: open")
         runner.expect(PlanBrowse.startsExpanded(plan("a", "A", done: 1, of: 2), isActive: false) == false, "unfinished but not active: folded")
+    }
+
+    runner.test("sub-steps of a finished step fold away; those of a step still in play stay open") {
+        let sub = [TodoItem(content: "a", status: "completed", activeForm: nil)]
+        runner.expect(PlanBrowse.subStepsStartOpen(PlanStep(content: "x", status: "in_progress", subtasks: sub)), "in progress: open")
+        runner.expect(PlanBrowse.subStepsStartOpen(PlanStep(content: "x", status: "pending", subtasks: sub)), "pending: open")
+        runner.expect(!PlanBrowse.subStepsStartOpen(PlanStep(content: "x", status: "completed", subtasks: sub)), "done: folded")
     }
 }
 
