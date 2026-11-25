@@ -4896,7 +4896,6 @@ final class ChatPreviewModel {
     let indicator: ChatHeaderState.Indicator
     let long: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var dim = false
 
     private var pulses: Bool { indicator.animates && !reduceMotion }
 
@@ -4913,11 +4912,18 @@ final class ChatPreviewModel {
 
     var body: some View {
         HStack(spacing: 5) {
-            Circle()
-                .fill(tint)
-                .frame(width: 7, height: 7)
-                .opacity(pulses && dim ? 0.4 : 1)
-                .animation(pulses ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true) : nil, value: dim)
+            // The pulse is computed from the clock, not run as a repeating implicit
+            // animation: a `repeatForever` animation attached here was picked up by
+            // layout changes in the same transaction (the label changing width, the
+            // header reflowing), so the dot slid back and forth over the text on
+            // both sides for as long as the view lived, idle included (2026-11-25).
+            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !pulses)) { context in
+                Circle()
+                    .fill(tint)
+                    .opacity(pulses ? Self.pulseOpacity(at: context.date) : 1)
+            }
+            .frame(width: 7, height: 7)
+            .transaction { $0.animation = nil }
             Text(indicator.label)
                 .font(.system(size: 11))
                 .foregroundStyle(long && indicator.kind == .waiting ? Color.orange : Color.secondary)
@@ -4927,11 +4933,12 @@ final class ChatPreviewModel {
         .help(indicator.label)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Tab state: \(indicator.label)")
-        .task(id: pulses) {
-            dim = false
-            guard pulses else { return }
-            try? await Task.sleep(nanoseconds: 60_000_000)
-            dim = true
-        }
+        .transaction { $0.animation = nil }
+    }
+
+    /// 1 → 0.4 → 1 over two seconds, eased.
+    private static func pulseOpacity(at date: Date) -> Double {
+        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.0) / 2.0
+        return 0.7 + 0.3 * cos(phase * 2 * .pi)
     }
 }

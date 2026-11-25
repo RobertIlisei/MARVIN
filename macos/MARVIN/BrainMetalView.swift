@@ -317,8 +317,10 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
         if reduceMotion || isLiveResizing {
             target = 10
         } else if brainState == .idle {
-            // 30 fps while the transition into idle plays, 10 once it has settled.
-            target = idleSettled ? 10 : 30
+            // 30 fps in idle, settled or not. It dropped to 10 once settled on the
+            // belief that the picture no longer moved; the owner saw it as a
+            // stutter beside the 60 fps states (2026-11-25). Idle still drifts.
+            target = 30
         } else {
             target = 60
         }
