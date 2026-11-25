@@ -304,7 +304,9 @@ import SwiftUI
     }
 
     private func toggleStageOfSelection() -> KeyPress.Result {
+        // A group header folds on Space; staging a whole group is a deliberate click on its button.
         guard let row = selectedRow(), row.group != .conflicts else { return .ignored }
+        if row.kind == .group { toggle(row); return .handled }
         if row.group == .staged { handlers.unstage(row) } else { handlers.stage(row) }
         return .handled
     }

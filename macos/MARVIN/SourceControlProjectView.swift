@@ -97,10 +97,10 @@ import SwiftUI
     @ViewBuilder
     private var content: some View {
         if !project.hasLoaded {
-            if let error = project.loadError {
+            if let error = project.loadError, let root = project.root {
                 PaneEmptyView(
                     state: PaneEmptyState(headline: "Could not list the worktrees", hint: error, symbol: "exclamationmark.triangle"),
-                    actionTitle: "Try again", action: { project.refresh(root: project.root ?? "", force: true) })
+                    actionTitle: "Try again", action: { project.refresh(root: root, force: true) })
             } else {
                 SkeletonRows(count: 5, detailLines: 1).padding(.horizontal, 12).padding(.vertical, 10)
             }
@@ -111,8 +111,8 @@ import SwiftUI
                 symbol: "arrow.triangle.branch"))
         } else {
             ForEach(sections) { section in
-                header(section.title, count: section.count, id: section.id == "spent" ? "worktrees.spent" : "worktrees.\(section.id)")
-                if !collapsed.contains(section.id == "spent" ? "worktrees.spent" : "worktrees.\(section.id)") {
+                header(section.title, count: section.count, id: "worktrees.\(section.id)")
+                if !collapsed.contains("worktrees.\(section.id)") {
                     ForEach(section.rows) { row in
                         if let entry = project.worktrees.first(where: { $0.slug == row.slug }) {
                             SourceControlWorktreeRow(

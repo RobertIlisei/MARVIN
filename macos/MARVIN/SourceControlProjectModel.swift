@@ -68,8 +68,10 @@ final class SourceControlProjectModel {
     /// Worktrees git lists that MARVIN does not manage — made by hand, or by
     /// another tool. Read-only rows; the tab and implementer ones are above.
     var unmanagedRepos: [GitRepoEntry] {
-        let managed = Set(worktrees.map(\.path))
-        return repos.filter { !$0.isMain && !managed.contains($0.path) }
+        // Compared as resolved paths: the sidecar and git may spell one folder two ways (/tmp, /private/tmp).
+        func resolved(_ p: String) -> String { URL(fileURLWithPath: p).resolvingSymlinksInPath().path }
+        let managed = Set(worktrees.map { resolved($0.path) })
+        return repos.filter { !$0.isMain && !managed.contains(resolved($0.path)) }
     }
 
     func clear() {
