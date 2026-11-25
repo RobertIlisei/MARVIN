@@ -94,31 +94,35 @@ describe("GET /api/backlog/counts", () => {
 });
 
 describe("GET /api/chat/announce — backlog.changed", () => {
-  it("sends the current counts right after attaching, then one change per write", async () => {
+  // Event timing is the kernel's and the machine's load, so these wait for the
+  // frame that carries the right final counts instead of counting frames (the
+  // exact-number guarantees are tested with a fake clock and watcher in
+  // sidecar/packages/runtime/tests/backlog-live.test.ts).
+  it("sends the current counts right after attaching, then the change a write makes", async () => {
     await addBacklogItem(workDir, { title: "already parked", body: "b" });
-    await new Promise((r) => setTimeout(r, 150)); // let that write's own signal go out before anyone listens
     const project = addProject({ workDir });
     const { res, ctl } = await open(project.id);
-    const reading = frames(res, ctl, (f) => f.filter((x) => x.event === "backlog.changed").length >= 2);
+    const reading = frames(res, ctl, (f) => f.some((x) => x.data.counts?.active === 2), 8000);
     await new Promise((r) => setTimeout(r, 300));
     await addBacklogItem(workDir, { title: "parked while connected", body: "b", provisional: true });
     const got = (await reading).filter((f) => f.event === "backlog.changed");
-    expect(got).toHaveLength(2);
-    expect(got[0]?.data).toMatchObject({ projectId: project.id, reason: "snapshot", counts: { active: 1, open: 1 } });
-    expect(got[1]?.data).toMatchObject({ reason: "change", counts: { active: 2, provisional: 1 } });
-    expect(got[1]?.data.revision).toBeGreaterThan(got[0]?.data.revision ?? 99);
+    const snapshot = got.find((f) => f.data.reason === "snapshot");
+    expect(snapshot?.data).toMatchObject({ projectId: project.id, counts: { active: 1, open: 1 } });
+    const last = got.at(-1);
+    expect(last?.data).toMatchObject({ reason: "change", counts: { active: 2, provisional: 1 } });
+    expect(last?.data.revision).toBeGreaterThan(snapshot?.data.revision ?? 99);
   });
 
   it("a file written outside MARVIN reaches the same stream", async () => {
     const project = addProject({ workDir });
     const { res, ctl } = await open(project.id);
-    const reading = frames(res, ctl, (f) => f.some((x) => x.data.reason === "change"));
+    const reading = frames(res, ctl, (f) => f.some((x) => x.data.reason === "change" && x.data.counts?.active === 1), 8000);
     await new Promise((r) => setTimeout(r, 300));
     writeFileSync(
       path.join(workDir, ".marvin", "backlog", "by-hand.md"),
       "---\nid: by-hand\ntitle: by hand\nstatus: open\nseverity: low\nkind: chore\nblocked: false\n---\n\nx\n",
     );
-    const change = (await reading).find((f) => f.data.reason === "change");
+    const change = (await reading).find((f) => f.data.reason === "change" && f.data.counts?.active === 1);
     expect(change?.data.counts).toMatchObject({ active: 1, open: 1 });
   });
 
