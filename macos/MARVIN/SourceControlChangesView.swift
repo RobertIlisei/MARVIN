@@ -414,7 +414,9 @@ import SwiftUI
     private static let groupRowHeight: CGFloat = 26
     private static let stashRowHeight: CGFloat = 26
     private static let graphRowHeight: CGFloat = 24
-    private static let headerHeight: CGFloat = 30
+    /// A group header (`PaneSectionHeader`'s 28 pt floor) and the divider above History's.
+    private static let headerHeight: CGFloat = 28
+    private static let dividerHeight: CGFloat = 1
     private static let previewBodyMax: CGFloat = 150
     private static let previewChrome: CGFloat = 27
 
@@ -427,7 +429,7 @@ import SwiftUI
 
     private var historySection: PaneBandSection {
         PaneBandSection(
-            id: "history", chrome: Double(Self.headerHeight), isOpen: historyOpen,
+            id: "history", chrome: Double(Self.headerHeight + Self.dividerHeight), isOpen: historyOpen,
             natural: historyNatural, minimum: min(historyNatural, 5 * Double(Self.graphRowHeight)))
     }
 
@@ -457,7 +459,7 @@ import SwiftUI
         if !model.stashes.isEmpty {
             let natural = Double(model.stashes.count) * Double(Self.stashRowHeight)
             out.append(PaneBandSection(
-                id: "stashes", chrome: Double(Self.headerHeight) - 2, isOpen: stashesOpen,
+                id: "stashes", chrome: Double(Self.headerHeight), isOpen: stashesOpen,
                 natural: natural, minimum: min(natural, 2 * Double(Self.stashRowHeight)), grows: false))
         }
         out.append(historySection)
@@ -476,7 +478,12 @@ import SwiftUI
         let heights = plan.mapValues { CGFloat($0) }
         return Color.clear
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { bandHeight = $0 }
+            // Decided here, written on the next run-loop turn: a state write inside the geometry
+            // callback runs in the window's constraints pass (ADR-0062 addendum 5). Whole points
+            // only, so a sub-pixel jitter cannot ping-pong.
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height.rounded() }) { height in
+                DispatchQueue.main.async { if bandHeight != height { bandHeight = height } }
+            }
             .overlay(alignment: .top) {
                 VStack(spacing: 0) { content(heights) }
                     .frame(maxWidth: .infinity, alignment: .top)

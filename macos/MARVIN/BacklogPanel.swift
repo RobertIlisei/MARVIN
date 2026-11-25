@@ -63,7 +63,9 @@ import SwiftUI
     @AppStorage("marvin.backlog.showLow") private var showLow = true
     /// Kinds switched OFF, comma-joined (ADR-0064): empty means "show everything".
     @AppStorage("marvin.backlog.hiddenKinds") private var hiddenKindsRaw = ""
-    @AppStorage("marvin.backlog.blocked") private var blocked: BacklogBlockedFilter = .all
+    /// Status facets switched ON (BacklogStatusFilter.swift), comma-joined: empty means "no narrowing".
+    /// They replace the old Blocked picker, which is one of them now.
+    @AppStorage("marvin.backlog.statuses") private var statusesRaw = ""
     @AppStorage("marvin.backlog.folded") private var foldedRaw = ""
     @AppStorage("marvin.backlog.listWidth") private var listWidth: Double = 420
 
@@ -91,13 +93,15 @@ import SwiftUI
         Set(hiddenKindsRaw.split(separator: ",").map(String.init)).subtracting([""])
     }
 
+    private var statuses: Set<BacklogStatusFacet> { BacklogStatusFacet.decode(statusesRaw) }
+
     private var filter: BacklogFilter {
         var sev: Set<String> = []
         if showHigh { sev.insert("high") }
         if showMed { sev.insert("med") }
         if showLow { sev.insert("low") }
         return BacklogFilter(scope: scope, query: query, severities: sev, hiddenKinds: hiddenKinds,
-                             blocked: blocked, onlyIds: onlyFlagged ? flaggedIds : nil)
+                             statuses: statuses, onlyIds: onlyFlagged ? flaggedIds : nil)
     }
 
     private var subtitle: String {
@@ -119,6 +123,7 @@ import SwiftUI
             }
             MarvinDivider()
             toolbar
+            PaneFilterChips(chips: BacklogBrowse.chips(filter), onRemove: { apply(filter.removing($0)) }, onClearAll: clearFilters)
             MarvinDivider()
             if !findings.isEmpty { groomStrip }
             if let notice {
@@ -225,11 +230,18 @@ import SwiftUI
                             get: { !hiddenKinds.contains(k) }, set: { _ in toggleKind(k) }))
                     }
                 }
-                Section("Waiting") {
-                    Picker("Blocked", selection: $blocked) {
-                        ForEach(BacklogBlockedFilter.allCases) { Text($0.label).tag($0) }
+                // Status: the facets of the scope in view, with how many each would show.
+                // Choosing several shows the items that are ANY of them.
+                let facets = BacklogStatusFacet.facets(in: scope)
+                if !facets.isEmpty {
+                    let counts = BacklogBrowse.statusCounts(items, filter)
+                    Section("Status") {
+                        ForEach(facets) { facet in
+                            Toggle("\(facet.title)  \(counts[facet] ?? 0)", isOn: Binding(
+                                get: { statuses.contains(facet) }, set: { _ in toggleStatus(facet) }))
+                                .help(facet.help)
+                        }
                     }
-                    .pickerStyle(.inline)
                 }
                 if filter.activeFilterCount > 0 {
                     Divider()
@@ -245,7 +257,7 @@ import SwiftUI
                 }
             }
             .menuStyle(.borderlessButton).fixedSize()
-            .help(filter.activeFilterCount > 0 ? "Filters are narrowing the list" : "Filter by severity, kind or blocked")
+            .help(filter.activeFilterCount > 0 ? "Filters are narrowing the list" : "Filter by status, severity or kind")
             .accessibilityLabel(filter.activeFilterCount > 0 ? "Filter, \(filter.activeFilterCount) active" : "Filter")
 
             // Review (ADR-0063) is read-only: it annotates rows with findings
@@ -534,12 +546,21 @@ import SwiftUI
         hiddenKindsRaw = h.sorted().joined(separator: ",")
     }
 
-    private func clearFilters() {
-        (showHigh, showMed, showLow) = (true, true, true)
-        hiddenKindsRaw = ""
-        blocked = .all
-        onlyFlagged = false
+    private func toggleStatus(_ facet: BacklogStatusFacet) {
+        var next = statuses
+        if next.contains(facet) { next.remove(facet) } else { next.insert(facet) }
+        statusesRaw = BacklogStatusFacet.encode(next)
     }
+
+    /// Writes a filter back into the stored choices (a chip was removed, or Clear filters).
+    private func apply(_ f: BacklogFilter) {
+        (showHigh, showMed, showLow) = (f.severities.contains("high"), f.severities.contains("med"), f.severities.contains("low"))
+        hiddenKindsRaw = f.hiddenKinds.sorted().joined(separator: ",")
+        statusesRaw = BacklogStatusFacet.encode(f.statuses)
+        onlyFlagged = f.onlyIds != nil
+    }
+
+    private func clearFilters() { apply(filter.cleared()) }
 
     /// Opened on Open with nothing in it but captures waiting: land where the work is.
     private func adjustInitialScope() {

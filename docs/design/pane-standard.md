@@ -249,6 +249,24 @@ poster: `PaneEmptyView` is for a pane that has nothing else to show.
 Fixed heights that are right: a text editor in a sheet, a control, a glyph box
 (under 100 pt). The guard (§4) flags the rest.
 
+### 2.13 A filter that narrows a list is visible on the list
+
+A filter inside a menu is invisible: the filter button wears a count, and
+`PaneFilterChips` (kit) says *which*: one removable chip per active filter, and
+one "Clear filters". It draws nothing, and costs no height, when nothing narrows.
+Several facets of one kind (status) are joined by OR; kinds of filter (status,
+severity, kind, search) are ANDed.
+
+The Project Backlog window is the reference. Its three-way switch (Open / To
+review / Resolved) stays the top-level view; a **status facet is a filter within
+one scope** (`BacklogStatusFacet`): *In progress*, *Blocked* and *Open, not
+started* are Open's, *Done* and *Dismissed* are Resolved's, and *To review* is
+its whole scope, so it offers nothing to narrow. The menu shows the current
+scope's facets with how many each would show; a facet picked in another scope
+waits there and narrows nothing here, so switching scope never leaves a hidden
+filter on the list. A row leads its second line with where the item stands, when
+it is not plain open: "In progress · tab: fix-it", "Blocked · waits on the lawyer".
+
 ## 3. The kit on one screen
 
 Existing components keep their signatures; everything below was added with
@@ -285,6 +303,9 @@ PaneEnableToggle(isOn:, name:, help:, onToggle:)
 // The scrolling body, with the keyboard
 PaneScrollList(rows: [(id, title)], selection: $id, onActivate:, onSpace:, onEscape:) { content }
 
+// Active filters (2.13)
+PaneFilterChips(chips: [BacklogFilterChip], onRemove:, onClearAll:)
+
 // States and notices
 PaneEmptyView(state:, actionTitle:, action:)    PaneLoadingView(label:)    PaneNote(text:)
 PaneNoticeStrip(notice:, actionTitle:, onAction:, onDismiss:)
@@ -293,7 +314,8 @@ PaneNoticeStrip(notice:, actionTitle:, onAction:, onDismiss:)
 PaneTypeScale  PaneSpacing  PaneFilter.matches(_:in:)  PaneCollapseState  PaneRowActionPlan.plan
 PaneBulkAction.title(_:count:)  PaneKeyNav.move  PaneTypeAhead  InstalledGrouping.group  PracticeScoreBand
 PaneEmptyState (.noProject .nothingYet .filtered .couldNotLoad .notARepo .noResults .awaitingInput)
-PaneSourceScan (the allowlist `migrating`)
+PaneBandPlan.contentHeights(available:sections:) + PaneBandSection (2.12)
+PaneSourceScan (the allowlist `migrating`; `fixedHeightViolations`)
 ```
 
 ### A pane in twenty lines
