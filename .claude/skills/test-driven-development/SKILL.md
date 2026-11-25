@@ -1,6 +1,6 @@
 ---
 name: test-driven-development
-description: Use when implementing any feature or bugfix, before writing implementation code. Enforces RED-GREEN-REFACTOR with an Iron Law — no production code without a failing test first. Ported from Jesse Vincent's Superpowers plugin (obra/superpowers) under its open-source terms; adapted for MARVIN's single-assistant constraints.
+description: Use when implementing any feature or bugfix, before writing implementation code. Enforces RED-GREEN-REFACTOR with an Iron Law — no production code without a failing test first — and a full-suite run, with every failure named, before any claim of done. Adapted from Jesse Vincent's Superpowers (obra/superpowers, MIT) for MARVIN's single-assistant loop.
 ---
 
 # Test-driven development
@@ -43,9 +43,22 @@ test will drive out the generalisation.
 
 ### 4. Verify GREEN — the whole suite, no warnings
 
-Run every test. All pass. No new warnings. No skipped tests. If
-anything is off, that's a signal you changed something you didn't
-intend.
+Run every test, not just the one you wrote. All pass. No new warnings.
+No skipped tests. If anything is off, that's a signal you changed
+something you didn't intend.
+
+**The project's full suite defines green, not your test file.** Before you
+call the change done, run the project's own test command (whatever it uses,
+unfiltered) even when the task named a single file. A scope statement bounds
+the deliverable, not your verification. A test that passes alone and fails in
+the full run is a real failure: shared state between files (a module-level
+cache, a temp dir, a port, a container, a test runner that does not isolate
+files) is the usual cause, and the full run is the only thing that shows it.
+
+**Name every failure the run shows, including ones you did not cause.** A red
+test you watched scroll past and left out of your report is a report
+falsified by omission. Say "N failed: <names>, pre-existing / mine / unknown",
+and read the result line itself, not the tail of a truncated pipe.
 
 ### 5. REFACTOR — clean while tests stay green
 
@@ -85,35 +98,48 @@ feature over:
 None of these are judgement calls. They're the failure mode the Iron
 Law exists to prevent.
 
-## Applying to MARVIN
+## When writing or changing any test
 
-MARVIN currently has no automated test harness — see
-[docs/development/testing.md](../../../docs/development/testing.md) for
-the status. That doesn't exempt this skill. It escalates it: the
-first place TDD should land is wherever tests are going to live.
+Read [writing-good-tests.md](writing-good-tests.md) first. Its rules in one
+line each: name the production change that would make the test fail before
+you write it; derive expected values without the code under test; assert real
+behaviour, never a mock; keep test-only code out of production classes.
 
-For MARVIN-scoped TDD:
+## Rationalisations
 
-- **Pure functions** in `sidecar/packages/tools/src/policy.ts`,
-  `sidecar/packages/runtime/src/cost-tracker.ts`,
-  `sidecar/packages/runtime/src/projects.ts`,
-  `sidecar/packages/graphify-bridge/src/read-graph.ts` — low friction. Pick
-  vitest or bun test. Each test is seconds.
-- **API route integration** — boot a Next.js test server, fire HTTP
-  requests, assert responses. Higher friction but higher coverage.
-- **SDK-in-the-loop** — record fixture event streams, replay them in
-  tests. Deferred per the testing doc; also appropriate for TDD once
-  the fixture harness exists.
+| Excuse | Reality |
+|---|---|
+| "Too simple to test" | Simple code breaks. The test takes thirty seconds. |
+| "I'll add tests after" | A test written after passes at once, which proves nothing: you never watched it fail, so you never showed it can catch the bug. Tests-first ask "what should this do?"; tests-after ask "what does this do?" and check the cases you remembered. |
+| "I already tested it by hand" | Manual testing leaves no record, cannot be re-run when the code changes, and skips the cases you forget under pressure. |
+| "Deleting this much code is wasteful" | The time is spent either way. The choice is rewriting with confidence or keeping code you cannot trust. |
+| "I need to explore first" | Fine. Throw the exploration away and start the cycle. |
+| "The test is hard to write" | Hard to test means hard to use. Simplify the interface; do not skip the test. |
 
-When applying to new MARVIN code: pick a small pure function, write
-the failing test, watch it fail, implement. The harness gets built
-one feature at a time by following the Iron Law, not by writing "set
-up testing infrastructure" as a separate ticket.
+## Running tests
+
+Use the project's own test command and its own conventions; this skill names
+no runner. In a user's project, read its `package.json`, `pom.xml`,
+`Makefile`, CI file or `CLAUDE.md` / `AGENTS.md` and run what they use.
+
+In MARVIN's own repository (this skill is installed user-level, so this
+applies only when the working tree is MARVIN's source): the sidecar suites
+run with `npx vitest run` from the repo root (`vitest.config.ts`, which sets
+`isolate: false`, so a test that leaks module state shows up only in the full
+run), a single file with `npx vitest run <path>`, and the macOS logic with
+`cd macos && swift run MARVINTests`. The first test of a new behaviour goes
+next to the code it covers (`sidecar/packages/<pkg>/tests/`). See
+`docs/development/testing.md`.
 
 ## Attribution
 
-Adapted from the `test-driven-development` skill in
-[github.com/obra/superpowers](https://github.com/obra/superpowers), by
-Jesse Vincent (obra). Used under the Superpowers plugin's
-open-source licence. Rewritten in MARVIN's voice; stripped multi-agent
-framing; Iron Law and phase structure preserved.
+Adapted from the `test-driven-development` skill and its
+`writing-good-tests.md` in [github.com/obra/superpowers](https://github.com/obra/superpowers)
+(MIT, Copyright (c) 2025 Jesse Vincent), refreshed 2026-11-25 against
+upstream v7.0.2 (first ported 2026-04-19). MARVIN's changes: rewritten in a
+short form; the full-suite-and-name-every-failure rule added (upstream v6.4.1)
+with MARVIN's own `isolate: false` lesson; six rationalisation rows kept of
+eleven; no graphviz diagram, long examples or checklist; no "human partner"
+asides; no pointers to other Superpowers skills; the project-specific section
+replaced by a generic "Running tests" section. Single assistant: no
+subagent-driven steps.

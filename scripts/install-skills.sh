@@ -4,7 +4,7 @@
 # Install the Anthropic skills MARVIN leans on at user-level
 # (~/.claude/skills/). Idempotent — skips anything already present.
 #
-# The repo vendors ONLY the 4 MARVIN-adopted skills (no upstream source) at
+# The repo vendors ONLY the 5 MARVIN-adopted skills (no upstream source) at
 # `.claude/skills/` — those copy straight across, no network. The upstream
 # Anthropic skills are NOT committed (too big for the public repo; open-source
 # tidy 2026-06-15); this script shallow-clones `anthropics/skills` from GitHub
@@ -17,7 +17,8 @@
 # web-artifacts-builder, skill-creator), operations / PM (internal-comms).
 #
 # MARVIN-adopted skills (not in anthropics/skills; bundle-only source):
-#   pr-review, security-audit, systematic-debugging, test-driven-development.
+#   pr-review, security-audit, systematic-debugging, test-driven-development,
+#   verification-before-completion.
 # These are ports of third-party open-source skills from Jesse Vincent's
 # Superpowers (obra/superpowers) and Garry Tan's gstack (garrytan/gstack).
 # Attribution lives at the bottom of each SKILL.md.
@@ -58,6 +59,7 @@ SKILLS=(
   security-audit
   systematic-debugging
   test-driven-development
+  verification-before-completion
 )
 
 # Only clone from GitHub if at least one skill is missing from the bundle.
