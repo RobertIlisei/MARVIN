@@ -429,6 +429,7 @@ enum SurfaceSnapshot {
         ]
 
         return chat + topBar + statusBar + cost + panes + editor + backlog + settings + live + supervisor + railAndBanner
+            + PaneKitFixtures.surfaces
     }
 
     // MARK: - Per-surface preparation

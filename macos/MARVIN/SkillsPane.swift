@@ -158,8 +158,12 @@ private struct SkillsIndexResponse: Decodable {
     /// failed: …" were the same pixels and the failure was the one certain to
     /// vanish unread. `PaneNotice.dismissal` decides by kind now.
     @State private var notice: PaneNotice?
-    /// Updates found by the last check, kept so the count outlives the notice.
-    @State private var updatesAvailable: Int = 0
+    /// The filter under the header, the selected row, and which groups are closed.
+    @State private var filter = ""
+    @State private var selection: String?
+    @State private var groups = PaneCollapseStore(pane: "skills")
+    /// "Update all" is running.
+    @State private var bulkUpdating = false
     /// Skill content shown in the View sheet. Loaded via /api/skills/content,
     /// which whitelists ~/.claude/skills/ and <workDir>/.marvin/skills/.
     /// Skills live outside the project workDir so the standard sandboxed
@@ -185,6 +189,13 @@ private struct SkillsIndexResponse: Decodable {
     @State private var bindURL = ""
     @State private var bindBusy = false
     @State private var bindError: String?
+
+    /// The snapshot harness shows the pane after an update check ran and with a
+    /// row open (`SurfaceSnapshotPaneKit`); nothing else passes arguments.
+    init(seedUpdateStatus: [String: String] = [:], seedSelection: String? = nil) {
+        _updateStatus = State(initialValue: seedUpdateStatus)
+        _selection = State(initialValue: seedSelection)
+    }
 
     struct BindTarget: Identifiable {
         let name: String
@@ -224,19 +235,24 @@ private struct SkillsIndexResponse: Decodable {
     var body: some View {
         VStack(spacing: 0) {
             if bridge.projectWorkDir == nil {
-                PaneEmptyView(state: .noProject("skills"))
-            } else if let err = loadError, index == nil {
+                skillsHeader(total: nil)
+                PaneEmptyView(state: .noProject("skills")).frame(maxHeight: .infinity)
+            } else if loadError != nil, index == nil {
+                skillsHeader(total: nil)
                 PaneEmptyView(
-                    state: PaneEmptyState(headline: "Could not read the skills index", hint: err, symbol: "exclamationmark.triangle"),
+                    state: .couldNotLoad("skills", reason: "Check that MARVIN's server is running, then try again."),
                     actionTitle: "Retry",
                     action: { Task { await refresh() } }
-                )
+                ).frame(maxHeight: .infinity)
             } else if let idx = index {
                 content(idx)
             } else if isLoading {
+                skillsHeader(total: nil)
                 PaneLoadingView(label: "Reading the skills index…")
+                Spacer(minLength: 0)
             } else {
-                PaneEmptyView(state: PaneEmptyState(headline: "No skills found", hint: "Nothing is installed for this project yet.", symbol: "sparkle"))
+                skillsHeader(total: nil)
+                PaneEmptyView(state: .nothingYet("skills", hint: "Add one from GitHub, or build one for this project.")).frame(maxHeight: .infinity)
             }
             if let notice {
                 PaneNoticeStrip(notice: notice, onDismiss: { withAnimation { self.notice = nil } })
@@ -271,7 +287,7 @@ private struct SkillsIndexResponse: Decodable {
                     .keyboardShortcut(.escape, modifiers: [])
             }
             Text("Paste a Git repo URL — a single skill, a multi-skill repo, or a plugin marketplace (MARVIN detects which). It clones and copies the SKILL.md folder(s) in; it never runs anything from the repo. Third-party skills can carry scripts — only add sources you trust.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(PaneFont.secondary).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             TextField("https://github.com/owner/repo  ·  …/tree/main/skills/<name>", text: $addURL)
                 .textFieldStyle(.roundedBorder)
@@ -287,7 +303,7 @@ private struct SkillsIndexResponse: Decodable {
             if !addPlugins.isEmpty {
                 MarvinDivider()
                 Text("Marketplace \(addMarketplace.map { "“\($0)”" } ?? "") — pick a plugin to install its skills:")
-                    .font(.caption.weight(.medium))
+                    .font(PaneFont.action)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(addPlugins) { p in
@@ -295,7 +311,7 @@ private struct SkillsIndexResponse: Decodable {
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(p.title).font(.body.monospaced())
                                     if let d = p.description, !d.isEmpty {
-                                        Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                        Text(d).font(PaneFont.secondary).foregroundStyle(.secondary).lineLimit(2)
                                     }
                                 }
                                 Spacer()
@@ -312,7 +328,7 @@ private struct SkillsIndexResponse: Decodable {
             if !addCandidates.isEmpty {
                 MarvinDivider()
                 Text("This repo has several skills — pick which to install:")
-                    .font(.caption.weight(.medium))
+                    .font(PaneFont.action)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(addCandidates) { c in
@@ -323,7 +339,7 @@ private struct SkillsIndexResponse: Decodable {
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(c.name).font(.body.monospaced())
                                     if let d = c.description, !d.isEmpty {
-                                        Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                        Text(d).font(PaneFont.secondary).foregroundStyle(.secondary).lineLimit(2)
                                     }
                                 }
                             }
@@ -334,7 +350,7 @@ private struct SkillsIndexResponse: Decodable {
             }
 
             if let err = addError {
-                Text(err).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                Text(err).font(PaneFont.secondary).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
 
             HStack {
@@ -412,97 +428,12 @@ private struct SkillsIndexResponse: Decodable {
     // MARK: - Discovered (LLM) suggestions section (ADR-0028)
 
     @ViewBuilder
-    private func discoveredSection(_ block: SkillsIndexResponse.DiscoveredBlock?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(.tint)
-                Text("MARVIN suggests building")
-                    .font(.headline)
-                if let d = block, d.stale {
-                    Text("stale — fingerprint changed")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.12))
-                        .clipShape(Capsule())
-                }
-                Spacer()
-                Button {
-                    Task { await runDiscovery() }
-                } label: {
-                    if discovering {
-                        HStack(spacing: 4) {
-                            ProgressView().controlSize(.small)
-                            Text("Discovering…").font(.caption)
-                        }
-                    } else {
-                        Label(
-                            (block?.suggestions.isEmpty ?? true)
-                                ? "Discover skills"
-                                : "Re-discover",
-                            systemImage: "wand.and.stars"
-                        )
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(discovering)
-            }
-            if let d = block, !d.suggestions.isEmpty {
-                ForEach(d.suggestions) { s in
-                    discoveredRow(s)
-                }
-                if let at = d.discoveredAt, let cents = d.costCents {
-                    Text("Discovered \(shortDate(at)) · \(cents)¢")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                } else if let at = d.discoveredAt {
-                    Text("Discovered \(shortDate(at))")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            } else {
-                Text("Click Discover to ask MARVIN which project-local skills would be most useful for this codebase. One LLM call; ~1–3¢. Suggestions are cached at `.marvin/discovered-skills.json`.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func discoveredRow(_ s: SkillsIndexResponse.DiscoveredSuggestion) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(s.name)
-                    .font(.system(.body, design: .monospaced))
-                    .fontWeight(.medium)
-                Text(s.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-            }
-            Spacer()
-            Button("Why?") { inspectedDiscovered = s }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-            Button("Build") {
-                Task { await buildDiscovered(s) }
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .disabled(buildingSuggestion != nil)
-        }
-        .padding(.vertical, 2)
-    }
-
-    @ViewBuilder
     private func discoveredDetailSheet(_ s: SkillsIndexResponse.DiscoveredSuggestion) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(s.name).font(.system(.headline, design: .monospaced))
-                    Text(s.description).font(.caption).foregroundStyle(.secondary)
+                    Text(s.description).font(PaneFont.secondary).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Build") { Task { await buildDiscovered(s); inspectedDiscovered = nil } }
@@ -653,7 +584,7 @@ private struct SkillsIndexResponse: Decodable {
                     .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(skill.name).font(.headline)
-                    Text(skill.path).font(.caption).foregroundStyle(.secondary)
+                    Text(skill.path).font(PaneFont.secondary).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                 }
                 Spacer()
@@ -687,48 +618,393 @@ private struct SkillsIndexResponse: Decodable {
 
     // MARK: - Content
 
-    @ViewBuilder
-    private func content(_ idx: SkillsIndexResponse) -> some View {
-        ScrollView {
-            // LazyVStack, not VStack.
-            //
-            // This pane renders 45+ skill rows, each with an icon, name,
-            // description and two buttons. A plain `VStack` builds and lays
-            // out EVERY one of them the moment the pane becomes visible,
-            // including the ~35 below the fold — which is the cost the user
-            // feels on a tab switch ("very sluggish when loading, it's not
-            // fluid", 2026-08-31).
-            //
-            // It is not a data problem, so caching and skeletons do not help:
-            // `/api/skills` answers in **3.6 ms** and the payload is already
-            // in hand before the pane draws. The delay is layout, and the fix
-            // is to stop laying out what nobody is looking at.
-            LazyVStack(alignment: .leading, spacing: 18) {
-                paneActions
-                // ADR-0037 — organised around the one question that matters:
-                // what is ACTIVE for this project. Active → available to turn
-                // on → recommended to add. (Was five flat, overlapping
-                // sections that read as "all over the place".)
-                activeSection(idx)
-                MarvinDivider()
-                availableSection(idx)
-                MarvinDivider()
-                recommendedSection(idx)
-                MarvinDivider()
-                auditFooter(idx.audit)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
+    /// One installed skill, user-global or project-local, in one shape so the
+    /// pane can group, filter and render them the same way.
+    private struct SkillItem: Identifiable {
+        let id: String            // the SKILL.md path: unique across scopes
+        let name: String
+        let description: String
+        let scope: String         // "user-global" | "project-local"
+        let source: SkillSourceInfo?
+        let loadIssue: SkillsIndexResponse.SkillLoadIssue?
+        /// User-global skills are switched on and off per project; project-local
+        /// ones are authored for the project and always on (unless blocked).
+        let toggleable: Bool
+        var key: String { "\(scope):\(name)" }
+    }
+
+    private func installedItems(_ idx: SkillsIndexResponse) -> [SkillItem] {
+        idx.userGlobal.map {
+            SkillItem(id: $0.path, name: $0.name, description: $0.description, scope: "user-global",
+                      source: $0.source, loadIssue: nil, toggleable: true)
+        } + idx.projectLocal.map {
+            SkillItem(id: $0.path, name: $0.name, description: $0.description, scope: "project-local",
+                      source: $0.source, loadIssue: $0.loadIssue, toggleable: false)
         }
     }
 
-    /// Pane-local actions. These used to be `ToolbarItem`s, which was wrong
-    /// twice over: `LeftPane` keeps every pane mounted (opacity-toggled, to
-    /// preserve child `@State`), so BOTH the Skills and Plugins toolbars
-    /// rendered into the window toolbar at once — six unlabelled icons — and
-    /// `.help()` on a `ToolbarItem` button never surfaced a tooltip. A row
-    /// inside the pane shows only when the pane does, and `.help()` on a plain
-    /// view works everywhere else in this app.
+    private func groupingEntry(_ s: SkillItem) -> InstalledEntry {
+        InstalledEntry(
+            id: s.id, name: s.name,
+            enabled: s.toggleable ? activeSkillNames.contains(s.name) : true,
+            hasUpdate: s.source?.updatable == true && updateStatus[s.key] == "update-available",
+            blocked: s.loadIssue?.blocked == true)
+    }
+
+    @ViewBuilder
+    private func content(_ idx: SkillsIndexResponse) -> some View {
+        let all = installedItems(idx)
+        let filtering = PaneFilter.isActive(filter)
+        let shown = all.filter { PaneFilter.matches(filter, in: [$0.name, $0.description]) }
+        let sections = InstalledGrouping.group(shown.map(groupingEntry))
+        let byId = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let suggestions = idx.suggestions.filter { PaneFilter.matches(filter, in: [$0.name, $0.rationale]) }
+        let discovered = (idx.discovered?.suggestions ?? []).filter { PaneFilter.matches(filter, in: [$0.name, $0.description]) }
+        let nothing = sections.isEmpty && suggestions.isEmpty && discovered.isEmpty
+        let nothingAtAll = all.isEmpty && idx.suggestions.isEmpty && (idx.discovered?.suggestions.isEmpty ?? true)
+        VStack(spacing: 0) {
+            skillsHeader(total: nothingAtAll ? nil : all.count)
+            if nothingAtAll {
+                PaneEmptyView(
+                    state: .nothingYet("skills", hint: "Add one from GitHub, or build one for this project."),
+                    actionTitle: "Add a skill…"
+                ) { openAddSheet() }
+                .frame(maxHeight: .infinity)
+            } else {
+                PaneFilterField(text: $filter, prompt: "Filter skills")
+                if filtering && nothing {
+                    PaneEmptyView(state: .filtered(query: filter, noun: "skills"), actionTitle: "Clear filter") { filter = "" }
+                    Spacer(minLength: 0)
+                } else {
+                    PaneScrollList(
+                        rows: visibleRows(sections: sections, byId: byId, suggestions: suggestions, discovered: discovered, filtering: filtering),
+                        selection: $selection,
+                        onActivate: { id in activate(id, byId: byId, idx: idx) },
+                        onSpace: { id in if let s = byId[id], s.toggleable { Task { await toggleSkill(s.name) } } },
+                        onEscape: { if PaneFilter.isActive(filter) { filter = ""; return true }; return false }
+                    ) {
+                        ForEach(sections, id: \.group) { sec in
+                            installedGroup(sec, byId: byId, filtering: filtering)
+                        }
+                        suggestedGroup(idx, suggestions: suggestions, discovered: discovered, filtering: filtering)
+                        auditGroup(idx.audit, filtering: filtering)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The rows on screen, in order — what the arrow keys walk and type-ahead
+    /// matches. A closed group's rows are not on screen, so not in the list.
+    private func visibleRows(
+        sections: [InstalledGrouping.Section], byId: [String: SkillItem],
+        suggestions: [SkillsIndexResponse.Suggestion], discovered: [SkillsIndexResponse.DiscoveredSuggestion],
+        filtering: Bool
+    ) -> [(id: String, title: String)] {
+        var out: [(id: String, title: String)] = []
+        for sec in sections where PaneCollapseState.isShown(collapsed: groups.isCollapsed(sec.group.key, default: sec.group == .available), filterActive: filtering) {
+            out += sec.ids.compactMap { id in byId[id].map { (id: id, title: $0.name) } }
+        }
+        if PaneCollapseState.isShown(collapsed: groups.isCollapsed("suggested", default: true), filterActive: filtering) {
+            out += suggestions.map { (id: "suggestion:\($0.id)", title: $0.name) }
+            out += discovered.map { (id: "discovered:\($0.id)", title: $0.name) }
+        }
+        return out
+    }
+
+    /// Return on a row does the row's one obvious thing.
+    private func activate(_ id: String, byId: [String: SkillItem], idx: SkillsIndexResponse) {
+        if let s = byId[id] {
+            if s.source?.updatable == true, updateStatus[s.key] == "update-available" {
+                Task { await updateOneSkill(name: s.name, scope: s.scope) }
+            } else {
+                openSkillFile(s.id)
+            }
+        } else if id.hasPrefix("suggestion:"), let s = idx.suggestions.first(where: { "suggestion:\($0.id)" == id }), !s.alreadyInstalled {
+            Task { await dispatchInstallOrBuild(s) }
+        } else if id.hasPrefix("discovered:"), let s = idx.discovered?.suggestions.first(where: { "discovered:\($0.id)" == id }) {
+            inspectedDiscovered = s
+        }
+    }
+
+    // MARK: Header
+
+    /// One verb the pane exists for, and a menu for the rest (the standard's
+    /// two-action header).
+    private func skillsHeader(total: Int?) -> some View {
+        PaneHeader(title: "Skills", symbol: "sparkles.rectangle.stack", count: total) {
+            if total != nil {
+                PaneActionButton(
+                    title: "Add…", role: .primary,
+                    help: "Add from GitHub — fetch a skill from a Git repo or marketplace URL"
+                ) { openAddSheet() }
+                PaneOverflowMenu(label: "More actions for skills") {
+                    Button("Check for updates") { Task { await checkAllSkillUpdates() } }
+                        .disabled(checkingUpdates || updatableSkillCount == 0)
+                        .help(updatableSkillCount == 0
+                              ? "Nothing to check: no installed skill has a recorded source yet. Use “Set source…” on a skill first."
+                              : "Re-fetch the \(updatableSkillCount) skill\(updatableSkillCount == 1 ? "" : "s") MARVIN installed and report which changed upstream. Installs nothing.")
+                    Button("Reload the list") { Task { await refresh() } }
+                        .disabled(isLoading)
+                        .help("Read the installed skills from disk again (does not check upstream)")
+                }
+            }
+        }
+    }
+
+    private func openAddSheet() {
+        addError = nil; addCandidates = []; addSelected = []
+        addPlugins = []; addMarketplace = nil
+        addSheetOpen = true
+    }
+
+    // MARK: Groups
+
+    private func groupTint(_ g: InstalledGroup) -> Color {
+        switch g {
+        case .attention: return GitDecorationColor.deleted
+        case .needsUpdate: return .orange
+        case .enabled, .available: return MarvinTheme.textMuted
+        }
+    }
+
+    private func groupHelp(_ g: InstalledGroup) -> String {
+        switch g {
+        case .attention: return "Installed in this project, but the agent's skill loader skipped them, so MARVIN cannot use them."
+        case .needsUpdate: return "A check found a newer version upstream."
+        case .enabled: return "What MARVIN uses here. The project's fingerprint picks these automatically; switch one to change it."
+        case .available: return "Installed in ~/.claude/skills but not offered to MARVIN in this project. Switch one on to enable it here."
+        }
+    }
+
+    @ViewBuilder
+    private func installedGroup(_ sec: InstalledGrouping.Section, byId: [String: SkillItem], filtering: Bool) -> some View {
+        let g = sec.group
+        PaneGroup(
+            store: groups, id: g.key, title: g.title, count: sec.ids.count, tint: groupTint(g),
+            help: groupHelp(g), startsCollapsed: g == .available, filterActive: filtering,
+            trailing: {
+                if g == .needsUpdate {
+                    PaneActionButton(
+                        title: PaneBulkAction.title("Update all", count: sec.ids.count),
+                        role: .primary,
+                        help: "Re-fetch every skill in this group from its recorded source.",
+                        disabled: bulkUpdating || updatingSkill != nil || checkingUpdates
+                    ) { Task { await updateAllAvailable() } }
+                }
+            },
+            content: {
+                ForEach(sec.ids, id: \.self) { id in
+                    if let s = byId[id] { skillRow(s) }
+                }
+            })
+    }
+
+    @ViewBuilder
+    private func suggestedGroup(
+        _ idx: SkillsIndexResponse, suggestions: [SkillsIndexResponse.Suggestion],
+        discovered: [SkillsIndexResponse.DiscoveredSuggestion], filtering: Bool
+    ) -> some View {
+        let hasDiscovered = !(idx.discovered?.suggestions.isEmpty ?? true)
+        let stale = idx.discovered?.stale == true
+        if !(filtering && suggestions.isEmpty && discovered.isEmpty) {
+            PaneGroup(
+                store: groups, id: "suggested", title: "Suggested",
+                count: suggestions.count + discovered.count, tint: Color.accentColor,
+                help: "Skills not installed or built yet. Matched to this project's fingerprint (\(idx.fingerprint.tags.count) tags); “Install” adds a user-global skill, “Build” authors a project-local one."
+                    + (stale ? " The AI suggestions are stale: the project changed since they were made." : "")
+                    + discoveryStamp(idx.discovered),
+                startsCollapsed: true, filterActive: filtering,
+                trailing: {
+                    if discovering {
+                        ProgressView().controlSize(.small).scaleEffect(0.7)
+                            .accessibilityLabel("Discovering skills")
+                    } else {
+                        PaneActionButton(
+                            title: hasDiscovered ? "Re-discover" : "Discover",
+                            help: "Ask MARVIN which project-local skills would help in this codebase. One model call, about 1–3¢; cached in .marvin/discovered-skills.json."
+                        ) { Task { await runDiscovery() } }
+                    }
+                },
+                content: {
+                    ForEach(suggestions) { s in suggestionRow(s) }
+                    ForEach(discovered) { s in discoveredRow(s) }
+                    if suggestions.isEmpty && discovered.isEmpty && !filtering {
+                        PaneNote(text: "Nothing suggested yet. Discover asks MARVIN for ideas from this codebase.")
+                    }
+                })
+        }
+    }
+
+    private func discoveryStamp(_ block: SkillsIndexResponse.DiscoveredBlock?) -> String {
+        guard let at = block?.discoveredAt else { return "" }
+        let cost = block?.costCents.map { " · \($0)¢" } ?? ""
+        return " Discovered \(shortDate(at))\(cost)."
+    }
+
+    @ViewBuilder
+    private func auditGroup(_ audit: SkillsIndexResponse.AuditBlock, filtering: Bool) -> some View {
+        if !filtering {
+            PaneGroup(
+                store: groups, id: "audit", title: "Skill audit", help: "Whether MARVIN has been told you reviewed the project's skills. Park all closes the pending-audit reminder until something changes.",
+                startsCollapsed: true) {
+                auditRow(audit)
+            }
+        }
+    }
+
+    // MARK: Rows
+
+    private func skillRow(_ s: SkillItem) -> some View {
+        let status = updateStatus[s.key]
+        let updatable = s.source?.updatable == true
+        let blocked = s.loadIssue?.blocked == true
+        let active = s.toggleable ? activeSkillNames.contains(s.name) : !blocked
+        let desc = SkillRowDescription.display(s.description)
+        let canRun = updatingSkill == nil && !checkingUpdates && !bulkUpdating
+
+        var secondary = desc.text
+        var style: PaneRowSecondaryStyle = desc.isPlaceholder ? .placeholder : .normal
+        if let issue = s.loadIssue {
+            secondary = issue.reason
+            style = blocked ? .error : .warning
+        }
+
+        var trailingText: String?
+        var trailingSymbol: String?
+        var trailingTint = MarvinTheme.textMuted
+        if blocked {
+            trailingText = "Not loaded"; trailingSymbol = "exclamationmark.triangle.fill"; trailingTint = GitDecorationColor.deleted
+        } else if status == "updated" {
+            trailingText = "Updated"; trailingSymbol = "checkmark"; trailingTint = GitDecorationColor.added
+        } else if !s.toggleable {
+            trailingText = "Project"
+        }
+
+        let leading: PaneRowLeading = s.toggleable
+            ? .toggle(
+                isOn: active, name: s.name,
+                help: active
+                    ? "On for this project. Switch off to stop offering it here."
+                    : "Off here. Switch on to offer it to MARVIN for this project.",
+                onToggle: { _ in Task { await toggleSkill(s.name) } })
+            : .glyph(blocked ? "exclamationmark.triangle.fill" : "folder", blocked ? GitDecorationColor.deleted : MarvinTheme.textMuted)
+
+        var items: [PaneRowItem] = []
+        if updatable {
+            let waiting = status == "update-available"
+            items.append(PaneRowItem(
+                id: "update", title: waiting ? "Update" : "Re-fetch from source",
+                systemImage: "arrow.triangle.2.circlepath", role: waiting ? .primary : .normal, enabled: canRun,
+                help: "Re-fetch from \(s.source?.url ?? "its recorded source"). Last updated \(s.source?.lastUpdated ?? "unknown").",
+                perform: { Task { await updateOneSkill(name: s.name, scope: s.scope) } }))
+        }
+        items.append(PaneRowItem(id: "view", title: "View SKILL.md", systemImage: "doc.text", perform: { openSkillFile(s.id) }))
+        if !updatable {
+            items.append(PaneRowItem(
+                id: "source", title: "Set source…", systemImage: "link",
+                help: "Give this skill an origin so Update works.",
+                perform: { bindURL = ""; bindError = nil; bindSourceFor = BindTarget(name: s.name, scope: s.scope) }))
+        }
+        items.append(PaneRowItem(id: "copy", title: "Copy name", systemImage: "doc.on.doc", perform: {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(s.name, forType: .string)
+        }))
+
+        return PaneListRow(
+            rowID: s.id, title: s.name, titleIsIdentifier: true, leading: leading,
+            secondary: secondary, secondaryStyle: style,
+            trailingText: trailingText, trailingSymbol: trailingSymbol, trailingTint: trailingTint,
+            selected: selection == s.id, busy: updatingSkill == s.key, items: items,
+            menuLabel: "More actions for \(s.name)", onSelect: { selection = s.id },
+            showsDetail: selection == s.id,
+            detail: { skillDetail(s) })
+    }
+
+    /// What a selected skill adds: the whole description and where it came from.
+    @ViewBuilder
+    private func skillDetail(_ s: SkillItem) -> some View {
+        let desc = SkillRowDescription.display(s.description)
+        VStack(alignment: .leading, spacing: PaneSpace.tight) {
+            if !desc.isPlaceholder {
+                Text(desc.text).lineLimit(8)
+            }
+            if let src = s.source {
+                Text("Source: \(src.url ?? "recorded")\(src.lastUpdated.isEmpty ? "" : " · updated \(shortDate(src.lastUpdated))")")
+                    .lineLimit(2).truncationMode(.middle)
+            } else {
+                Text("No recorded source, so it cannot be updated. Use “Set source…” in its … menu.")
+            }
+        }
+        .font(PaneFont.secondary)
+        .foregroundStyle(MarvinTheme.textMuted)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func suggestionRow(_ s: SkillsIndexResponse.Suggestion) -> some View {
+        let id = "suggestion:\(s.id)"
+        let verb = s.verb == "install" ? "Install" : "Build"
+        return PaneListRow(
+            rowID: id, title: s.name, titleIsIdentifier: true,
+            leading: .glyph(s.verb == "install" ? "shippingbox" : "hammer"),
+            secondary: s.rationale,
+            trailingText: s.alreadyInstalled ? "Installed" : nil,
+            trailingSymbol: s.alreadyInstalled ? "checkmark" : nil,
+            selected: selection == id, busy: inFlightAction == s.id,
+            items: s.alreadyInstalled ? [] : [
+                PaneRowItem(id: "go", title: verb, role: .primary, enabled: inFlightAction == nil,
+                            help: s.verb == "install" ? "Add this as a user-global skill." : "Author this as a project-local skill.",
+                            perform: { Task { await dispatchInstallOrBuild(s) } }),
+            ],
+            menuLabel: "More actions for \(s.name)", onSelect: { selection = id },
+            showsDetail: selection == id,
+            detail: {
+                VStack(alignment: .leading, spacing: PaneSpace.tight) {
+                    Text(s.rationale)
+                    if !s.matchedTags.isEmpty { Text("Matched: \(s.matchedTags.joined(separator: ", "))") }
+                }
+                .font(PaneFont.secondary).foregroundStyle(MarvinTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            })
+    }
+
+    private func discoveredRow(_ s: SkillsIndexResponse.DiscoveredSuggestion) -> some View {
+        let id = "discovered:\(s.id)"
+        return PaneListRow(
+            rowID: id, title: s.name, titleIsIdentifier: true, leading: .glyph("sparkles"),
+            secondary: s.description,
+            selected: selection == id, busy: buildingSuggestion == s.name,
+            items: [
+                PaneRowItem(id: "build", title: "Build", role: .primary, enabled: buildingSuggestion == nil,
+                            help: "Author this as a project-local skill.", perform: { Task { await buildDiscovered(s) } }),
+                PaneRowItem(id: "review", title: "Review the proposal…", systemImage: "doc.text.magnifyingglass",
+                            perform: { inspectedDiscovered = s }),
+            ],
+            menuLabel: "More actions for \(s.name)", onSelect: { selection = id },
+            showsDetail: selection == id,
+            detail: {
+                Text(s.rationale).font(PaneFont.secondary).foregroundStyle(MarvinTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            })
+    }
+
+    private func auditRow(_ audit: SkillsIndexResponse.AuditBlock) -> some View {
+        PaneListRow(
+            rowID: "audit", title: audit.decided ? "Audit decided" : "Audit pending",
+            leading: .glyph(audit.decided ? "checkmark.seal" : "questionmark.circle",
+                            audit.decided ? GitDecorationColor.added : .orange),
+            secondary: audit.decisionLine ?? (audit.decided ? nil : "Nobody has reviewed this project's skills yet."),
+            items: [
+                audit.decided
+                    ? PaneRowItem(id: "unpark", title: "Unpark", role: .primary, enabled: inFlightAction == nil,
+                                  help: "Ask again about this project's skills.", perform: { Task { await unpark() } })
+                    : PaneRowItem(id: "park", title: "Park all", role: .primary, enabled: inFlightAction == nil,
+                                  help: "Record the current skills as reviewed.", perform: { Task { await parkAll() } }),
+            ])
+    }
+
+    // MARK: Notices
+
     /// Something worked; it leaves on its own.
     @MainActor private func flash(_ text: String) { show(PaneNotice(kind: .success, text: text)) }
 
@@ -746,198 +1022,12 @@ private struct SkillsIndexResponse: Decodable {
         }
     }
 
-    /// Three actions, one of which is the reason the pane exists. Adding a
-    /// skill is the creative verb, so it keeps its label as the one primary
-    /// chip; the two maintenance verbs become icons beside it (ADR-0114).
-    private var paneActions: some View {
-        PaneHeader(title: "Skills", symbol: "sparkles.rectangle.stack") {
-            Button("Add…") {
-                addError = nil; addCandidates = []; addSelected = []
-                addPlugins = []; addMarketplace = nil
-                addSheetOpen = true
-            }
-            .rowChip(.primary)
-            .help("Add from GitHub — fetch a skill from a Git repo or marketplace URL")
-
-            Button { Task { await checkAllSkillUpdates() } } label: {
-                Image(systemName: "arrow.triangle.2.circlepath")
-            }
-            .paneIconButton()
-            .help(updatableSkillCount == 0
-                  ? "Check for updates — nothing to check: no installed skill has a recorded source yet. Use “Set source” on a row first."
-                  : "Check for updates — re-fetch the \(updatableSkillCount) skill\(updatableSkillCount == 1 ? "" : "s") MARVIN installed and report which changed upstream. Installs nothing.")
-            .disabled(checkingUpdates || updatableSkillCount == 0)
-
-            Button { Task { await refresh() } } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .paneIconButton()
-            .help("Reload the installed list from disk (does not check upstream)")
-            .disabled(isLoading)
-        }
-    }
-
-    /// Rows that could be updated at all — gates the toolbar button so it
-    /// isn't offered on a tree where nothing has a recorded source.
+    /// Rows that could be updated at all — gates "Check for updates" so it is
+    /// not offered on a tree where nothing has a recorded source.
     private var updatableSkillCount: Int {
         guard let idx = index else { return 0 }
         return idx.userGlobal.filter { $0.source?.updatable == true }.count
             + idx.projectLocal.filter { $0.source?.updatable == true }.count
-    }
-
-    /// Shared section header: icon · title · count chip.
-    /// One section header for the pane, from the shared vocabulary. Four
-    /// other shapes existed across the seven panes (ADR-0114).
-    private func sectionHeader(_ icon: String, _ tint: Color, _ title: String, count: Int? = nil, trailing: String? = nil) -> some View {
-        PaneSectionHeader(title: title, count: count, tint: tint) {
-            if let trailing {
-                Text(trailing)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(Capsule().fill(Color.orange.opacity(0.16)))
-            }
-        }
-    }
-
-    /// 1 — what MARVIN actually uses here: active user-global + project-local.
-    @ViewBuilder
-    private func activeSection(_ idx: SkillsIndexResponse) -> some View {
-        let active = idx.userGlobal.filter { activeSkillNames.contains($0.name) }
-        // A blocked project-local skill is NOT active — the loader never
-        // registered it. It still shows in the list, flagged, because this
-        // pane is where you would go to find out why.
-        let loadable = idx.projectLocal.filter { $0.loadIssue?.blocked != true }
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("checkmark.seal.fill", .green, "Active in this project",
-                          count: active.count + loadable.count)
-            Text("What MARVIN uses here — the fingerprint picks these automatically; toggle to change. Skills that aren't active aren't offered to MARVIN for this project.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if active.isEmpty && idx.projectLocal.isEmpty {
-                Text("Nothing active yet — enable a skill below.")
-                    .font(.caption).foregroundStyle(.tertiary)
-            } else {
-                ForEach(active) { skill in
-                    installedRow(name: skill.name, description: skill.description, path: skill.path,
-                                 badge: nil, scope: "user-global", source: skill.source,
-                                 active: true,
-                                 onToggle: { Task { await toggleSkill(skill.name) } })
-                }
-                ForEach(idx.projectLocal) { skill in
-                    // Project-local skills are authored FOR this project — always
-                    // active, no toggle. Invoked as `marvin-project-local:<name>`.
-                    installedRow(name: skill.name, description: skill.description, path: skill.path,
-                                 badge: skill.loadIssue?.blocked == true ? "not loaded" : "local",
-                                 scope: "project-local", source: skill.source,
-                                 loadIssue: skill.loadIssue)
-                }
-            }
-        }
-    }
-
-    /// 2 — installed on the machine but off here: toggle on to enable.
-    @ViewBuilder
-    private func availableSection(_ idx: SkillsIndexResponse) -> some View {
-        let inactive = idx.userGlobal.filter { !activeSkillNames.contains($0.name) }
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("tray", .gray, "Installed, off in this project", count: inactive.count,
-                          trailing: updatesAvailable > 0 ? "\(updatesAvailable) with updates" : nil)
-            Text("In ~/.claude/skills/ but not offered to MARVIN here. Toggle on to enable for this project.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if inactive.isEmpty {
-                Text("All installed skills are active here.")
-                    .font(.caption).foregroundStyle(.tertiary)
-            } else {
-                ForEach(inactive) { skill in
-                    installedRow(name: skill.name, description: skill.description, path: skill.path,
-                                 badge: nil, scope: "user-global", source: skill.source,
-                                 active: false,
-                                 onToggle: { Task { await toggleSkill(skill.name) } })
-                }
-            }
-        }
-    }
-
-    /// 3 — skills not installed/built yet: rule-based + AI-discovered, merged.
-    @ViewBuilder
-    private func recommendedSection(_ idx: SkillsIndexResponse) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("sparkle", .yellow, "Recommended to add",
-                          count: idx.suggestions.isEmpty ? nil : idx.suggestions.count)
-            Text("Not installed or built yet — matched to this project's fingerprint (\(idx.fingerprint.tags.count) tags). Install adds a user-global skill; build authors a project-local one.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if idx.suggestions.isEmpty {
-                Text("No rule-based suggestions for this fingerprint.")
-                    .font(.caption).foregroundStyle(.tertiary)
-            } else {
-                ForEach(idx.suggestions) { s in
-                    suggestionRow(s)
-                }
-            }
-            // AI discovery (the Discover button + its results) folds in here
-            // rather than as a separate top-level section.
-            discoveredSection(idx.discovered)
-        }
-    }
-
-    @ViewBuilder
-    private func suggestionRow(_ s: SkillsIndexResponse.Suggestion) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: s.verb == "install" ? "shippingbox" : "hammer")
-                .foregroundStyle(s.verb == "install" ? .blue : .green)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(s.name)
-                        .font(.body.monospaced())
-                        .fontWeight(.medium)
-                    if s.alreadyInstalled {
-                        Text("INSTALLED")
-                            .font(.caption2)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(.tint.opacity(0.15))
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
-                    }
-                }
-                Text(s.rationale)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            HStack(spacing: 4) {
-                if !s.alreadyInstalled {
-                    Button(s.verb == "install" ? "Install" : "Build") {
-                        Task { await dispatchInstallOrBuild(s) }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(inFlightAction == s.id)
-                }
-                Button("Why?") { explainSuggestion = s }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-            }
-        }
-        .padding(.vertical, 4)
-        .popover(item: $explainSuggestion) { s in
-            VStack(alignment: .leading, spacing: 6) {
-                Text(s.name).font(.headline.monospaced())
-                Text("Verb: \(s.verb)").font(.caption)
-                Text("Matched tags:").font(.caption.weight(.medium))
-                ForEach(s.matchedTags, id: \.self) { t in
-                    Text("· \(t)").font(.caption.monospaced())
-                }
-                Text("Reason:").font(.caption.weight(.medium)).padding(.top, 4)
-                Text(s.rationale).font(.caption)
-            }
-            .padding(12)
-            .frame(width: 320, alignment: .leading)
-        }
     }
 
     /// Active skill names for the project (ADR-0037).
@@ -994,20 +1084,49 @@ private struct SkillsIndexResponse: Decodable {
             if all.isEmpty {
                 show(PaneNotice(kind: .info, text: "Nothing to check — no skill here has a recorded source."))
             } else if available == 0 {
-                updatesAvailable = 0
                 if failed == 0 {
                     flash("All \(all.count) up to date.")
                 } else {
                     show(PaneNotice(kind: .warning, headline: "All up to date, but \(failed) could not be checked.", detail: "They have no recorded source, or the fetch failed."))
                 }
             } else {
-                // The count outlives the notice now. It used to vanish with
-                // the toast, so the answer to "did anything need updating?"
-                // was gone four seconds after you asked (ADR-0114).
-                updatesAvailable = available
+                // The answer outlives the notice: the "Needs update" group holds
+                // the skills (it used to vanish with the toast, ADR-0114).
                 flash("\(available) update\(available == 1 ? "" : "s") available.")
             }
         }
+    }
+
+    /// Update every skill the last check found a newer version of, one after
+    /// another, and say once what happened.
+    private func updateAllAvailable() async {
+        guard let idx = index else { return }
+        let targets = installedItems(idx).filter { $0.source?.updatable == true && updateStatus[$0.key] == "update-available" }
+        guard !targets.isEmpty else { return }
+        await MainActor.run { bulkUpdating = true }
+        defer { Task { @MainActor in bulkUpdating = false; updatingSkill = nil } }
+        var updated = 0
+        var failed = 0
+        for t in targets {
+            var body: [String: Any] = ["name": t.name, "scope": t.scope]
+            if t.scope == "project-local" {
+                guard let workDir = bridge.projectWorkDir else { failed += 1; continue }
+                body["workDir"] = workDir
+            }
+            await MainActor.run { updatingSkill = t.key }
+            guard let outcome = await postSkillUpdate(body: body)?.results?.first else { failed += 1; continue }
+            await MainActor.run { updateStatus["\(t.scope):\(outcome.name)"] = outcome.status }
+            if outcome.status == "updated" || outcome.status == "up-to-date" { updated += 1 } else { failed += 1 }
+        }
+        await MainActor.run {
+            if failed == 0 {
+                flash("Updated \(updated) skill\(updated == 1 ? "" : "s").")
+            } else {
+                show(PaneNotice(kind: .warning, headline: "Updated \(updated), \(failed) could not be updated.",
+                                detail: "Open the skill's … menu to check its source."))
+            }
+        }
+        await refresh()
     }
 
     /// Fetch and install the latest for one skill. `url` re-binds provenance
@@ -1052,12 +1171,12 @@ private struct SkillsIndexResponse: Decodable {
         VStack(alignment: .leading, spacing: 12) {
             Text("Set source for \(target.name)").font(.headline)
             Text("MARVIN has no record of where this skill came from, so it can't re-fetch it. Paste the Git URL it lives at — it's stored beside the skill and reused for every future update.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(PaneFont.secondary).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             TextField("https://github.com/owner/repo/tree/main/skills/\(target.name)", text: $bindURL)
                 .textFieldStyle(.roundedBorder)
             if let bindError {
-                Text(bindError).font(.caption).foregroundStyle(.red)
+                Text(bindError).font(PaneFont.secondary).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
@@ -1130,193 +1249,6 @@ private struct SkillsIndexResponse: Decodable {
         )
         _ = try? await URLSession.shared.data(for: req)
         await refresh()
-    }
-
-    @ViewBuilder
-    private func installedRow(
-        name: String,
-        description: String,
-        path: String,
-        badge: String?,
-        scope: String,
-        source: SkillSourceInfo?,
-        active: Bool? = nil,
-        onToggle: (() -> Void)? = nil,
-        loadIssue: SkillsIndexResponse.SkillLoadIssue? = nil
-    ) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            if let active, let onToggle {
-                // A real switch. This was a `.buttonStyle(.plain)` glyph — no
-                // hover, no press, no focus ring, no accessibility trait — and
-                // it is the pane's central control (ADR-0114).
-                PaneEnableToggle(
-                    isOn: active,
-                    name: name,
-                    help: active
-                        ? "Active for this project — switch off to stop offering it here."
-                        : "Inactive here — switch on to offer it to MARVIN for this project."
-                ) { _ in onToggle() }
-                .padding(.top, 1)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(name)
-                        .font(.system(size: 12, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .layoutPriority(1)
-                    if let badge {
-                        Text(badge.uppercased())
-                            .font(.system(size: 9))
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background((loadIssue?.blocked == true ? Color.red : .orange).opacity(0.18))
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
-                    }
-                }
-                // R2-15 — a skill with no description says so, in a dimmer
-                // register, instead of leaving a gap or printing ">". A skill the
-                // loader flagged (`loadIssue`) already says why in its own line.
-                let shown = SkillRowDescription.display(description)
-                if !shown.isPlaceholder || loadIssue == nil {
-                    Text(shown.text)
-                        .font(.system(size: 10.5))
-                        .italic(shown.isPlaceholder)
-                        .foregroundStyle(shown.isPlaceholder ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
-                        .lineLimit(2)
-                        .truncationMode(.tail)
-                }
-                if let loadIssue {
-                    Label(loadIssue.reason,
-                          systemImage: loadIssue.blocked
-                            ? "exclamationmark.triangle.fill" : "info.circle")
-                        .font(.system(size: 10))
-                        .foregroundStyle(loadIssue.blocked ? GitDecorationColor.deleted : .orange)
-                        .lineLimit(2)
-                        .truncationMode(.tail)
-                }
-            }
-            Spacer(minLength: 4)
-            skillUpdateControl(name: name, scope: scope, source: source)
-            // View and Set source… were two neutral chips on EVERY row; at a
-            // 260 pt sidebar they took the width the skill's name needed and
-            // it truncated to "…" (U3). They are occasional, so they live in
-            // a menu; only a live Update stays inline.
-            Menu {
-                Button("View SKILL.md") { openSkillFile(path) }
-                if source?.updatable != true {
-                    Button("Set source…") {
-                        bindURL = ""; bindError = nil
-                        bindSourceFor = BindTarget(name: name, scope: scope)
-                    }
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MarvinTheme.textMuted)
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("More: open SKILL.md\(source?.updatable == true ? "" : ", or give this skill an origin so Update works")")
-        }
-        .padding(.vertical, 2)
-        // Clip rather than reflow: at a narrow width the trailing actions used
-        // to stack into columns of single letters (2026-09-11).
-        .frame(minWidth: 0, alignment: .leading)
-        .clipped()
-    }
-
-    private func skillStatusChip(_ text: String, tint: Color) -> some View {
-        Text(text)
-            .font(.system(size: 9.5))
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .foregroundStyle(tint)
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(Capsule().fill(tint.opacity(0.14)))
-    }
-
-    /// Update affordance for one skill (ADR-0071).
-    ///
-    /// A skill with no recorded source is the common case on an existing
-    /// machine — every skill installed before provenance existed, plus anything
-    /// hand-authored. Rather than a dead button, those get "Set source", which
-    /// binds a URL once and turns the row into a normal updatable one.
-    @ViewBuilder
-    private func skillUpdateControl(name: String, scope: String, source: SkillSourceInfo?) -> some View {
-        let key = "\(scope):\(name)"
-        let status = updateStatus[key]
-        if updatingSkill == key {
-            ProgressView().controlSize(.small)
-        } else if source?.updatable != true {
-            // No origin recorded: "Set source…" is in the row's menu.
-            EmptyView()
-        } else {
-            HStack(spacing: 6) {
-                // One shape for three statuses, and none of them wraps.
-                if status == "update-available" {
-                    skillStatusChip("update available", tint: .orange)
-                } else if status == "up-to-date" {
-                    skillStatusChip("up to date", tint: MarvinTheme.textMuted)
-                } else if status == "updated" {
-                    skillStatusChip("updated", tint: GitDecorationColor.added)
-                }
-                Button("Update") { Task { await updateOneSkill(name: name, scope: scope) } }
-                    .rowChip(.primary)
-                    .disabled(updatingSkill != nil || checkingUpdates)
-                    .help("Re-fetch from \(source?.url ?? "its recorded source"). Last updated \(source?.lastUpdated ?? "unknown")." )
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func auditFooter(_ audit: SkillsIndexResponse.AuditBlock) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: audit.decided ? "checkmark.seal" : "questionmark.circle")
-                .foregroundStyle(audit.decided ? .green : .orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(audit.decided ? "Audit decided" : "Audit pending")
-                    .font(.caption.weight(.medium))
-                if let line = audit.decisionLine {
-                    Text(line)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-            Spacer()
-            if audit.decided {
-                Button("Unpark") {
-                    Task { await unpark() }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(inFlightAction == "unpark")
-            } else {
-                Button("Park all") {
-                    Task { await parkAll() }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(inFlightAction == "park")
-            }
-        }
-        .padding(.top, 4)
-    }
-
-    @ViewBuilder
-    private func emptyView(_ message: String) -> some View {
-        VStack {
-            Spacer()
-            Text(message).foregroundStyle(.secondary)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Networking

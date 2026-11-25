@@ -24,24 +24,22 @@ import SwiftUI
                     .foregroundStyle(.quaternary)
             }
             Text(state.headline)
-                .font(.system(size: 11.5, weight: .medium))
+                .font(PaneFont.emptyHeadline)
                 .foregroundStyle(MarvinTheme.textMuted)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             if let hint = state.hint {
                 Text(hint)
-                    .font(.system(size: 10.5))
+                    .font(PaneFont.hint)
                     .foregroundStyle(MarvinTheme.textMuted)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let actionTitle, let action {
-                Button(actionTitle, action: action)
-                    .chip(.neutral)
+                PaneActionButton(title: actionTitle, action: action)
                     .padding(.top, 2)
             } else if state.offersOpenProject {
-                Button("Open Project…") { MarvinBridge.shared.triggerOpenProject() }
-                    .chip(.neutral)
+                PaneActionButton(title: "Open Project…") { MarvinBridge.shared.triggerOpenProject() }
                     .padding(.top, 2)
                     .help("Choose a folder to work in (⌘O)")
             }
@@ -63,8 +61,8 @@ import SwiftUI
         HStack(spacing: 6) {
             ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 14, height: 14)
             Text(label ?? "Loading…")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
+                .font(PaneFont.hint)
+                .foregroundStyle(MarvinTheme.textMuted)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 18)

@@ -35,7 +35,6 @@ import SwiftUI
     @State private var loadError: String?
     @State private var busy = false
     @State private var section: Section = .findings
-    @State private var scheduleOpen = false
     /// The outcome of the last action, with its KIND (ADR-0114).
     ///
     /// This was a `String?` rendered in one tinted strip with one moon icon
@@ -63,9 +62,14 @@ import SwiftUI
     @State private var draftFor: PracticeFinding?
     @State private var draftForRule: PracticeRule?
     @State private var draftText = ""
-    @State private var showConfirmed = false
-    @State private var showBelow = false
-    @State private var showHow = false
+    /// The selected row, and which groups are closed (remembered per pane).
+    @State private var selection: String?
+    @State private var groups = PaneCollapseStore(pane: "practice")
+
+    /// The snapshot harness shows a finding open (`SurfaceSnapshotPaneKit`).
+    init(seedSelection: String? = nil) {
+        _selection = State(initialValue: seedSelection)
+    }
 
     private var projectId: String? {
         bridge.projectWorkDir.map { ProjectIdSlug.from(workDir: $0) }
@@ -74,13 +78,19 @@ import SwiftUI
     var body: some View {
         VStack(spacing: 0) {
             if projectId == nil {
-                PaneEmptyView(state: .noProject("repeat failures"))
-            } else if let err = loadError, view == nil {
+                practiceHeader(actions: false)
+                PaneEmptyView(state: .noProject("repeat failures")).frame(maxHeight: .infinity)
+            } else if loadError != nil, view == nil {
+                practiceHeader(actions: false)
                 PaneEmptyView(
-                    state: PaneEmptyState(headline: "Could not read this project's practice ledger", hint: err, symbol: "exclamationmark.triangle"),
+                    state: .couldNotLoad("this project's practice ledger", reason: "Check that MARVIN's server is running, then try again."),
                     actionTitle: "Retry",
                     action: { Task { await refresh() } }
-                )
+                ).frame(maxHeight: .infinity)
+            } else if view == nil {
+                practiceHeader(actions: false)
+                PaneLoadingView(label: "Reading the practice ledger…")
+                Spacer(minLength: 0)
             } else {
                 content
             }
@@ -114,38 +124,92 @@ import SwiftUI
 
     // MARK: - Content
     //
-    // The SAME shape as PluginsPane / SkillsPane: a ScrollView is the root and
-    // everything — header, tabs, rows — lives inside its LazyVStack. The first
-    // version put the header and the segmented picker OUTSIDE the scroll view
-    // in a VStack; the pane then laid out taller and wider than its slot and
-    // pushed the icon rail off the window (user, 2026-09-03: "clicking the new
-    // pane still breaks the whole marvin UI"). A ScrollView root is flexible in
-    // both axes and cannot overflow the slot; the probe above records the
-    // measured sizes so the next layout report is numbers, not a reading.
+    // The same shape as Skills and Plugins: the header and the picker are fixed,
+    // the rows scroll, and every list is groups of rows from the kit. The first
+    // version of this pane put the header INSIDE the scroll view because a header
+    // outside it laid out taller than its slot and pushed the icon rail off the
+    // window (user, 2026-09-03). The scroll list here is the flexible root and is
+    // clipped by the pane's own frame; `PaneGeometryProbe` still records sizes.
+
+    /// One group of the current tab, with what the keyboard needs to walk it.
+    private struct GroupPlan {
+        let id: String
+        let startsCollapsed: Bool
+        let rows: [(id: String, title: String)]
+    }
+
+    private var findingGroups: (live: [PracticeFinding], below: [PracticeFinding], done: [PracticeFinding]) {
+        guard let view else { return ([], [], []) }
+        let failures = view.findings.filter { !$0.isSuccess }
+        let live = failures.filter { $0.state != "confirmed" && $0.state != "dismissed" && $0.state != "observed" }
+            .sorted { $0.value > $1.value }
+        return (live,
+                failures.filter { $0.state == "observed" }.sorted { $0.value > $1.value },
+                failures.filter { $0.state == "confirmed" || $0.state == "dismissed" })
+    }
+
+    private func plans(for tab: Section) -> [GroupPlan] {
+        guard let view else { return [] }
+        var out: [GroupPlan] = []
+        switch tab {
+        case .findings:
+            let g = findingGroups
+            if !view.starters.isEmpty {
+                out.append(GroupPlan(id: "starters", startsCollapsed: false, rows: view.starters.map { (id: "starter:\($0.id)", title: $0.title) }))
+            }
+            out.append(GroupPlan(id: "findings.live", startsCollapsed: false, rows: g.live.map { (id: $0.id, title: $0.id) }))
+            out.append(GroupPlan(id: "findings.below", startsCollapsed: true, rows: g.below.map { (id: $0.id, title: $0.id) }))
+            out.append(GroupPlan(id: "findings.done", startsCollapsed: true, rows: g.done.map { (id: $0.id, title: $0.id) }))
+        case .working:
+            out.append(GroupPlan(id: "working", startsCollapsed: false, rows: view.findings.filter { $0.isSuccess }.map { (id: $0.id, title: $0.id) }))
+        case .rules:
+            out.append(GroupPlan(id: "rules.mine", startsCollapsed: false, rows: view.rules.filter { !$0.isBuiltin }.map { (id: $0.id, title: $0.title) }))
+            out.append(GroupPlan(id: "rules.builtin", startsCollapsed: true, rows: view.rules.filter { $0.isBuiltin }.map { (id: $0.id, title: $0.title) }))
+        case .runs:
+            out.append(GroupPlan(id: "runs", startsCollapsed: false, rows: view.runs.map { (id: "run:\($0.id)", title: Self.relative($0.at)) }))
+        }
+        return out
+    }
+
+    private func visibleRows(for tab: Section) -> [(id: String, title: String)] {
+        plans(for: tab).filter { !groups.isCollapsed($0.id, default: $0.startsCollapsed) }.flatMap { $0.rows }
+    }
 
     @ViewBuilder
     private var content: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                header
-                // A segmented control cannot shrink: with counts ("Findings 5")
-                // the fourth tab was cut off at 260 pt (U4). Counts when they
-                // fit, plain labels when they do not.
-                ViewThatFits(in: .horizontal) {
-                    sectionPicker(counts: true)
-                    sectionPicker(counts: false)
-                }
-                switch section {
-                case .findings: findingsSection
-                case .working: workingSection
-                case .rules: rulesSection
-                case .runs: runsSection
-                }
-                MarvinDivider().padding(.vertical, 4)
-                aboutBlock
+        VStack(spacing: 0) {
+            practiceHeader(actions: true)
+            if let view, !view.config.enabled {
+                // ADR-0136: the loop is opt-in. Off, it reads nothing at night
+                // and proposes nothing; the built-in gates keep working.
+                PaneNoticeStrip(
+                    notice: PaneNotice(kind: .info, headline: "Practice is off. Each night it would read this project's sessions and propose rules; MARVIN's built-in gates work either way."),
+                    actionTitle: "Turn on",
+                    onAction: { Task { await setSchedule(enabled: true, hour: nil) } })
+                    .padding(.bottom, PaneSpace.tight)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
+            // A segmented control cannot shrink: with counts ("Findings 5") the
+            // fourth tab was cut off at 260 pt (U4). Counts when they fit,
+            // plain labels when they do not.
+            ViewThatFits(in: .horizontal) {
+                sectionPicker(counts: true)
+                sectionPicker(counts: false)
+            }
+            .padding(.horizontal, PaneSpace.gutter)
+            .padding(.bottom, PaneSpace.compact)
+            PaneScrollList(
+                rows: visibleRows(for: section), selection: $selection,
+                onActivate: { id in activate(id) },
+                onSpace: nil, onEscape: nil
+            ) {
+                switch section {
+                case .findings: findingsTab
+                case .working: workingTab
+                case .rules: rulesTab
+                case .runs: runsTab
+                }
+                aboutGroups
+            }
         }
     }
 
@@ -178,20 +242,27 @@ import SwiftUI
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Five actions, three of them text-labelled, used to share one row
-            // with the title and a bare `Spacer()` — which is how "Run now"
-            // rendered as "Run no…" in a narrow sidebar. `PaneHeaderOverflow`
-            // puts the count at five, past the overflow threshold, so one
-            // primary verb stays and the other four move into the menu
-            // (ADR-0114).
-            PaneHeader(title: "Practice", symbol: "moon.zzz") {
-                Button("Run now") { Task { await runNow(force: false) } }
-                    .rowChip(.primary)
-                    .disabled(busy)
-                    .help("Read every session that changed since the last run and update the findings (ADR-0105).")
-                Menu {
+    /// Return on a finding opens it; on a starter adopts it.
+    private func activate(_ id: String) {
+        guard let view else { return }
+        if id.hasPrefix("starter:"), let s = view.starters.first(where: { "starter:\($0.id)" == id }) {
+            Task { await adopt(s) }
+        }
+    }
+
+    // MARK: Header
+
+    /// One verb, and the menu: the review found five actions fighting for one
+    /// row ("Run no…"). Run now is the pane's point; the rest wait in the menu.
+    private func practiceHeader(actions: Bool) -> some View {
+        PaneHeader(title: "Practice", symbol: "moon.zzz",
+                   subtitle: actions ? (view?.lastRun.map { "ran \(Self.relative($0.at))" } ?? "never run") : nil) {
+            if actions {
+                PaneActionButton(
+                    title: "Run now", role: .primary, help: "Read every session that changed since the last run and update the findings (ADR-0105).",
+                    disabled: busy
+                ) { Task { await runNow(force: false) } }
+                PaneOverflowMenu(label: "More actions for Practice") {
                     Button("Backtest — re-read every transcript") { Task { await runNow(force: true) } }
                         .disabled(busy)
                         .help("Re-read every transcript from scratch. This is how the weights get tuned: rank what actually cost the most.")
@@ -204,282 +275,213 @@ import SwiftUI
                         NSWorkspace.shared.open(URL(string: "https://github.com/RobertIlisei/MARVIN/blob/main/docs/guides/practice.md")!)
                     }
                     .help("What it looks for, the tiers, verification, and a first-session walkthrough.")
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 19, height: 19)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .frame(width: 19)
-                .foregroundStyle(MarvinTheme.textMuted)
-                .help("Backtest, fit the score weights, reload, and the guide.")
-            }
-            // One line of status stays up here; the explanation, the schedule and
-            // the fit statistics moved below the findings (U5: on a 260 pt sidebar
-            // the first finding sat under four lines of intro and a ρ).
-            if let view {
-                Text(view.lastRun.map { "last run \(Self.relative($0.at)) · \($0.sessionsRead) read · \($0.proposed) newly proposed" } ?? "never run")
-                    .font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                // ADR-0136: the loop is opt-in. Off, it reads nothing at night
-                // and proposes nothing; the built-in gates below keep working.
-                if !view.config.enabled {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("Practice is off. It is an experiment: each night it reads this project's sessions and proposes rules. MARVIN's built-in gates work either way.")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button("Turn on") { Task { await setSchedule(enabled: true, hour: nil) } }
-                            .rowChip(.primary)
-                    }
                 }
             }
         }
     }
 
-    /// What this pane is, how it works, its schedule and how its weights were
-    /// fitted. Reference, read once — so it follows the findings, not precedes them.
-    private var aboutBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Repeat failures mined from this project's own sessions, next to the same acts done right. It proposes, you approve, and an accepted rule is enforced at the tier you choose — then measured.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            DisclosureGroup(isExpanded: $showHow) {
-                VStack(alignment: .leading, spacing: 6) {
-                    howRow("Every night", "plain code reads this project's session transcripts and counts each failure kind by distinct session — and the same act done right, so a finding carries a rate.")
-                    howRow("Proposed", "three sessions and a score of 0.6. Approve makes a rule; Dismiss silences it with a reason; Fixed in MARVIN says you changed MARVIN's code.")
-                    howRow("Tiers", "prompt = a line in the system prompt. nudge = the call runs, MARVIN sees the message first. deny = the call is refused, twice per turn, then allowed and counted. A deny needs a checkable way out, or it acts as a nudge.")
-                    howRow("Verified", "each fix and rule keeps the rate it was accepted at. Regressed means two recurring sessions at half that rate or more; five sessions below it confirm. The row shows both: was 31 %, now 5 %.")
-                    howRow("Built-in gates", "MARVIN's own gates are rows too — tier, off, message, fired counts. No row means native behaviour.")
-                    howRow("Never", "no model reads a transcript; nothing changes without your click. Draft message is the only model call, and it sees aggregates.")
-                    Text("Full guide: docs/guides/practice.md · design: ADR-0105")
-                        .font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                }
-                .padding(.top, 4)
-            } label: {
-                Text("How this works").font(.caption.bold()).foregroundStyle(.secondary)
-            }
-            if let view {
-                // Configuration, moved out of the header it used to compete
-                // with. A switch, two steppers and a destructive Reset are not
-                // verbs you reach for while reading findings (ADR-0114).
-                DisclosureGroup(isExpanded: $scheduleOpen) {
-                HStack(spacing: 10) {
-                    Toggle(isOn: Binding(
-                        get: { view.config.enabled },
-                        set: { on in Task { await setSchedule(enabled: on, hour: nil) } }
-                    )) { Text("Nightly").font(.caption) }
-                    .toggleStyle(.switch).controlSize(.mini)
-                    Stepper(value: Binding(
-                        get: { view.config.hour },
-                        set: { h in Task { await setSchedule(enabled: nil, hour: h) } }
-                    ), in: 0...23) {
-                        Text(String(format: "at %02d:00", view.config.hour)).font(.caption.monospaced())
-                    }
-                    .controlSize(.mini)
-                    Stepper(value: Binding(
-                        get: { view.config.windowDays ?? 45 },
-                        set: { d in Task { await setSchedule(enabled: nil, hour: nil, windowDays: d) } }
-                    ), in: 1...365, step: 5) {
-                        Text("window \(view.config.windowDays ?? 45) d").font(.caption.monospaced())
-                    }
-                    .controlSize(.mini)
-                    .help("Sessions older than this age out of every count. Watermarks stay, so nothing is re-read.")
-                    Spacer(minLength: 0)
-                    Button("Reset findings…") { confirmingReset = true }
-                        .rowChip(.tinted(GitDecorationColor.deleted))
-                        .disabled(busy)
-                        .help("Clear every finding, watermark and run record for this project. Rules stay; the next run re-reads the window and re-attaches findings to their rules.")
-                        .confirmationDialog("Reset this project's findings?", isPresented: $confirmingReset) {
-                            Button("Reset findings", role: .destructive) { Task { await resetFindings() } }
-                        } message: {
-                            Text("Findings, watermarks and run records are cleared. Rules are kept. The next run re-reads every session inside the window.")
-                        }
-                }
-                .padding(.top, 4)
-                } label: {
-                    Text("Schedule")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(MarvinTheme.textMuted)
-                }
-                if let fitInfo = view.config.fit {
-                    Text("weights fitted \(Self.relative(fitInfo.at)) · \(fitInfo.method) · \(fitInfo.labelled)/\(fitInfo.samples) labelled · ρ \(String(format: "%.2f", fitInfo.rho))")
-                        .font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text("weights: hand-set defaults").font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                }
-            }
-        }
-    }
-
-    // MARK: - Findings
+    // MARK: Findings
 
     @ViewBuilder
-    private var findingsSection: some View {
+    private var findingsTab: some View {
         if let view {
-            if view.sessionsSeen < (view.config.thresholds.minSessions) {
-                coldStartCard(view)
+            let g = findingGroups
+            let calibrating = view.sessionsSeen < view.config.thresholds.minSessions
+            if calibrating {
+                coldStartNotice(view)
             }
             if !view.starters.isEmpty {
-                startersCard(view)
-            }
-            let failures = view.findings.filter { !$0.isSuccess }
-            let live = failures.filter { $0.state != "confirmed" && $0.state != "dismissed" && $0.state != "observed" }
-            let below = failures.filter { $0.state == "observed" }
-            let done = failures.filter { $0.state == "confirmed" || $0.state == "dismissed" }
-            if failures.isEmpty {
-                Text(view.lastRun == nil
-                     ? "Nothing yet — run the pass to read this project's sessions."
-                     : "No repeat failures found. Either the sessions are clean or there are fewer than three of them.")
-                    .font(.caption).foregroundStyle(.tertiary).padding(.vertical, 6)
-            }
-            ForEach(live) { f in findingRow(f) }
-            if !below.isEmpty {
-                DisclosureGroup(isExpanded: $showBelow) {
-                    ForEach(below) { f in findingRow(f) }
-                } label: {
-                    Text("\(below.count) below the proposal threshold").font(.caption).foregroundStyle(.secondary)
+                PaneGroup(
+                    store: groups, id: "starters", title: "Proven in your other projects", count: view.starters.count, tint: Color.accentColor,
+                    help: "Rules confirmed in your other projects that this project has no rule for. Adopting one copies it here and starts its own verification clock."
+                ) {
+                    ForEach(view.starters) { s in starterRow(s) }
                 }
             }
-            if !done.isEmpty {
-                DisclosureGroup(isExpanded: $showConfirmed) {
-                    ForEach(done) { f in findingRow(f) }
-                } label: {
-                    Text("\(done.count) confirmed or dismissed").font(.caption).foregroundStyle(.secondary)
+            if g.live.isEmpty && g.below.isEmpty && g.done.isEmpty {
+                PaneEmptyView(
+                    state: .nothingYet("repeat failures",
+                        hint: view.lastRun == nil
+                            ? "Use Run now to read this project's sessions."
+                            : "Either the sessions are clean or there are fewer than three of them."))
+            } else {
+                PaneGroup(
+                    store: groups, id: "findings.live", title: "Needs a decision", count: g.live.count, tint: .orange,
+                    help: "Priority: " + PracticeScoreBand.legend
+                ) {
+                    if g.live.isEmpty { PaneNote(text: "Nothing waiting. Findings that clear the bar appear here, highest priority first.") }
+                    ForEach(g.live) { f in findingRow(f) }
+                }
+                if !g.below.isEmpty {
+                    PaneGroup(
+                        store: groups, id: "findings.below", title: "Below the proposal bar", count: g.below.count,
+                        help: "Seen, but not yet in enough sessions or not valuable enough to propose a rule.", startsCollapsed: true
+                    ) {
+                        ForEach(g.below) { f in findingRow(f) }
+                    }
+                }
+                if !g.done.isEmpty {
+                    PaneGroup(
+                        store: groups, id: "findings.done", title: "Confirmed or dismissed", count: g.done.count,
+                        help: "Decided. Confirmed means the fix held; dismissed means you said it is not a problem here.", startsCollapsed: true
+                    ) {
+                        ForEach(g.done) { f in findingRow(f) }
+                    }
                 }
             }
         }
     }
 
-    /// A project MARVIN has not worked in enough yet. Says what already
-    /// applies and how far it is from its first proposal.
-    private func coldStartCard(_ view: PracticeView) -> some View {
+    /// A project MARVIN has not worked in enough yet. Says what already applies
+    /// and how far it is from its first proposal.
+    private func coldStartNotice(_ view: PracticeView) -> some View {
         let need = view.config.thresholds.minSessions
         let builtins = view.rules.filter { $0.isBuiltin && $0.status == "active" }.count
         let globals = view.rules.filter { !$0.isBuiltin && $0.isGlobal && $0.status == "active" }.count
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles").foregroundStyle(.tint)
-                Text("New project — calibrating").font(.caption.bold())
-                Spacer()
-                Text("\(view.sessionsSeen) of \(need) sessions").font(.caption2.monospaced()).foregroundStyle(.secondary)
-            }
-            ProgressView(value: Double(min(view.sessionsSeen, need)), total: Double(need)).controlSize(.small)
-            Text("Findings can propose a rule after \(need) distinct sessions here. Nothing about this project needs calibrating first: the extractors measure MARVIN's behaviour, not your code. Already in force from the first turn: \(builtins) built-in gate\(builtins == 1 ? "" : "s")\(globals > 0 ? " and \(globals) global rule\(globals == 1 ? "" : "s")" : ""). Score weights are shared across your projects.")
-                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.08)))
+        let inForce = "\(builtins) built-in gate\(builtins == 1 ? "" : "s")\(globals > 0 ? " and \(globals) global rule\(globals == 1 ? "" : "s")" : "")"
+        return PaneNoticeStrip(notice: PaneNotice(
+            kind: .info,
+            headline: "New project: \(view.sessionsSeen) of \(need) sessions before the first proposal. Already in force: \(inForce)."))
     }
 
-    /// Rules that held in the user's other projects, offered here.
-    private func startersCard(_ view: PracticeView) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.down.doc").foregroundStyle(.tint)
-                Text("Proven elsewhere").font(.caption.bold())
-                Spacer()
-            }
-            Text("Rules confirmed in your other projects that this project has no rule for. Adopting one copies it here and starts its own verification clock.")
-                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            ForEach(view.starters) { s in
-                HStack(alignment: .top, spacing: 8) {
-                    tierChip(s.tier)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(s.title).font(.caption.bold())
-                        Text("confirmed in \(s.confirmedIn.count) project\(s.confirmedIn.count == 1 ? "" : "s") · \(s.fingerprint)")
-                            .font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                    }
-                    Spacer(minLength: 0)
-                    Button("Adopt") { Task { await adopt(s) } }
-                        .rowChip(.primary).disabled(busy)
-                }
-            }
-        }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.06)))
+    private func starterRow(_ s: PracticeStarterRule) -> some View {
+        let id = "starter:\(s.id)"
+        return PaneListRow(
+            rowID: id, title: s.title, leading: .glyph(tierGlyph(s.tier), tierTint(s.tier)),
+            secondary: "Confirmed in \(s.confirmedIn.count) project\(s.confirmedIn.count == 1 ? "" : "s") · \(s.tier)",
+            selected: selection == id,
+            items: [PaneRowItem(id: "adopt", title: "Adopt", role: .primary, enabled: !busy,
+                                help: "Copy this rule here and start its own verification clock.", perform: { Task { await adopt(s) } })],
+            onSelect: { selection = id },
+            showsDetail: selection == id,
+            detail: {
+                Text(s.fingerprint).font(PaneFont.secondaryMono).foregroundStyle(MarvinTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            })
     }
 
     @ViewBuilder
-    private var workingSection: some View {
+    private var workingTab: some View {
         if let view {
             let wins = view.findings.filter { $0.isSuccess }
             if wins.isEmpty {
-                Text("No confirmed practices yet. A success needs three sessions to count.")
-                    .font(.caption).foregroundStyle(.tertiary).padding(.vertical, 6)
+                PaneEmptyView(state: .nothingYet("confirmed practices", hint: "A success needs three sessions to count."))
+            } else {
+                PaneGroup(
+                    store: groups, id: "working", title: "Done right", count: wins.count, tint: GitDecorationColor.added,
+                    help: "The same acts done right. These are the denominator for every rate on the Findings tab and the evidence that a rule held."
+                ) {
+                    ForEach(wins) { f in findingRow(f) }
+                }
             }
-            Text("The same acts done right. These are the denominator for every rate on the Findings tab and the evidence that a rule held.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            ForEach(wins) { f in findingRow(f) }
         }
     }
 
     private func findingRow(_ f: PracticeFinding) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                stateChip(f.state)
-                Text(f.id)
-                    .font(.system(size: 11, design: .monospaced).bold())
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .layoutPriority(1)
-                Spacer()
-                // A success has no template and no pair, so its score is a
-                // constant (0.88 minus decay) — the session count is the fact.
-                if !f.isSuccess {
-                    // "0.67" answers nothing on its own — 0.67 of what? The
-                    // denominator is the scale, and it costs four characters.
-                    Text("\(String(format: "%.2f", f.value)) / 1.00")
-                        .font(.system(size: 10.5, design: .monospaced).monospacedDigit())
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .foregroundStyle(.secondary)
-                        .help("Value: recurrence, cost, rate, reliability, actionability, minus decay, on a 0–1 scale (ADR-0105 §3).")
-                }
-            }
-            Text(f.latestDetail.isEmpty ? "—" : f.latestDetail)
-                .font(.caption).foregroundStyle(.secondary)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(metaLine(f))
-                .font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-            if !f.isSuccess { findingActions(f) }
-            if let reason = f.dismissReason, f.state == "dismissed" {
-                Text("dismissed: \(reason)").font(.caption2).foregroundStyle(.tertiary)
-            }
+        let tint = stateTint(f.state)
+        let band = PracticeScoreBand.band(f.value, proposalBar: view?.config.thresholds.minValue ?? 0.6)
+        var trailingText: String?
+        var trailingTint = MarvinTheme.textMuted
+        switch f.state {
+        case "regressed": trailingText = "Regressed"; trailingTint = tint
+        case "confirmed", "practice": trailingText = f.isSuccess ? nil : "Confirmed"; trailingTint = tint
+        case "fixed": trailingText = "Fixed"; trailingTint = tint
+        case "dismissed": trailingText = "Dismissed"
+        case "report": trailingText = "Report only"; trailingTint = tint
+        default: break
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.06)))
+        return PaneListRow(
+            rowID: f.id, title: f.id, titleIsIdentifier: true,
+            leading: .glyph(stateGlyph(f.state), tint),
+            secondary: summary(f, band: ["proposed", "observed"].contains(f.state) ? band : nil),
+            trailingText: trailingText, trailingTint: trailingTint,
+            selected: selection == f.id,
+            items: f.isSuccess ? [] : findingItems(f),
+            menuLabel: "More actions for \(f.id)",
+            onSelect: { selection = f.id },
+            showsDetail: selection == f.id,
+            detail: { findingDetail(f) })
     }
 
-    private func howRow(_ title: String, _ body: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Text(title).font(.caption2.bold()).frame(width: 84, alignment: .leading)
-            Text(body).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    /// One primary verb per finding; everything else is in the menu. The review
+    /// found four buttons per card in small grey text.
+    private func findingItems(_ f: PracticeFinding) -> [PaneRowItem] {
+        var items: [PaneRowItem] = []
+        let canApprove = f.template && (f.state == "proposed" || (f.state == "regressed" && f.ruleId == nil))
+        if f.state == "regressed", f.ruleId != nil {
+            items.append(PaneRowItem(id: "escalate", title: "Escalate tier", systemImage: "arrow.up.circle", role: .primary, enabled: !busy,
+                                     help: "The rule is not holding. Move it one tier up and restart verification.", perform: { Task { await escalate(f) } }))
         }
+        if canApprove {
+            items.append(PaneRowItem(id: "approve", title: "Approve", systemImage: "checkmark.circle", role: .primary, enabled: !busy,
+                                     help: "Create a rule from this finding at the template's own tier.", perform: { Task { await approve(f, tier: nil, global: false) } }))
+            items.append(PaneRowItem(id: "tier-prompt", title: "Approve as prompt", enabled: !busy, perform: { Task { await approve(f, tier: "prompt", global: false) } }))
+            items.append(PaneRowItem(id: "tier-nudge", title: "Approve as nudge", enabled: !busy, perform: { Task { await approve(f, tier: "nudge", global: false) } }))
+            items.append(PaneRowItem(id: "tier-deny", title: "Approve as deny", enabled: !busy, perform: { Task { await approve(f, tier: "deny", global: false) } }))
+            items.append(PaneRowItem(id: "approve-global", title: "Approve for every project", enabled: !busy, perform: { Task { await approve(f, tier: nil, global: true) } }))
+        }
+        let decidable = ["proposed", "observed", "report", "regressed"].contains(f.state)
+        if f.template && decidable {
+            items.append(PaneRowItem(id: "draft", title: "Draft the message…", systemImage: "text.badge.star", enabled: !busy,
+                                     help: "Ask a read-only model to write the rule message from this finding's aggregates (ADR-0105 phase 4). One small model call; you accept or discard.",
+                                     perform: { draftText = ""; draft = nil; draftFor = f }))
+        }
+        if decidable {
+            items.append(PaneRowItem(id: "fixed", title: "Fixed in MARVIN…", systemImage: "wrench.and.screwdriver", enabled: !busy,
+                                     help: "You changed MARVIN's code for this. Verified like a rule: a recurrence after today is a regression, a quiet window confirms it.",
+                                     perform: { fixNote = ""; fixing = f }))
+            items.append(PaneRowItem(id: "dismiss", title: "Dismiss…", systemImage: "xmark.circle", enabled: !busy,
+                                     help: "Silence it, with a reason. It returns if it is seen in twice as many sessions.",
+                                     perform: { dismissReason = ""; dismissing = f }))
+        }
+        return items
     }
 
-    private func metaLine(_ f: PracticeFinding) -> String {
-        var parts = ["\(f.distinctSessions) session\(f.distinctSessions == 1 ? "" : "s")"]
+    /// The one secondary line of a finding: the verdict if there is one ("was
+    /// 31 %, now 5 %"), otherwise how often and when.
+    private func summary(_ f: PracticeFinding, band: PracticeScoreBand?) -> String {
+        if let v = verification(f) { return v }
+        var parts = [band.map { "\($0.label) priority" }].compactMap { $0 }
+        parts.append("\(f.distinctSessions) session\(f.distinctSessions == 1 ? "" : "s")")
         if let rate = f.rate { parts.append(String(format: "%.0f%% of sessions", rate * 100)) }
-        parts.append("\(Self.compact(f.costTotal)) \(f.unit)")
-        if let after = f.sessionsAfter, let rec = f.recurrenceAfter, f.ruleId != nil || f.fixNote != nil {
-            // Before and after, in the same unit: the question the pane is
-            // asked is "did it help", and a count since the fix cannot answer it.
-            let what = f.ruleId != nil ? "rule" : "fix"
-            let now = Self.percent(f.rateAfter ?? (after > 0 ? Double(rec) / Double(after) : 0))
-            if let base = f.baseline, base.sessions > 0 {
-                parts.append("was \(Self.percent(base.rate)) of sessions, now \(now) (\(rec) of \(after) since \(what))")
-            } else {
-                parts.append("now \(now) of sessions (\(rec) of \(after) since \(what)); the rate before was not kept")
-            }
-        }
         parts.append("last \(Self.relative(f.lastSeen))")
         return parts.joined(separator: " · ")
+    }
+
+    private func verification(_ f: PracticeFinding) -> String? {
+        guard let after = f.sessionsAfter, let rec = f.recurrenceAfter, f.ruleId != nil || f.fixNote != nil else { return nil }
+        let what = f.ruleId != nil ? "rule" : "fix"
+        let now = Self.percent(f.rateAfter ?? (after > 0 ? Double(rec) / Double(after) : 0))
+        if let base = f.baseline, base.sessions > 0 {
+            return "was \(Self.percent(base.rate)) of sessions, now \(now) (\(rec) of \(after) since \(what))"
+        }
+        return "now \(now) of sessions (\(rec) of \(after) since \(what)); the rate before was not kept"
+    }
+
+    /// What a selected finding adds: the evidence, the whole tally, and — for a
+    /// finding with a score — what the score means.
+    @ViewBuilder
+    private func findingDetail(_ f: PracticeFinding) -> some View {
+        VStack(alignment: .leading, spacing: PaneSpace.tight) {
+            if !f.latestDetail.isEmpty { Text(f.latestDetail).lineLimit(6) }
+            Text(metaLine(f))
+            if !f.isSuccess {
+                Text("Priority \(PracticeScoreBand.summary(f.value, proposalBar: view?.config.thresholds.minValue ?? 0.6)). \(PracticeScoreBand.legend)")
+            }
+            if let reason = f.dismissReason, f.state == "dismissed" { Text("Dismissed: \(reason)") }
+            if let note = f.fixNote, !note.isEmpty, f.state == "fixed" { Text("Fixed: \(note)") }
+            if f.state == "report" || (!f.template && !f.isSuccess) {
+                Text("Report only: about MARVIN itself, not a behaviour a rule can change.")
+            }
+        }
+        .font(PaneFont.secondary)
+        .foregroundStyle(MarvinTheme.textMuted)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// The extras the secondary line leaves out: what it cost, and when.
+    private func metaLine(_ f: PracticeFinding) -> String {
+        "\(Self.compact(f.costTotal)) \(f.unit) · first seen \(Self.relative(f.firstSeen)) · last seen \(Self.relative(f.lastSeen))"
     }
 
     /// One decimal under 10 %, none above: "0.4 %" and "26 %" both read right.
@@ -488,91 +490,11 @@ import SwiftUI
         return p > 0 && p < 10 ? String(format: "%.1f%%", p) : String(format: "%.0f%%", p)
     }
 
-    @ViewBuilder
-    private func findingActions(_ f: PracticeFinding) -> some View {
-        // Wrap, never clip: this row was an HStack clipped at the pane edge
-        // so "Fixed" and a Dismiss could vanish at 260 pt (U4). WrapLayout
-        // puts a verb that does not fit on the next line, whole.
-        WrapLayout(spacing: 6, lineSpacing: 4) {
-            switch f.state {
-            case "proposed", "observed":
-                if f.template {
-                    approveMenu(f)
-                } else {
-                    Text("report only — about MARVIN itself, not a behaviour a rule can change")
-                        .font(.system(size: 9.5)).foregroundStyle(.tertiary)
-                        .lineLimit(2).truncationMode(.tail)
-                }
-                if f.template {
-                    Button("Draft message") { draftText = ""; draft = nil; draftFor = f }
-                        .rowChip(.neutral).disabled(busy)
-                        .help("Ask a read-only model to write the rule message from this finding's aggregates (ADR-0105 phase 4). One small model call; you accept or discard.")
-                }
-                fixedButton(f)
-                Button("Dismiss") { dismissReason = ""; dismissing = f }
-                    .rowChip(.neutral).disabled(busy)
-            case "report":
-                Text("report only — about MARVIN itself, not a behaviour a rule can change")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                fixedButton(f)
-                Button("Dismiss") { dismissReason = ""; dismissing = f }
-                    .rowChip(.neutral).disabled(busy)
-            case "regressed":
-                if f.ruleId != nil {
-                    Button { Task { await escalate(f) } } label: {
-                        Label("Escalate tier", systemImage: "arrow.up.circle")
-                    }
-                    .help("The rule is not holding. Move it one tier up and restart verification.")
-                    .disabled(busy)
-                } else {
-                    Text("the code fix did not hold")
-                        .font(.system(size: 9.5))
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                    if f.template { approveMenu(f) }
-                }
-                fixedButton(f)
-                Button("Dismiss") { dismissReason = ""; dismissing = f }
-                    .rowChip(.neutral).disabled(busy)
-            case "fixed":
-                if let note = f.fixNote, !note.isEmpty {
-                    Text("fixed: \(note)").font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
-                }
-            default:
-                EmptyView()
-            }
-        }
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func approveMenu(_ f: PracticeFinding) -> some View {
-        Menu {
-            Button("Approve at the template tier") { Task { await approve(f, tier: nil, global: false) } }
-            Button("Approve as prompt") { Task { await approve(f, tier: "prompt", global: false) } }
-            Button("Approve as nudge") { Task { await approve(f, tier: "nudge", global: false) } }
-            Button("Approve as deny") { Task { await approve(f, tier: "deny", global: false) } }
-            Divider()
-            Button("Approve for every project") { Task { await approve(f, tier: nil, global: true) } }
-        } label: {
-            Label("Approve", systemImage: "checkmark.circle")
-        }
-        .menuStyle(.borderlessButton).fixedSize()
-        .disabled(busy || f.state == "observed")
-        .help(f.state == "observed" ? "Under the proposal threshold — needs more sessions." : "Create a rule from this finding.")
-    }
-
-    private func fixedButton(_ f: PracticeFinding) -> some View {
-        Button("Fixed in MARVIN") { fixNote = ""; fixing = f }
-            .rowChip(.neutral).disabled(busy)
-            .help("You changed MARVIN's code for this. Verified like a rule: a recurrence after today is a regression, a quiet window confirms it.")
-    }
-
     private func fixedSheet(_ f: PracticeFinding) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Fixed in MARVIN — \(f.id)").font(.headline)
             Text("Starts the verification clock now. If it recurs in a later session the finding comes back as regressed; \(view?.config.verifyWindow ?? 5) quiet sessions confirm it.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(PaneFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             TextField("What changed? (version, ADR, mechanism)", text: $fixNote)
                 .textFieldStyle(.roundedBorder)
             HStack {
@@ -587,100 +509,226 @@ import SwiftUI
         .frame(width: 380)
     }
 
-    // MARK: - Rules
+    // MARK: Rules
 
     @ViewBuilder
-    private var rulesSection: some View {
+    private var rulesTab: some View {
         if let view {
             let mine = view.rules.filter { !$0.isBuiltin }
             let builtins = view.rules.filter { $0.isBuiltin }
-            if mine.isEmpty {
-                Text("No rules of your own yet. Approve a finding to create one.")
-                    .font(.caption).foregroundStyle(.tertiary).padding(.vertical, 6)
+            PaneGroup(
+                store: groups, id: "rules.mine", title: "Your rules", count: mine.count, tint: Color.accentColor,
+                help: "Rules you accepted from findings, enforced at the tier you chose, then measured."
+            ) {
+                if mine.isEmpty { PaneNote(text: "No rules of your own yet. Approve a finding to create one.") }
+                ForEach(mine) { r in ruleRow(r) }
             }
-            ForEach(mine) { r in ruleRow(r) }
             if !builtins.isEmpty {
-                MarvinDivider()
-                Text("Built-in gates").font(.caption.bold()).foregroundStyle(.secondary)
-                Text("MARVIN's hand-written gates, as rows. Their logic stays in code; you decide the tier, switch one off, or reword it. Counts are real fires.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                ForEach(builtins) { r in ruleRow(r) }
+                PaneGroup(
+                    store: groups, id: "rules.builtin", title: "Built-in gates", count: builtins.count,
+                    help: "MARVIN's hand-written gates, as rows. Their logic stays in code; you decide the tier, switch one off, or reword it. Counts are real fires.",
+                    startsCollapsed: true
+                ) {
+                    ForEach(builtins) { r in ruleRow(r) }
+                }
             }
         }
     }
 
     private func ruleRow(_ r: PracticeRule) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                tierChip(r.tier)
-                Text(r.title).font(.caption.bold())
-                if r.isBuiltin {
-                    Text("built-in").font(.caption2).padding(.horizontal, 4)
-                        .background(Capsule().fill(Color.teal.opacity(0.18))).foregroundStyle(.teal)
-                } else if r.isGlobal {
-                    Text("global").font(.caption2).padding(.horizontal, 4)
-                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                }
-                if r.status == "retired" {
-                    Text("retired").font(.caption2).foregroundStyle(.tertiary)
-                }
-                Spacer()
-                Text(r.fingerprint).font(.caption2.monospaced()).foregroundStyle(.tertiary)
-            }
-            Text(r.message).font(.caption).foregroundStyle(.secondary)
-                .lineLimit(4).fixedSize(horizontal: false, vertical: true)
-            if r.suggestGlobal == true, let n = r.confirmedIn {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.seal").foregroundStyle(.green)
-                    Text("Confirmed in \(n) projects").font(.caption2).foregroundStyle(.secondary)
-                    Button("Promote to every project") { Task { await setRule(r, global: true) } }
-                        .rowChip(.neutral).disabled(busy)
-                }
-            }
-            HStack(spacing: 8) {
-                Text("fired \(r.metrics.fired)\(r.metrics.bypasses > 0 ? " · bypassed \(r.metrics.bypasses)" : "") · accepted \(Self.relative(r.acceptedAt))")
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                if r.status == "active" {
-                    Menu {
-                        Button("Tier: prompt") { Task { await setRule(r, tier: "prompt") } }
-                        Button("Tier: nudge") { Task { await setRule(r, tier: "nudge") } }
-                        Button("Tier: deny") { Task { await setRule(r, tier: "deny") } }
-                        Divider()
-                        Button("Edit message…") { ruleMessage = r.message; editingRule = r }
-                        if !r.isBuiltin { Button("Draft message with the model…") { draftText = ""; draft = nil; draftForRule = r } }
-                        if !r.isGlobal && !r.isBuiltin { Button("Promote to every project") { Task { await setRule(r, global: true) } } }
-                        Button(r.isBuiltin ? "Switch off" : "Retire", role: .destructive) { Task { await setRule(r, status: "retired") } }
-                    } label: { Label("Edit", systemImage: "slider.horizontal.3") }
-                    .menuStyle(.borderlessButton).fixedSize().disabled(busy)
-                } else {
-                    Button(r.isBuiltin ? "Switch on" : "Reactivate") { Task { await setRule(r, status: "active") } }
-                        .rowChip(.primary).disabled(busy)
-                }
-            }
-            .font(.caption2.monospaced()).foregroundStyle(.tertiary)
+        let active = r.status == "active"
+        var items: [PaneRowItem] = []
+        if !active {
+            items.append(PaneRowItem(id: "reactivate", title: r.isBuiltin ? "Switch on" : "Reactivate", role: .primary, enabled: !busy,
+                                     perform: { Task { await setRule(r, status: "active") } }))
+        } else if r.suggestGlobal == true, !r.isGlobal {
+            items.append(PaneRowItem(id: "promote", title: "Promote", role: .primary, enabled: !busy,
+                                     help: "Confirmed in \(r.confirmedIn ?? 0) projects. Make it a rule in every project.",
+                                     perform: { Task { await setRule(r, global: true) } }))
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.06)))
+        if active {
+            items.append(PaneRowItem(id: "tier-prompt", title: "Tier: prompt", enabled: !busy, perform: { Task { await setRule(r, tier: "prompt") } }))
+            items.append(PaneRowItem(id: "tier-nudge", title: "Tier: nudge", enabled: !busy, perform: { Task { await setRule(r, tier: "nudge") } }))
+            items.append(PaneRowItem(id: "tier-deny", title: "Tier: deny", enabled: !busy, perform: { Task { await setRule(r, tier: "deny") } }))
+            items.append(PaneRowItem(id: "edit", title: "Edit message…", systemImage: "pencil", enabled: !busy, perform: { ruleMessage = r.message; editingRule = r }))
+            if !r.isBuiltin {
+                items.append(PaneRowItem(id: "draft", title: "Draft the message with the model…", systemImage: "text.badge.star", enabled: !busy,
+                                         perform: { draftText = ""; draft = nil; draftForRule = r }))
+            }
+            if !r.isGlobal && !r.isBuiltin && r.suggestGlobal != true {
+                items.append(PaneRowItem(id: "promote-menu", title: "Promote to every project", enabled: !busy, perform: { Task { await setRule(r, global: true) } }))
+            }
+            items.append(PaneRowItem(id: "retire", title: r.isBuiltin ? "Switch off" : "Retire", role: .destructive, enabled: !busy,
+                                     perform: { Task { await setRule(r, status: "retired") } }))
+        }
+        let scopeWord = r.isBuiltin ? "Built-in" : (r.isGlobal ? "Every project" : nil)
+        return PaneListRow(
+            rowID: r.id, title: r.title,
+            leading: .glyph(active ? tierGlyph(r.tier) : "pause.circle", active ? tierTint(r.tier) : MarvinTheme.textMuted),
+            secondary: r.message,
+            trailingText: active ? r.tier : "Retired",
+            selected: selection == r.id, items: items, menuLabel: "More actions for \(r.title)",
+            onSelect: { selection = r.id },
+            showsDetail: selection == r.id,
+            detail: {
+                VStack(alignment: .leading, spacing: PaneSpace.tight) {
+                    Text(r.message).lineLimit(8)
+                    Text("Fired \(r.metrics.fired)\(r.metrics.bypasses > 0 ? ", bypassed \(r.metrics.bypasses)" : "") · accepted \(Self.relative(r.acceptedAt))\(scopeWord.map { " · \($0)" } ?? "")")
+                    if let n = r.confirmedIn, r.suggestGlobal == true { Text("Confirmed in \(n) projects.") }
+                    Text(r.fingerprint).font(PaneFont.secondaryMono)
+                }
+                .font(PaneFont.secondary).foregroundStyle(MarvinTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            })
     }
 
-    // MARK: - Runs
+    // MARK: Runs
 
     @ViewBuilder
-    private var runsSection: some View {
+    private var runsTab: some View {
         if let view {
             if view.runs.isEmpty {
-                Text("No runs yet.").font(.caption).foregroundStyle(.tertiary).padding(.vertical, 6)
+                PaneEmptyView(state: .nothingYet("runs", hint: "Run now reads this project's sessions and records what it found."))
+            } else {
+                PaneGroup(store: groups, id: "runs", title: "Runs", count: view.runs.count, help: "The nightly pass and the runs you started, newest first.") {
+                    ForEach(view.runs) { run in runRow(run) }
+                }
             }
-            ForEach(view.runs) { run in
-                Text("\(Self.relative(run.at)) · \(run.trigger) · \(run.sessionsRead) read · \(run.findingsNew) new · \(run.recurring) recurring · \(run.proposed) proposed" +
-                     (run.regressed > 0 ? " · \(run.regressed) regressed" : "") +
-                     (run.confirmed > 0 ? " · \(run.confirmed) confirmed" : "") +
-                     " · \(run.durationMs) ms")
-                    .font(.caption2.monospaced()).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func runRow(_ run: PracticeRun) -> some View {
+        let id = "run:\(run.id)"
+        return PaneListRow(
+            rowID: id, title: "\(Self.relative(run.at)) · \(run.trigger)", leading: .glyph("clock"),
+            secondary: "\(run.sessionsRead) read · \(run.findingsNew) new · \(run.proposed) proposed",
+            trailingText: run.regressed > 0 ? "\(run.regressed) regressed" : (run.confirmed > 0 ? "\(run.confirmed) confirmed" : nil),
+            trailingSymbol: run.regressed > 0 ? "exclamationmark.triangle.fill" : nil,
+            trailingTint: run.regressed > 0 ? GitDecorationColor.deleted : MarvinTheme.textMuted,
+            selected: selection == id, onSelect: { selection = id }, showsDetail: selection == id,
+            detail: {
+                Text("\(run.recurring) recurring · \(run.occurrences) occurrences · \(run.sessionsSkippedLive) skipped as live · \(run.durationMs) ms")
+                    .font(PaneFont.secondary).foregroundStyle(MarvinTheme.textMuted)
+            })
+    }
+
+    // MARK: Schedule and guide
+
+    /// Reference, read once, so it follows the rows rather than preceding them.
+    @ViewBuilder
+    private var aboutGroups: some View {
+        if let view {
+            PaneGroup(store: groups, id: "about.schedule", title: "Schedule", help: "When the nightly pass runs, how far back it reads, and a reset.", startsCollapsed: true) {
+                VStack(alignment: .leading, spacing: PaneSpace.standard) {
+                    Toggle(isOn: Binding(
+                        get: { view.config.enabled },
+                        set: { on in Task { await setSchedule(enabled: on, hour: nil) } }
+                    )) { Text("Run nightly").font(PaneFont.secondary) }
+                    .toggleStyle(.switch).controlSize(.mini)
+                    Stepper(value: Binding(
+                        get: { view.config.hour },
+                        set: { h in Task { await setSchedule(enabled: nil, hour: h) } }
+                    ), in: 0...23) {
+                        Text(String(format: "at %02d:00", view.config.hour)).font(PaneFont.secondaryMono)
+                    }
+                    Stepper(value: Binding(
+                        get: { view.config.windowDays ?? 45 },
+                        set: { d in Task { await setSchedule(enabled: nil, hour: nil, windowDays: d) } }
+                    ), in: 1...365, step: 5) {
+                        Text("read the last \(view.config.windowDays ?? 45) days").font(PaneFont.secondaryMono)
+                    }
+                    .help("Sessions older than this age out of every count. Watermarks stay, so nothing is re-read.")
+                    if let fitInfo = view.config.fit {
+                        Text("Weights fitted \(Self.relative(fitInfo.at)) · \(fitInfo.method) · \(fitInfo.labelled)/\(fitInfo.samples) labelled · ρ \(String(format: "%.2f", fitInfo.rho))")
+                            .font(PaneFont.secondaryMono).foregroundStyle(MarvinTheme.textMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Weights: hand-set defaults").font(PaneFont.secondaryMono).foregroundStyle(MarvinTheme.textMuted)
+                    }
+                    PaneActionButton(title: "Reset findings…", role: .tinted(GitDecorationColor.deleted),
+                                     help: "Clear every finding, watermark and run record for this project. Rules stay; the next run re-reads the window and re-attaches findings to their rules.",
+                                     disabled: busy) {
+                        confirmingReset = true
+                    }
+                    .confirmationDialog("Reset this project's findings?", isPresented: $confirmingReset) {
+                        Button("Reset findings", role: .destructive) { Task { await resetFindings() } }
+                    } message: {
+                        Text("Findings, watermarks and run records are cleared. Rules are kept. The next run re-reads every session inside the window.")
+                    }
+                }
+                .padding(.horizontal, PaneSpace.gutter)
+                .padding(.vertical, PaneSpace.compact)
             }
+            PaneGroup(store: groups, id: "about.how", title: "How this works", help: "What Practice looks for and what it will never do.", startsCollapsed: true) {
+                VStack(alignment: .leading, spacing: PaneSpace.standard) {
+                    Text("Repeat failures mined from this project's own sessions, next to the same acts done right. It proposes, you approve, and an accepted rule is enforced at the tier you choose, then measured.")
+                    howEntry("Every night", "Plain code reads this project's session transcripts and counts each failure kind by distinct session, and the same act done right, so a finding carries a rate.")
+                    howEntry("Proposed", "Three sessions and a priority of 0.6. Approve makes a rule; Dismiss silences it with a reason; Fixed in MARVIN says you changed MARVIN's code.")
+                    howEntry("Priority", PracticeScoreBand.legend)
+                    howEntry("Tiers", "prompt = a line in the system prompt. nudge = the call runs, MARVIN sees the message first. deny = the call is refused, twice per turn, then allowed and counted. A deny needs a checkable way out, or it acts as a nudge.")
+                    howEntry("Verified", "Each fix and rule keeps the rate it was accepted at. Regressed means two recurring sessions at half that rate or more; five sessions below it confirm. The row shows both: was 31 %, now 5 %.")
+                    howEntry("Built-in gates", "MARVIN's own gates are rows too: tier, off, message, fired counts. No row means native behaviour.")
+                    howEntry("Never", "No model reads a transcript; nothing changes without your click. Draft message is the only model call, and it sees aggregates.")
+                    Text("Full guide: docs/guides/practice.md · design: ADR-0105").font(PaneFont.secondaryMono)
+                }
+                .font(PaneFont.secondary)
+                .foregroundStyle(MarvinTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, PaneSpace.gutter)
+                .padding(.vertical, PaneSpace.compact)
+            }
+        }
+    }
+
+    private func howEntry(_ title: String, _ body: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title).font(PaneFont.group).foregroundStyle(MarvinTheme.textPrimary)
+            Text(body)
+        }
+    }
+
+    // MARK: State words
+
+    private func stateTint(_ state: String) -> Color {
+        switch state {
+        case "proposed": return .orange
+        case "active": return .blue
+        case "regressed": return GitDecorationColor.deleted
+        case "confirmed", "practice": return GitDecorationColor.added
+        case "fixed": return .teal
+        case "report": return .purple
+        default: return MarvinTheme.textMuted
+        }
+    }
+
+    /// The shape says the state; the colour only agrees.
+    private func stateGlyph(_ state: String) -> String {
+        switch state {
+        case "proposed": return "lightbulb.fill"
+        case "observed": return "circle.dotted"
+        case "active": return "checkmark.circle"
+        case "regressed": return "arrow.uturn.down.circle.fill"
+        case "confirmed", "practice": return "checkmark.seal.fill"
+        case "fixed": return "wrench.and.screwdriver.fill"
+        case "dismissed": return "xmark.circle"
+        case "report": return "doc.text"
+        default: return "circle"
+        }
+    }
+
+    private func tierGlyph(_ tier: String) -> String {
+        switch tier {
+        case "deny": return "hand.raised.fill"
+        case "nudge": return "bell.fill"
+        default: return "text.bubble"
+        }
+    }
+
+    private func tierTint(_ tier: String) -> Color {
+        switch tier {
+        case "deny": return GitDecorationColor.deleted
+        case "nudge": return .orange
+        default: return MarvinTheme.textMuted
         }
     }
 
@@ -690,7 +738,7 @@ import SwiftUI
         VStack(alignment: .leading, spacing: 10) {
             Text("Dismiss \(f.id)").font(.headline)
             Text("It stays quiet until it has been seen in twice as many sessions as now (\(f.distinctSessions * 2)). The reason is kept with it.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(PaneFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             TextField("Why is this not a problem here?", text: $dismissReason)
                 .textFieldStyle(.roundedBorder)
             HStack {
@@ -711,9 +759,9 @@ import SwiftUI
             Text(r.isBuiltin
                  ? "A built-in gate's native message names the file, the query, or the Skill call to run. Replace it only with text that still names the remedy; an edited message is used verbatim."
                  : "This is what the model reads when the rule fires. Name the remedy.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(PaneFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             TextEditor(text: $ruleMessage)
-                .font(.caption.monospaced())
+                .font(PaneFont.secondaryMono)
                 .frame(minHeight: 120)
             HStack {
                 Spacer()
@@ -732,28 +780,28 @@ import SwiftUI
             Text("Fit the score weights").font(.headline)
             if let fit {
                 Text("\(fit.method) · \(fit.labelled) labelled of \(fit.samples) findings · rank correlation \(String(format: "%.2f → %.2f", fit.rhoBefore, fit.rhoAfter))")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .font(PaneFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Text(fit.labelled < 8
                      ? "Fewer than 8 findings have an outcome yet, so this ranks by measured cost share. It gets better as rules confirm or regress."
                      : "Weights that best rank findings by whether they later confirmed, regressed, or were dismissed.")
-                    .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                    .font(PaneFont.secondary).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
-                    GridRow { Text("factor").font(.caption2.bold()); Text("current").font(.caption2.bold()); Text("proposed").font(.caption2.bold()) }
+                    GridRow { Text("factor").font(PaneFont.group); Text("current").font(PaneFont.group); Text("proposed").font(PaneFont.group) }
                     ForEach([("recurrence", fit.current.recurrence, fit.weights.recurrence),
                              ("cost", fit.current.cost, fit.weights.cost),
                              ("rate", fit.current.rate, fit.weights.rate),
                              ("reliability", fit.current.reliability, fit.weights.reliability),
                              ("actionability", fit.current.actionability, fit.weights.actionability)], id: \.0) { row in
                         GridRow {
-                            Text(row.0).font(.caption.monospaced())
-                            Text(String(format: "%.2f", row.1)).font(.caption.monospaced()).foregroundStyle(.secondary)
-                            Text(String(format: "%.2f", row.2)).font(.caption.monospaced())
+                            Text(row.0).font(PaneFont.secondaryMono)
+                            Text(String(format: "%.2f", row.1)).font(PaneFont.secondaryMono).foregroundStyle(.secondary)
+                            Text(String(format: "%.2f", row.2)).font(PaneFont.secondaryMono)
                                 .foregroundStyle(abs(row.1 - row.2) > 0.005 ? Color.orange : Color.primary)
                         }
                     }
                 }
             } else {
-                Text("Fitting…").font(.caption).foregroundStyle(.secondary)
+                Text("Fitting…").font(PaneFont.secondary).foregroundStyle(.secondary)
             }
             HStack {
                 Spacer()
@@ -770,17 +818,17 @@ import SwiftUI
         VStack(alignment: .leading, spacing: 10) {
             Text("Draft message — \(findingId)").font(.headline)
             Text("A read-only model wrote this from the finding's aggregates — never from a transcript. Edit it, then accept: it becomes the rule's message\(rule == nil ? " when you approve" : "").")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(PaneFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let draft {
-                TextEditor(text: $draftText).font(.caption.monospaced()).frame(minHeight: 110)
+                TextEditor(text: $draftText).font(PaneFont.secondaryMono).frame(minHeight: 110)
                 if !draft.rationale.isEmpty {
-                    Text("Rationale: \(draft.rationale)").font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                    Text("Rationale: \(draft.rationale)").font(PaneFont.secondary).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
                 }
                 if let cost = draft.costUsd {
-                    Text(String(format: "cost $%.3f", cost)).font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                    Text(String(format: "cost $%.3f", cost)).font(PaneFont.secondaryMono).foregroundStyle(.tertiary)
                 }
             } else {
-                Text("Asking the model…").font(.caption).foregroundStyle(.secondary)
+                Text("Asking the model…").font(PaneFont.secondary).foregroundStyle(.secondary)
             }
             HStack {
                 Spacer()
@@ -799,54 +847,6 @@ import SwiftUI
         .padding(16)
         .frame(width: 480)
         .task(id: findingId) { await requestDraft(findingId: findingId) }
-    }
-
-    // MARK: - Chips + helpers
-
-    private func stateChip(_ state: String) -> some View {
-        let color: Color = switch state {
-        case "proposed": .orange
-        case "active": .blue
-        case "regressed": .red
-        case "confirmed", "practice": .green
-        case "fixed": .teal
-        case "dismissed": .gray
-        case "report": .purple
-        default: .secondary
-        }
-        // `regressed` is nine characters in a 5pt-padded capsule; squeezed,
-        // it became a red column of letters (2026-09-11).
-        return Text(state)
-            .font(.system(size: 9, weight: .bold))
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(Capsule().fill(color.opacity(0.18)))
-            .foregroundStyle(color)
-    }
-
-    private func tierChip(_ tier: String) -> some View {
-        let color: Color = switch tier {
-        case "deny": .red
-        case "nudge": .orange
-        default: .secondary
-        }
-        return Text(tier).font(.caption2.bold())
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(Capsule().fill(color.opacity(0.18)))
-            .foregroundStyle(color)
-    }
-
-    /// Kept for the in-section placeholders, which are a sentence rather than
-    /// a whole-pane state. The pane-level ones are `PaneEmptyView` (ADR-0114).
-    private func emptyView(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 10.5))
-            .foregroundStyle(.tertiary)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private static func relative(_ iso: String) -> String {

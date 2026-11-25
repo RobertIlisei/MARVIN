@@ -18,6 +18,7 @@
 // The header never takes focus and must never be made `.focusable()` — that
 // draws macOS's ring around the entire pane, which has been reported twice.
 
+import MARVINLogic
 import SwiftUI
 
 @MainActor struct PaneHeader<Trailing: View>: View {
@@ -27,8 +28,13 @@ import SwiftUI
     /// Files puts the project name here, and uppercasing someone's folder is
     /// both wrong and unreadable.
     var uppercase: Bool = true
-    /// Shown after the title, before the actions — a count, a branch, a state.
+    /// Shown after the title, before the actions — a branch, a state.
     var subtitle: String? = nil
+    /// "Title · 12": how many things the pane holds, when that is one number.
+    /// Zero draws nothing (the empty state says it better).
+    var count: Int? = nil
+    /// At most TWO trailing actions: the one verb the pane exists for, and a
+    /// `PaneOverflowMenu` for everything else. See `docs/design/pane-standard.md`.
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
@@ -39,16 +45,22 @@ import SwiftUI
                     .foregroundStyle(MarvinTheme.textMuted)
             }
             Text(title)
-                .font(.system(size: uppercase ? 11 : 12, weight: .semibold))
+                .font(uppercase ? PaneFont.group : PaneFont.paneTitle)
                 .textCase(uppercase ? .uppercase : nil)
                 .tracking(uppercase ? 0.4 : 0)
                 .foregroundStyle(uppercase ? MarvinTheme.textMuted : MarvinTheme.textPrimary)
                 .lineLimit(1)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
+            if let count, PaneBadge.shows(count) {
+                Text(PaneBadge.text(count))
+                    .font(PaneFont.count)
+                    .foregroundStyle(MarvinTheme.textMuted)
+                    .accessibilityLabel("\(count) items")
+            }
             if let subtitle {
                 Text(subtitle)
-                    .font(.system(size: 10.5))
+                    .font(PaneFont.secondary)
                     .foregroundStyle(MarvinTheme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -59,13 +71,13 @@ import SwiftUI
             HStack(spacing: 2) { trailing() }
                 .layoutPriority(1)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, PaneSpace.gutter)
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: MarvinTheme.paneHeaderHeight)
     }
 }
 
 extension PaneHeader where Trailing == EmptyView {
-    init(title: String, symbol: String? = nil, uppercase: Bool = true, subtitle: String? = nil) {
-        self.init(title: title, symbol: symbol, uppercase: uppercase, subtitle: subtitle, trailing: { EmptyView() })
+    init(title: String, symbol: String? = nil, uppercase: Bool = true, subtitle: String? = nil, count: Int? = nil) {
+        self.init(title: title, symbol: symbol, uppercase: uppercase, subtitle: subtitle, count: count, trailing: { EmptyView() })
     }
 }

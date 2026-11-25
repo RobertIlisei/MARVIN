@@ -10,6 +10,7 @@ enum SurfaceRoutesMore {
         func ok(_ json: String) -> FixtureSidecar.Response {
             .json(json.replacingOccurrences(of: "@ROOT@", with: root))
         }
+        if let paneKit = PaneKitFixtures.response(path: path) { return paneKit }
         switch path {
         case "/api/sessions/watch": return ok(watchJSON())
         case "/api/chat/announce": return announce()

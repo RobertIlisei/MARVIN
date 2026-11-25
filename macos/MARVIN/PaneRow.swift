@@ -13,19 +13,39 @@
 
 import SwiftUI
 
+/// Whether the list a row sits in has keyboard focus (set by `PaneScrollList`).
+/// A selected row in a focused list is drawn with the accent; in an unfocused
+/// one it is the quiet grey, exactly as a macOS source list does.
+private struct PaneListFocusKey: EnvironmentKey { static let defaultValue = false }
+
+extension EnvironmentValues {
+    var paneListHasFocus: Bool {
+        get { self[PaneListFocusKey.self] }
+        set { self[PaneListFocusKey.self] = newValue }
+    }
+}
+
 @MainActor private struct PaneRowModifier: ViewModifier {
     let selected: Bool
     let hovering: Bool
+    @Environment(\.paneListHasFocus) private var listFocused
 
     func body(content: Content) -> some View {
         content
-            .padding(.horizontal, 10)
+            .padding(.horizontal, PaneSpace.gutter)
             .padding(.vertical, 3)
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             .clipped()
             .background(
                 RoundedRectangle(cornerRadius: MarvinTheme.Radius.chip, style: .continuous)
                     .fill(selected ? MarvinTheme.rowSelected : (hovering ? MarvinTheme.rowHover : .clear))
+            )
+            // Keyboard focus is shown, not implied: an inner accent hairline on
+            // the selected row while its list owns the keyboard. (The system
+            // focus ring is off — it drew a box round the whole pane, twice.)
+            .overlay(
+                RoundedRectangle(cornerRadius: MarvinTheme.Radius.chip, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(selected && listFocused ? 0.8 : 0), lineWidth: 1.5)
             )
             .contentShape(Rectangle())
     }
