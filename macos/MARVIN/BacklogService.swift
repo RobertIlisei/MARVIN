@@ -5,38 +5,7 @@
 // BranchService / ChatService conventions (x-marvin-client header, JSON).
 
 import Foundation
-
-struct BacklogItem: Codable, Identifiable, Equatable {
-    let id: String
-    let title: String
-    let body: String
-    var status: String     // provisional | open | doing | done | dismissed — `var` so a row updates in place
-    let severity: String   // low | med | high
-    let created: String
-    /// ADR-0064 — what sort of work this is. Optional in the wire shape so the
-    /// 430 items written before the field existed still decode.
-    let kind: String?
-    /// Waiting on something outside the repo. Orthogonal to status and kind.
-    let blocked: Bool?
-    let blockedOn: String?
-    /// ADR-0113 — who holds the item while it is `doing`.
-    let claimedBy: String?
-    let claimedBranch: String?
-
-    /// "tab: fix-the-thing" or "session 8cb24ed6" — nil when unclaimed.
-    var holderLabel: String? {
-        guard let by = claimedBy, !by.isEmpty else { return nil }
-        if let b = claimedBranch, !b.isEmpty {
-            return "tab: " + (b.hasPrefix("marvin/tab/") ? String(b.dropFirst("marvin/tab/".count)) : b)
-        }
-        return "session \(by.prefix(8))"
-    }
-
-    /// Never nil at the call site — an absent kind means "unspecified", which
-    /// is a real value, not a missing one.
-    var kindOrUnspecified: String { kind ?? "unspecified" }
-    var isBlocked: Bool { blocked ?? false }
-}
+import MARVINLogic
 
 /// One groom finding (ADR-0063) — something that looks wrong with a backlog
 /// item. A HEURISTIC, not a verdict: the panel surfaces it next to the item and

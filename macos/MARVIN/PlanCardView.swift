@@ -83,8 +83,13 @@ enum PlanCard {
             header
             if !collapsed {
                 VStack(alignment: .leading, spacing: 5) {
-                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                        lineView(line)
+                    ForEach(Array(PlanCardBlock.group(lines).enumerated()), id: \.offset) { _, block in
+                        switch block {
+                        case .line(let line):
+                            lineView(line)
+                        case .step(let marker, let text, let subs):
+                            PlanCardStep(marker: marker, text: text, subs: subs)
+                        }
                     }
                 }
             }

@@ -345,10 +345,17 @@ enum CommandRegistry {
             isEnabled: { hasProject }
         ) { MarvinBridge.shared.revealLeftTab("plugins") })
         c.append(AppCommand(
-            id: "view.backlog", title: "Backlog",
-            slot: .view, shortcut: "⇧⌘K", keywords: ["todo", "parked"]
+            id: "view.backlog", title: "Project Backlog",
+            slot: .view, shortcut: "⇧⌘K", keywords: ["todo", "parked", "backlog", "review", "captured"]
         ) {
             NotificationCenter.default.post(name: .marvinRequestBacklogPanel, object: nil)
+        })
+        c.append(AppCommand(
+            id: "view.plans", title: "Plans",
+            slot: .view, shortcut: "⌥⌘P", keywords: ["plan", "steps", "progress", "checklist"],
+            isEnabled: { hasProject }
+        ) {
+            NotificationCenter.default.post(name: .marvinRequestPlansPanel, object: nil)
         })
         c.append(AppCommand(
             id: "view.bottomPanel", title: "Toggle Bottom Panel",
