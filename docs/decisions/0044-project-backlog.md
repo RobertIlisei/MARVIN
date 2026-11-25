@@ -299,7 +299,18 @@ lines.
   streams, re-attached if the directory is replaced) feeds the same debouncer
   for writes made outside MARVIN. 300 ms quiet / 1.5 s max wait, so one tool
   write that the watcher also sees is one signal, and a bulk review of 200
-  items is one signal. The signal is `backlog.changed` on `/api/chat/announce`:
+  items is one signal. **What is guaranteed is not "one signal per burst"** —
+  no debounce can promise that against events that arrive slowly (one
+  `writeFile` raised two watcher events 51 ms apart on a loaded machine, and a
+  test that asserted "exactly one" against the real clock failed 7 runs in
+  30) — **but this:** a subscriber is told whenever the directory (the scan's
+  signature of every counted file's name, mtime and size) differs from the last
+  frame *it* received, never for a state it already has, and the last frame
+  carries the final counts. The knowledge is per subscriber, not per project: a
+  baseline shared between subscribers hid a change from one that had not seen
+  it (a snapshot read a moment before a write). A new watch and a re-attached
+  one each ask for one recount, because a watch does not see what happened
+  before it went live. The signal is `backlog.changed` on `/api/chat/announce`:
   a revision and the counts by status (provisional / open / doing / done /
   dismissed) plus `blocked` — never a path or a title, that stream holds no
   token. A snapshot is sent at attach, so a reconnect after sleep or a sidecar

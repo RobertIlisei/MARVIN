@@ -14,14 +14,26 @@
  *     one function every write path goes through) and a change from outside
  *     MARVIN (one `fs.watch` on `.marvin/backlog` per project) — into ONE
  *     debounced signal carrying the new counts. Both sources feed the same
- *     debouncer, so a tool write that the watcher also sees is still one signal.
+ *     debouncer, so a tool write that the watcher also sees is still one signal;
+ *   - tells each subscriber only when the directory differs from the last frame
+ *     THAT subscriber got (the scan carries a signature of every counted file's
+ *     name, mtime and size). One `writeFile` can raise two watcher events
+ *     further apart than the quiet period, and a loaded machine makes that
+ *     routine: the second flush then finds nothing new and stays quiet. What
+ *     is guaranteed is not "one signal per burst" (no debounce can promise that
+ *     against events that arrive slowly) but "a signal for every real change,
+ *     the last one carrying the final counts, and none for a state a
+ *     subscriber already has". The knowledge is per subscriber, never per
+ *     project: a baseline shared between subscribers would hide a change from
+ *     one that has not seen it (a snapshot read a moment before a write).
  *
  * A path inside the user's repository is attacker-controlled input
  * (REVIEW.md "Project-controlled config"): the directory and every entry are
  * `lstat`ed, a symlink is never followed, and the scan is bounded.
  */
 
-import { type FSWatcher, lstatSync, watch as fsWatch } from "node:fs";
+import { createHash } from "node:crypto";
+import { lstatSync, watch as fsWatch } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
@@ -93,11 +105,28 @@ interface CachedRow {
   blocked: boolean;
 }
 
+/** What a scan found: the counts, and a signature of the directory's state (every counted file's name, mtime and size). */
+export interface BacklogScan {
+  counts: BacklogCounts;
+  signature: string;
+}
+
 /** Incremental counter. One instance keeps one cache per project. */
-export function createBacklogCounter(): { count(workDir: string): Promise<BacklogCounts> } {
+export function createBacklogCounter(): {
+  scan(workDir: string): Promise<BacklogScan>;
+  count(workDir: string): Promise<BacklogCounts>;
+} {
   const caches = new Map<string, Map<string, CachedRow>>();
-  return {
-    async count(workDir: string): Promise<BacklogCounts> {
+  const signatureOf = (rows: Map<string, CachedRow>): string => {
+    const h = createHash("sha1");
+    for (const name of [...rows.keys()].sort()) {
+      const r = rows.get(name);
+      if (r) h.update(`${name}\0${r.mtimeMs}\0${r.size}\n`);
+    }
+    return h.digest("hex");
+  };
+  const scan = async (workDir: string): Promise<BacklogScan> => {
+    {
       const dir = join(workDir, ".marvin", "backlog");
       let names: string[];
       try {
@@ -106,7 +135,7 @@ export function createBacklogCounter(): { count(workDir: string): Promise<Backlo
         names = (await readdir(dir)).filter((n) => n.endsWith(".md")).slice(0, MAX_BACKLOG_FILES);
       } catch {
         caches.delete(workDir);
-        return { ...EMPTY_BACKLOG_COUNTS };
+        return { counts: { ...EMPTY_BACKLOG_COUNTS }, signature: "absent" };
       }
       const cache = caches.get(workDir) ?? new Map<string, CachedRow>();
       const next = new Map<string, CachedRow>();
@@ -137,24 +166,38 @@ export function createBacklogCounter(): { count(workDir: string): Promise<Backlo
         );
       }
       caches.set(workDir, next);
-      return countsFromRows([...next.values()]);
-    },
+      return { counts: countsFromRows([...next.values()]), signature: signatureOf(next) };
+    }
   };
+  return { scan, count: async (workDir) => (await scan(workDir)).counts };
 }
 
 type Listener = (change: BacklogChange) => void;
 
+/** What one subscriber has been told: the directory signature of the last frame it got. */
+interface ListenerState {
+  known: string | null;
+  /** The next frame this listener gets is its snapshot (it just attached). */
+  snapshotNext: boolean;
+}
+
 interface Slot {
   revision: number;
-  listeners: Set<Listener>;
+  listeners: Map<Listener, ListenerState>;
   quiet: ReturnType<typeof setTimeout> | null;
   max: ReturnType<typeof setTimeout> | null;
   flushing: boolean;
   dirty: boolean;
   watchRefs: number;
-  watcher: FSWatcher | null;
+  watcher: WatchHandle | null;
   watchedIno: number | null;
   health: ReturnType<typeof setInterval> | null;
+  /** The signature of the directory the last flush found; the revision moves only when this does. */
+  lastSignature: string | null;
+}
+
+export interface WatchHandle {
+  close(): void;
 }
 
 export interface BacklogLiveOptions {
@@ -164,13 +207,50 @@ export interface BacklogLiveOptions {
   maxWaitMs?: number;
   /** How often a watched directory is checked for having been replaced. */
   healthMs?: number;
+  /** Tests: the scan of a project's directory. */
+  scan?: (workDir: string) => Promise<BacklogScan>;
+  /** Tests: counts only; every call reads as a new state (nothing is ever "already told"). */
   count?: (workDir: string) => Promise<BacklogCounts>;
+  /** Tests: stand in for `fs.watch`. `onEvent` gets the file name (null if unknown); `onError` means the watch died. Null: could not watch. */
+  watcher?: (dir: string, onEvent: (name: string | null) => void, onError: () => void) => WatchHandle | null;
+  /** Tests: the directory's inode, or null when it is not a real directory (a symlink is never followed). */
+  inode?: (dir: string) => number | null;
+}
+
+function realWatcher(dir: string, onEvent: (name: string | null) => void, onError: () => void): WatchHandle | null {
+  try {
+    const w = fsWatch(dir, { persistent: false }, (_event, name) => onEvent(name === null ? null : String(name)));
+    w.on("error", onError);
+    return w;
+  } catch {
+    return null;
+  }
+}
+
+function realInode(dir: string): number | null {
+  try {
+    const st = lstatSync(dir); // lstat: a symlinked directory is not a directory here
+    return st.isDirectory() ? st.ino : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface BacklogLive {
   noteWrite(workDir: string): void;
+  /**
+   * Hear every change from now on. The listener is told whenever the directory
+   * differs from the state of the last frame IT received, so no change is
+   * hidden from it by what another subscriber already knows.
+   */
   subscribe(workDir: string, listener: Listener): () => void;
-  /** The state now, without bumping the revision. */
+  /**
+   * `subscribe`, plus the state now as the listener's first frame
+   * (`reason: "snapshot"`), delivered through the same ordered flush as the
+   * changes: a change can never overtake it or be overwritten by it.
+   */
+  attach(workDir: string, listener: Listener): () => void;
+  /** The state now, without bumping the revision (no listener involved). */
   snapshot(workDir: string): Promise<BacklogChange>;
   /** Start (refcounted) the file-system watch for a project; returns the release. */
   watch(workDir: string): () => void;
@@ -182,14 +262,22 @@ export function createBacklogLive(opts: BacklogLiveOptions = {}): BacklogLive {
   const maxWaitMs = opts.maxWaitMs ?? 1500;
   const healthMs = opts.healthMs ?? 30_000;
   const counter = createBacklogCounter();
-  const count = opts.count ?? ((w: string) => counter.count(w));
+  let injected = 0;
+  // A `count` stub has no notion of a directory's state: each call is a new one.
+  const scan: (w: string) => Promise<BacklogScan> =
+    opts.scan ??
+    (opts.count
+      ? async (w) => ({ counts: await (opts.count as (w: string) => Promise<BacklogCounts>)(w), signature: `injected-${++injected}` })
+      : (w) => counter.scan(w));
+  const makeWatcher = opts.watcher ?? realWatcher;
+  const inodeOf = opts.inode ?? realInode;
   const slots = new Map<string, Slot>();
 
   const slotFor = (raw: string): { key: string; slot: Slot } => {
     const key = resolve(raw);
     let slot = slots.get(key);
     if (!slot) {
-      slot = { revision: 0, listeners: new Set(), quiet: null, max: null, flushing: false, dirty: false, watchRefs: 0, watcher: null, watchedIno: null, health: null };
+      slot = { revision: 0, listeners: new Map(), quiet: null, max: null, flushing: false, dirty: false, watchRefs: 0, watcher: null, watchedIno: null, health: null, lastSignature: null };
       slots.set(key, slot);
     }
     return { key, slot };
@@ -207,18 +295,31 @@ export function createBacklogLive(opts: BacklogLiveOptions = {}): BacklogLive {
     try {
       do {
         slot.dirty = false;
-        if (slot.listeners.size === 0) break; // nobody to tell; the next subscriber gets a snapshot
-        let counts: BacklogCounts;
+        if (slot.listeners.size === 0) break; // nobody to tell
+        let found: BacklogScan;
         try {
-          counts = await count(key);
+          found = await scan(key);
         } catch {
           break; // unreadable right now: stay quiet, the next write retries
         }
-        slot.revision += 1;
-        const change: BacklogChange = { workDir: key, revision: slot.revision, counts, reason: "change" };
-        for (const l of [...slot.listeners]) {
+        // The revision moves when the directory does, not when an event
+        // arrives: a second event for a write already seen, or a re-attached
+        // watcher's recount, finds the same state and changes nothing.
+        if (found.signature !== slot.lastSignature) {
+          slot.lastSignature = found.signature;
+          slot.revision += 1;
+        }
+        // Each listener is told when the directory differs from the last frame
+        // IT got. Per listener, never per project: what one subscriber knows
+        // must not hide a change from another (a snapshot read a moment before
+        // a write, a subscriber that attached between two flushes).
+        for (const [l, st] of [...slot.listeners]) {
+          if (st.known === found.signature) continue;
+          st.known = found.signature;
+          const reason = st.snapshotNext ? "snapshot" : "change";
+          st.snapshotNext = false;
           try {
-            l(change);
+            l({ workDir: key, revision: slot.revision, counts: found.counts, reason });
           } catch {
             /* a listener must not break the others */
           }
@@ -242,19 +343,19 @@ export function createBacklogLive(opts: BacklogLiveOptions = {}): BacklogLive {
 
   function attach(key: string, slot: Slot): void {
     const dir = join(key, ".marvin", "backlog");
-    try {
-      const st = lstatSync(dir);
-      if (!st.isDirectory()) return; // a symlink is never watched
-      const w = fsWatch(dir, { persistent: false }, (_event, name) => {
-        if (name && !String(name).endsWith(".md")) return;
+    const ino = inodeOf(dir);
+    if (ino === null) return; // no directory yet (the health check attaches when it appears), or a symlink: never watched
+    const w = makeWatcher(
+      dir,
+      (name) => {
+        if (name && !name.endsWith(".md")) return;
         noteWrite(key);
-      });
-      w.on("error", () => detach(slot));
-      slot.watcher = w;
-      slot.watchedIno = st.ino;
-    } catch {
-      /* no directory yet: the health check attaches it when it appears */
-    }
+      },
+      () => detach(slot), // the watch died: the next health check puts a new one on
+    );
+    if (!w) return;
+    slot.watcher = w;
+    slot.watchedIno = ino;
   }
 
   function detach(slot: Slot): void {
@@ -271,33 +372,44 @@ export function createBacklogLive(opts: BacklogLiveOptions = {}): BacklogLive {
     noteWrite,
     subscribe(workDir, listener) {
       const { slot } = slotFor(workDir);
-      slot.listeners.add(listener);
+      slot.listeners.set(listener, { known: null, snapshotNext: false });
+      return () => {
+        slot.listeners.delete(listener);
+      };
+    },
+    attach(workDir, listener) {
+      const { key, slot } = slotFor(workDir);
+      slot.listeners.set(listener, { known: null, snapshotNext: true });
+      void flush(key, slot);
       return () => {
         slot.listeners.delete(listener);
       };
     },
     async snapshot(workDir) {
       const { key, slot } = slotFor(workDir);
-      return { workDir: key, revision: slot.revision, counts: await count(key), reason: "snapshot" };
+      const revision = slot.revision; // read before the scan: a change landing meanwhile is newer than this
+      return { workDir: key, revision, counts: (await scan(key)).counts, reason: "snapshot" };
     },
     watch(workDir) {
       const { key, slot } = slotFor(workDir);
       slot.watchRefs += 1;
       if (slot.watchRefs === 1) {
         attach(key, slot);
+        // A watch does not see what happened before it went live (FSEvents
+        // takes a moment to start on a loaded machine): one recount after the
+        // quiet period closes that gap. It tells a subscriber only if the
+        // directory differs from the last frame that subscriber got.
+        noteWrite(key);
         // A directory replaced under the watch (a checkout that removes and
         // recreates it) leaves a watcher on a dead inode; look every so often.
         slot.health = setInterval(() => {
-          let ino: number | null = null;
-          try {
-            const st = lstatSync(join(key, ".marvin", "backlog"));
-            ino = st.isDirectory() ? st.ino : null;
-          } catch {
-            ino = null;
-          }
+          const ino = inodeOf(join(key, ".marvin", "backlog"));
           if (ino === slot.watchedIno) return;
           detach(slot);
           if (ino !== null) attach(key, slot);
+          // Files created before the new watch was on are not events to it, so
+          // look. This is a recount, not a signal: it speaks only if the
+          // directory differs from what the last signal said.
           noteWrite(key);
         }, healthMs);
         slot.health.unref?.();

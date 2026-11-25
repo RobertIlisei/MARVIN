@@ -71,13 +71,12 @@ export async function GET(req: NextRequest) {
       if (project) {
         const hub = getBacklogLive();
         releaseBacklogWatch = hub.watch(project.workDir);
-        unsubscribeBacklog = hub.subscribe(project.workDir, (c) =>
+        // `attach`: the state now as this stream's first frame, then each
+        // change, in one order (a change can never be overwritten by an older
+        // snapshot).
+        unsubscribeBacklog = hub.attach(project.workDir, (c) =>
           send("backlog.changed", backlogChangedPayload(projectId, c)),
         );
-        hub
-          .snapshot(project.workDir)
-          .then((c) => send("backlog.changed", backlogChangedPayload(projectId, c)))
-          .catch(() => {});
       }
 
       const heartbeat = setInterval(() => write(`: ping\n\n`), HEARTBEAT_MS);

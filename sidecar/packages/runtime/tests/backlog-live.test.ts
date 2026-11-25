@@ -210,87 +210,360 @@ describe("the debounced signal (fake clock)", () => {
   });
 });
 
-describe("a tool write and an outside edit each produce exactly one signal (real files, real clock)", () => {
+
+// ---------------------------------------------------------------------------
+// The exact-number guarantees, driven deterministically. A full vitest run on a
+// loaded machine (2026-11-25) failed "a directory replaced under the watch":
+// one `writeFile` produced two watcher events 51 ms apart, the test's 40 ms
+// quiet period split them into two flushes, and a real-clock test that asserted
+// "exactly one" failed 7 runs in 30 under CPU load. Two fixes: a flush that
+// finds the directory exactly as the last signal left it says nothing (a late
+// second event for the same write is not a change), and these tests drive the
+// watcher's callback and the clock themselves instead of racing the kernel.
+// ---------------------------------------------------------------------------
+
+const counts = (o: Partial<BacklogCounts>): BacklogCounts => {
+  const c = { ...EMPTY_BACKLOG_COUNTS, ...o };
+  c.active = c.provisional + c.open + c.doing;
+  return c;
+};
+
+/** A directory state the fake scan can be told to be in. */
+function fakeState() {
+  const st = { counts: counts({ open: 1 }), signature: "s1" };
+  const scan = vi.fn(async () => ({ counts: st.counts, signature: st.signature }));
+  return {
+    scan,
+    set: (sig: string, c: Partial<BacklogCounts>) => {
+      st.signature = sig;
+      st.counts = counts(c);
+    },
+  };
+}
+
+/** A watcher whose events the test fires itself. */
+function fakeWatcher() {
+  const made: Array<{ dir: string; fire: (name: string | null) => void; fail: () => void; closed: boolean }> = [];
+  const factory = (dir: string, onEvent: (name: string | null) => void, onError: () => void) => {
+    const w = { dir, fire: onEvent, fail: onError, closed: false };
+    made.push(w);
+    return {
+      close: () => {
+        w.closed = true;
+      },
+    };
+  };
+  return { made, factory };
+}
+
+describe("one signal per change, however the events arrive (fake clock, fake watcher)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const setup = () => {
+    const state = fakeState();
+    const w = fakeWatcher();
+    let ino: number | null = 1;
+    const hub = createBacklogLive({
+      debounceMs: 40,
+      maxWaitMs: 200,
+      healthMs: 60,
+      scan: state.scan,
+      watcher: w.factory,
+      inode: () => ino,
+    });
+    // Attached like the announce stream: the state now arrives as a snapshot
+    // frame (kept apart); `seen` holds the changes after it.
+    const seen: BacklogChange[] = [];
+    const snapshots: BacklogChange[] = [];
+    hub.attach("/p", (c) => (c.reason === "snapshot" ? snapshots : seen).push(c));
+    return {
+      hub,
+      state,
+      w,
+      seen,
+      snapshots,
+      setIno: (n: number | null) => {
+        ino = n;
+      },
+    };
+  };
+
+  it("attaching tells the subscriber the state now, once, as a snapshot", async () => {
+    const { snapshots, seen } = setup();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.counts.active).toBe(1);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("what one subscriber already knows never hides a change from another (a snapshot read just before a write)", async () => {
+    const { hub, state, seen } = setup(); // A: attached at s1
+    await vi.advanceTimersByTimeAsync(10);
+    state.set("s2", { open: 2 }); // the write lands ...
+    const b: BacklogChange[] = [];
+    hub.attach("/p", (c) => b.push(c)); // ... and B attaches before A's flush runs: B's snapshot already is s2
+    hub.noteWrite("/p");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(b.map((c) => [c.reason, c.counts.active])).toEqual([["snapshot", 2]]); // B is told once
+    expect(seen.map((c) => c.counts.active)).toEqual([2]); // A is still told its change
+  });
+
+  it("a write the store reports and the watcher also sees is one signal", async () => {
+    const { hub, w, seen, state } = setup();
+    hub.watch("/p");
+    state.set("s2", { open: 1, doing: 1 });
+    hub.noteWrite("/p"); // the store
+    w.made[0]?.fire("x.md"); // the watcher, same write
+    await vi.advanceTimersByTimeAsync(500);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.counts.active).toBe(2);
+  });
+
+  it("two events for ONE write, further apart than the quiet period, are still one signal", async () => {
+    // The failure seen under load: a create event, then a second one 51 ms later.
+    const { hub, w, seen, state } = setup();
+    hub.watch("/p");
+    state.set("s2", { open: 2 });
+    w.made[0]?.fire("m.md");
+    await vi.advanceTimersByTimeAsync(51);
+    w.made[0]?.fire("m.md");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.counts.active).toBe(2);
+  });
+
+  it("a write that really changes the directory again after the first signal is a second signal, with the final counts", async () => {
+    const { hub, w, seen, state } = setup();
+    hub.watch("/p");
+    state.set("s2", { open: 2 });
+    w.made[0]?.fire("a.md");
+    await vi.advanceTimersByTimeAsync(100);
+    state.set("s3", { open: 1, done: 1 });
+    w.made[0]?.fire("a.md");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(seen.map((s) => s.counts.active)).toEqual([2, 1]);
+    expect(seen.at(-1)?.counts).toMatchObject({ open: 1, done: 1 });
+    expect(seen.map((s) => s.revision)).toEqual([2, 3]); // the attach snapshot was revision 1
+  });
+
+  it("an edit that moves no count (a body change) is still a change: the open window re-reads", async () => {
+    const { hub, w, seen, state } = setup();
+    hub.watch("/p");
+    state.set("s2", { open: 1 }); // same counts, new signature (mtime or size moved)
+    w.made[0]?.fire("a.md");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("an outside edit through the watcher alone is one signal with the right counts", async () => {
+    const { hub, w, seen, state } = setup();
+    hub.watch("/p");
+    state.set("s2", { open: 1, dismissed: 1 });
+    w.made[0]?.fire("a.md");
+    w.made[0]?.fire("a.md");
+    w.made[0]?.fire(null); // a name-less event
+    await vi.advanceTimersByTimeAsync(300);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.counts).toMatchObject({ open: 1, dismissed: 1, active: 1 });
+  });
+
+  it("names that are not items never signal", async () => {
+    const { hub, w, seen } = setup();
+    hub.watch("/p");
+    w.made[0]?.fire("notes.txt");
+    w.made[0]?.fire(".DS_Store");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("a state already told is not told again, even after a quiet minute", async () => {
+    const { hub, seen, state } = setup();
+    state.set("s2", { open: 5 });
+    hub.noteWrite("/p");
+    await vi.advanceTimersByTimeAsync(300);
+    hub.noteWrite("/p");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("releasing the last watch closes the watcher and stops the health check", async () => {
+    const { hub, w, state } = setup();
+    const release = hub.watch("/p");
+    const first = w.made[0];
+    release();
+    expect(first?.closed).toBe(true);
+    expect(hub.watchedCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(300); // the one recount a new watch asks for
+    const calls = state.scan.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(w.made).toHaveLength(1); // nothing re-attached
+    expect(state.scan.mock.calls.length).toBe(calls); // nothing counted
+  });
+
+  it("a watcher that errors is replaced on the next health check, and the recount does not signal by itself", async () => {
+    const { hub, w, seen } = setup();
+    hub.watch("/p");
+    w.made[0]?.fail();
+    expect(w.made[0]?.closed).toBe(true);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(w.made).toHaveLength(2); // re-attached
+    expect(seen).toHaveLength(0); // nothing changed, so nothing is said
+  });
+
+  describe("a directory replaced under the watch (what a branch checkout does)", () => {
+    it("re-attaches to the new directory and says nothing when the contents are the same", async () => {
+      const { hub, w, seen, setIno, state } = setup();
+      hub.watch("/p");
+      state.set("s2", { open: 1 });
+      hub.noteWrite("/p");
+      await vi.advanceTimersByTimeAsync(300); // the last signal left state s2
+      expect(seen).toHaveLength(1);
+      setIno(null); // removed
+      await vi.advanceTimersByTimeAsync(70);
+      setIno(2); // recreated
+      await vi.advanceTimersByTimeAsync(400);
+      expect(w.made).toHaveLength(2);
+      expect(w.made[0]?.closed).toBe(true);
+      expect(w.made[1]?.closed).toBe(false);
+      expect(seen).toHaveLength(1); // same contents: no second signal
+    });
+
+    it("is exactly one signal when the contents differ, with the right final counts, however slowly it unfolds", async () => {
+      const { hub, seen, setIno, state } = setup();
+      hub.watch("/p");
+      state.set("s2", { open: 1 });
+      hub.noteWrite("/p");
+      await vi.advanceTimersByTimeAsync(300);
+      setIno(null);
+      await vi.advanceTimersByTimeAsync(70);
+      setIno(2);
+      state.set("s3", { open: 3 }); // files appeared in the new directory
+      await vi.advanceTimersByTimeAsync(400);
+      expect(seen).toHaveLength(2);
+      expect(seen.at(-1)?.counts.active).toBe(3);
+      expect(seen.at(-1)?.revision).toBe(3); // snapshot 1, the first change 2, this one 3
+    });
+
+    it("the NEW directory's events signal", async () => {
+      const { hub, w, seen, setIno, state } = setup();
+      hub.watch("/p");
+      setIno(null);
+      await vi.advanceTimersByTimeAsync(70);
+      setIno(2);
+      await vi.advanceTimersByTimeAsync(300);
+      state.set("s9", { open: 9 });
+      w.made.at(-1)?.fire("m.md");
+      await vi.advanceTimersByTimeAsync(300);
+      expect(seen.at(-1)?.counts.active).toBe(9);
+    });
+
+    it("a directory that is gone (not yet recreated) is counted as empty and told once", async () => {
+      const { hub, seen, setIno, state } = setup();
+      hub.watch("/p");
+      state.set("s2", { open: 1 });
+      hub.noteWrite("/p");
+      await vi.advanceTimersByTimeAsync(300);
+      setIno(null);
+      state.set("s0", {});
+      await vi.advanceTimersByTimeAsync(600);
+      expect(seen.at(-1)?.counts.active).toBe(0);
+      expect(seen).toHaveLength(2);
+    });
+  });
+});
+
+// Real files and a real watcher: a SMOKE test that the pieces connect. Event
+// timing belongs to the kernel and the machine's load, so nothing here counts
+// signals; each waits (no fixed sleeps) for the signal that carries the right
+// final counts and fails only if that never comes.
+describe("real files, real watcher: the final counts arrive (smoke)", () => {
+  async function until(seen: BacklogChange[], ok: (last: BacklogChange) => boolean, ms = 8000): Promise<BacklogChange> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      const last = seen.at(-1);
+      if (last && ok(last)) return last;
+      await sleep(25);
+    }
+    throw new Error(`no matching signal in ${ms} ms; saw ${JSON.stringify(seen.map((s) => s.counts))}`);
+  }
   const collect = (hub: ReturnType<typeof createBacklogLive>) => {
     const seen: BacklogChange[] = [];
     hub.subscribe(workDir, (c) => seen.push(c));
     return seen;
   };
 
-  it("the tool path: addBacklogItem signals once, with the new count", async () => {
-    const hub = createBacklogLive({ debounceMs: 40, maxWaitMs: 300 });
+  it("the tool path signals, with the new count", async () => {
+    const hub = createBacklogLive({ debounceMs: 30, maxWaitMs: 300 });
     setBacklogLiveForTests(hub);
     const seen = collect(hub);
     await addBacklogItem(workDir, { title: "parked by a tool", body: "b" });
-    await sleep(250);
-    expect(seen).toHaveLength(1);
-    expect(seen[0]?.counts.active).toBe(1);
-    await sleep(250);
-    expect(seen).toHaveLength(1);
+    const last = await until(seen, (c) => c.counts.active === 1);
+    expect(seen.length).toBeGreaterThanOrEqual(1);
+    expect(last.counts.open).toBe(1);
   });
 
-  it("the tool path with the watcher attached still signals once, not twice", async () => {
-    const hub = createBacklogLive({ debounceMs: 60, maxWaitMs: 400 });
+  it("with the watcher attached, tool writes end on the right counts", async () => {
+    const hub = createBacklogLive({ debounceMs: 30, maxWaitMs: 300 });
     setBacklogLiveForTests(hub);
     const release = hub.watch(workDir);
     try {
-      await sleep(80);
       const seen = collect(hub);
       await addBacklogItem(workDir, { title: "parked with a watcher", body: "b" });
       await setBacklogStatus(workDir, "parked-with-a-watcher", "done");
-      await sleep(400);
-      expect(seen).toHaveLength(1);
-      expect(seen[0]?.counts).toMatchObject({ active: 0, done: 1 });
+      const last = await until(seen, (c) => c.counts.done === 1 && c.counts.active === 0);
+      expect(last.revision).toBeGreaterThanOrEqual(1);
     } finally {
       release();
     }
   });
 
-  it("a hand edit of a file in .marvin/backlog signals once, with no tool involved", async () => {
+  it("a hand edit of a file in .marvin/backlog arrives with no tool involved", async () => {
     await writeFile(join(dir, "a.md"), item("open", false, "a"));
     await writeFile(join(dir, "b.md"), item("open", false, "b"));
-    const hub = createBacklogLive({ debounceMs: 60, maxWaitMs: 400 });
-    await hub.snapshot(workDir); // warm the cache like a connected client would
+    const hub = createBacklogLive({ debounceMs: 30, maxWaitMs: 300 });
+    await hub.snapshot(workDir);
     const release = hub.watch(workDir);
     try {
-      await sleep(80);
       const seen = collect(hub);
       await writeFile(join(dir, "a.md"), item("dismissed", false, "a-longer-id-so-size-moves"));
-      await sleep(400);
-      expect(seen).toHaveLength(1);
-      expect(seen[0]?.counts).toMatchObject({ open: 1, dismissed: 1, active: 1 });
+      await until(seen, (c) => c.counts.open === 1 && c.counts.dismissed === 1);
     } finally {
       release();
     }
   });
 
-  it("a file appearing from outside (a git checkout) signals once", async () => {
-    const hub = createBacklogLive({ debounceMs: 60, maxWaitMs: 400 });
+  it("files appearing from outside (a branch checkout) arrive", async () => {
+    const hub = createBacklogLive({ debounceMs: 30, maxWaitMs: 300 });
     const release = hub.watch(workDir);
     try {
-      await sleep(80);
       const seen = collect(hub);
       for (const n of ["p", "q", "r"]) await writeFile(join(dir, `${n}.md`), item("provisional", false, n));
-      await sleep(400);
-      expect(seen).toHaveLength(1);
-      expect(seen[0]?.counts.provisional).toBe(3);
+      await until(seen, (c) => c.counts.provisional === 3);
     } finally {
       release();
     }
   });
 
-  it("releasing the watch stops outside edits from signalling", async () => {
-    const hub = createBacklogLive({ debounceMs: 40, maxWaitMs: 200 });
+  it("a directory removed and recreated is followed, and a write to the new one arrives", async () => {
+    await writeFile(join(dir, "a.md"), item("open", false, "a"));
+    const hub = createBacklogLive({ debounceMs: 30, maxWaitMs: 300, healthMs: 50 });
     const release = hub.watch(workDir);
-    await sleep(80);
-    release();
-    const seen = collect(hub);
-    await writeFile(join(dir, "late.md"), item("open", false, "late"));
-    await sleep(300);
-    expect(seen).toHaveLength(0);
+    try {
+      const seen = collect(hub);
+      await rm(dir, { recursive: true });
+      await mkdir(dir);
+      await writeFile(join(dir, "n.md"), item("open", false, "n"));
+      await until(seen, (c) => c.counts.active === 1);
+      await sleep(300); // let the re-attach settle, then write into the NEW directory
+      await writeFile(join(dir, "m.md"), item("open", false, "m"));
+      await until(seen, (c) => c.counts.active === 2);
+    } finally {
+      release();
+    }
   });
 
-  it("two watchers of one project share one watch, and the last release closes it", async () => {
+  it("two watchers of one project share one watch, and the last release closes it", () => {
     const hub = createBacklogLive({ debounceMs: 40, maxWaitMs: 200 });
     const r1 = hub.watch(workDir);
     const r2 = hub.watch(workDir);
@@ -301,47 +574,23 @@ describe("a tool write and an outside edit each produce exactly one signal (real
     expect(hub.watchedCount()).toBe(0);
   });
 
-  it("a directory replaced under the watch (a checkout that recreates it) is picked up and signalled", async () => {
-    await writeFile(join(dir, "a.md"), item("open", false, "a"));
-    const hub = createBacklogLive({ debounceMs: 40, maxWaitMs: 200, healthMs: 60 });
-    const release = hub.watch(workDir);
-    try {
-      await sleep(80);
-      const seen = collect(hub);
-      await rm(dir, { recursive: true });
-      await mkdir(dir);
-      await writeFile(join(dir, "n.md"), item("open", false, "n"));
-      await sleep(400);
-      expect(seen.length).toBeGreaterThanOrEqual(1);
-      expect(seen.at(-1)?.counts.active).toBe(1);
-      // And the NEW directory is the one being watched.
-      const before = seen.length;
-      await writeFile(join(dir, "m.md"), item("open", false, "m"));
-      await sleep(300);
-      expect(seen.length).toBe(before + 1);
-      expect(seen.at(-1)?.counts.active).toBe(2);
-    } finally {
-      release();
-    }
-  });
-
   it("the module-level noteBacklogWrite feeds the installed hub", async () => {
-    const hub = createBacklogLive({ debounceMs: 30, maxWaitMs: 200 });
+    const state = fakeState();
+    const hub = createBacklogLive({ debounceMs: 30, maxWaitMs: 300, scan: state.scan });
     setBacklogLiveForTests(hub);
-    const seen = collect(hub);
+    const seen = collect(hub); // the baseline reads state s1
+    state.set("s2", { open: 4 });
     noteBacklogWrite(workDir);
-    await sleep(200);
-    expect(seen).toHaveLength(1);
+    const last = await until(seen, (c) => c.counts.active === 4);
+    expect(last.reason).toBe("change");
   });
 
   it("a classification edit signals too (the open window re-reads it)", async () => {
     await addBacklogItem(workDir, { title: "to classify", body: "b" });
-    const hub = createBacklogLive({ debounceMs: 40, maxWaitMs: 300 });
+    const hub = createBacklogLive({ debounceMs: 30, maxWaitMs: 300 });
     setBacklogLiveForTests(hub);
     const seen = collect(hub);
     await updateBacklogItem(workDir, "to-classify", { blocked: true, blockedOn: "legal" });
-    await sleep(250);
-    expect(seen).toHaveLength(1);
-    expect(seen[0]?.counts.blocked).toBe(1);
+    await until(seen, (c) => c.counts.blocked === 1);
   });
 });
