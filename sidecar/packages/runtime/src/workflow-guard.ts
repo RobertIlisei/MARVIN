@@ -191,6 +191,9 @@ export interface WorkflowGap {
   ownConsequences?: OwnConsequence[];
 }
 
+/** ADR-0104's brake for the ADR-0121 check: an item refuses a session's close this often, then the close is allowed. */
+export const OWN_CONSEQUENCE_MAX_BLOCKS = 2;
+
 export interface OwnConsequence {
   id: string;
   title: string;
@@ -258,6 +261,61 @@ export function ownChangeConsequences(items: ParkedItem[], files: string[], bran
     });
     if (hit) out.push({ id: item.id, title: item.title.slice(0, 100), because: hit });
     if (out.length >= 12) break;
+  }
+  return out;
+}
+
+/**
+ * A tab's answer to an own-change item it may not resolve: one line of its
+ * final message, `Handed over: <item-id> to <who> — <reason>`. The same shape
+ * as ADR-0138's `Skill not used:` waiver — a stated, recorded reason ends the
+ * question; silence does not. Both a recipient and a reason are required.
+ */
+const HANDOVER =
+  /^\s*(?:[-*>]\s+)?(?:\*\*)?Handed over(?:\*\*)?\s*:(?:\*\*)?\s*`?([A-Za-z0-9][A-Za-z0-9._-]*)`?\s+to\s+(\S.*?)\s+(?:—|–|--?)\s+(\S.{2,})$/gim;
+
+export interface Handover {
+  who: string;
+  reason: string;
+}
+
+/** `Handed over: <id> to <who> — <reason>` lines of a final message, by item id. Pure. */
+export function parseHandovers(text: string): Map<string, Handover> {
+  const out = new Map<string, Handover>();
+  for (const m of text.matchAll(HANDOVER)) {
+    const id = m[1] ?? "";
+    if (id && !out.has(id)) out.set(id, { who: (m[2] ?? "").trim(), reason: (m[3] ?? "").trim() });
+  }
+  return out;
+}
+
+export interface OwnConsequencePartition {
+  /** Still to be asked about: no hand-over line and the brake has not tripped. */
+  ask: OwnConsequence[];
+  /** Answered with a hand-over line. */
+  handedOver: Array<OwnConsequence & Handover>;
+  /** Refused `maxBlocks` closes already: the close goes through, and it is logged. */
+  bypassed: OwnConsequence[];
+}
+
+/**
+ * Sort the own-change items at a scope-met close: handed over (the tab says
+ * whose it is), bypassed (ADR-0104's brake — an item refuses a session's close
+ * at most `maxBlocks` times), or still asked. Pure; the caller owns the I/O.
+ */
+export function partitionOwnConsequences(
+  own: OwnConsequence[],
+  finalText: string,
+  blocks: Record<string, number>,
+  maxBlocks: number,
+): OwnConsequencePartition {
+  const handovers = parseHandovers(finalText);
+  const out: OwnConsequencePartition = { ask: [], handedOver: [], bypassed: [] };
+  for (const item of own) {
+    const h = handovers.get(item.id);
+    if (h) out.handedOver.push({ ...item, ...h });
+    else if ((blocks[item.id] ?? 0) >= maxBlocks) out.bypassed.push(item);
+    else out.ask.push(item);
   }
   return out;
 }
@@ -341,10 +399,15 @@ export function buildReconcilePrompt(gap: WorkflowGap): { reason: string; prompt
         `the write set said, then \`backlog_resolve … done\` with the commit and test;\n` +
         `  (b) it is PRE-EXISTING or independent of your change: \`backlog_resolve … keep\` ` +
         `with a one-line note saying why your change did not cause it;\n` +
-        `  (c) you caused it but cannot fix it here: leave it provisional, say so ` +
-        `plainly, and do NOT claim scope met — the user decides.\n` +
+        `  (c) you caused it but it is not yours to fix here (another tab or the ` +
+        `supervisor took it, or it needs a person): end your final message with one line ` +
+        `\`Handed over: <item-id> to <who> — <reason>\`. The item stays provisional ` +
+        `with a dated note for the user to review, and the question ends;\n` +
+        `  (d) you caused it, could fix it and have not: leave it provisional, say so ` +
+        `plainly, and do NOT claim scope met.\n` +
         `Do not call a break pre-existing to clear this check; a known break ` +
-        `shipped as "done" is the failure this exists to stop.`
+        `shipped as "done" is the failure this exists to stop. ` +
+        `(After ${OWN_CONSEQUENCE_MAX_BLOCKS} refusals the close is allowed and the bypass logged.)`
       : "";
   return {
     reason:
