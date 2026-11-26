@@ -1,6 +1,7 @@
 # ADR-0139 — The supervisor pulls the next ready backlog item, under a policy the owner sets once
 
-- **Status:** Proposed (2026-11-27). The owner approves it before anything is built.
+- **Status:** Accepted (2026-11-27). The owner approved it the same day: "As recommended".
+- **Date:** 2026-11-27
 - **Amends:** [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md) §4 item 7 (a tab opens only on the user's word, through a confirmed card) and the Golden Rule 1 line "a model never opens a session on its own initiative". This ADR is that widening.
 - **Narrows:** [ADR-0113](./0113-the-backlog-is-the-shared-task-list.md) for tabs the supervisor pulled (§2). Tabs the user opened claim as before.
 - **Related:** [ADR-0044](./0044-project-backlog.md), [ADR-0047](./0047-backlog-capture-at-discovery.md), [ADR-0128](./0128-the-user-talks-to-the-supervisor.md), [ADR-0137](./0137-the-backlog-is-checked-when-a-tab-closes-its-scope.md), [ADR-0122](./0122-a-tab-gets-its-worktree-or-is-refused.md).
@@ -21,7 +22,7 @@ The 2026-11-27 research rejected two shapes, and this ADR keeps both rejections:
 
 ### 1. The `ready` state
 
-- **Who sets it:** the owner, or the supervisor through a `mark_ready` verb with grounds. Never a tab: a tab's attempt is refused. The policy's `readyBy` says who counts; it ships as `["owner"]`, and adding `"supervisor"` is the owner's switch once the ledger shows its proposals were right.
+- **Who sets it:** the owner, or the supervisor through a `mark_ready` verb with grounds, each mark a ledger line; the owner can un-ready any item. Never a tab: a tab's attempt is refused. The policy's `readyBy` says who counts.
 - **What an item needs**, checked when marked and again at pull time:
   1. status `open` (not provisional, not `doing`);
   2. a brief: the machine-filed template (why, where as `file:line`, evidence, how to verify, out of scope) or a readable `brief` path;
@@ -44,13 +45,13 @@ The 2026-11-27 research rejected two shapes, and this ADR keeps both rejections:
 
 One file, `<MARVIN_DATA_DIR>/supervisor/<projectId>/pull-policy.json`. Not the project's `.marvin/`: a repository must not grant its own supervisor a standing authority (ADR-0127 §3; `REVIEW.md`, project-controlled config). It is read at boot and on an explicit token-guarded reload, validated against a closed schema (an unknown key or bad value refuses the whole file and turns the pull off), and a tab's gate denies it.
 
-It holds: `enabled` (default `false`); priority order; release rules (frozen releases excluded, a cap on release lines in work at once); excluded tags (gate changes stay held); caps per resource for items that declare `needs` (the capture lane, when saturated); live-tab and working-tab caps; a daily pull cap; hours; posture and delegation for pulled tabs (delegation at most `answer-questions` unless the owner writes more); `readyBy`. Every ledger line carries the policy's digest, so a change is visible afterwards.
+It holds: `enabled` (default `false`); priority order; release rules (frozen releases excluded; while a release branch exists, release items start before next-release items, and items whose change touches the gate wait until the release line closes; these are exclusions, not a cap); excluded tags (gate changes stay held); caps per resource for items that declare `needs` (the capture lane, when saturated); live-tab and working-tab caps; host-pressure thresholds (load, memory, swap), with ADR-0122's disk floor as a hard minimum no policy can lower; a daily pull cap; hours; posture and delegation for pulled tabs (delegation at most `answer-questions` unless the owner writes more); `readyBy`. Every ledger line carries the policy's digest, so a change is visible afterwards.
 
 ### 4. Human-only, and what the pull never does
 
 Human-only, as ADR-0127 §4: merging, pushing, merge requests, metered CI, tags, deploys, production, widening a posture, approving a plan, changing scope, discarding work. A pulled tab asks the user for each, in every posture.
 
-The pull never lets a tab pick or claim its next item, set `ready`, or start anything; never lets a model spawned by a tab start anything; never starts two tabs for one item or a tab in a shared checkout; never closes an item. Closing stays derived from git (a `Backlog: <slug>` trailer reachable from the integration branch) or is done by the owner or supervisor with evidence. A pulled tab's resolve is a proposal: the item stays `doing`, shown as "done, waiting to merge", until git or a person confirms it.
+The pull never lets a tab pick or claim its next item, set `ready`, or start anything; never lets a model spawned by a tab start anything; never starts two tabs for one item or a tab in a shared checkout; never closes an item. Closing stays derived from git (a `Backlog: <slug>` trailer reachable from the integration branch) or is done by the owner or supervisor with evidence. A pulled tab may call `backlog_resolve` only as a proposal, recorded and not applied: the item stays `doing`, shown as "done, waiting to merge", and closes when the commit citing it reaches the integration branch (derived done) or when a person or the supervisor resolves it with evidence.
 
 ### 5. Why this does not break Golden Rule 1
 
@@ -70,12 +71,12 @@ The banned shape is a model dispatching models on shared state with no human bet
 - **A confirmed card per pull.** What the dispatcher amounts to today; kept as the shadow stage.
 - **An agent closes finished items.** Needs its own ADR.
 
-## Open questions for the owner
+## Decided by the owner, 27.11.2026
 
-1. Does the supervisor mark items ready from day one, or only you until shadow numbers exist?
-2. Host pressure (load, memory, swap), checked by the script today: policy keys, or only ADR-0122's disk floor?
-3. Is "the two-lines rule" a cap on release lines in work at once?
-4. May a pulled tab still call `backlog_resolve` as ADR-0137 has it, or only propose?
+- **Who marks items ready from day one:** the supervisor, under the owner's policy. Every ready mark is a ledger line the owner can read, and the owner can un-ready any item. If only the owner could mark, the owner would be the bottleneck again. So `readyBy` ships as `["owner", "supervisor"]`, not `["owner"]`.
+- **Host pressure:** load, memory and swap thresholds are policy keys. ADR-0122's disk floor stays a hard minimum that no policy can lower. On 26.11 the machine, not the queue, was the real limit: a test run was killed at 60 minutes, and memory, not CPU, bound the test PC.
+- **A pulled tab and `backlog_resolve`:** only as a proposal (§4). This settles the question left open against ADR-0137.
+- **The "two-lines rule"** was the supervisor's shorthand, not a question. It is restated in §3 as exclusions.
 
 ## Measures, after two weeks
 
@@ -88,6 +89,8 @@ Minutes the queue was empty while ready items existed (target zero); start wait 
 - [ ] A pull starts one tab in a fresh worktree at no more than the policy posture, the supervisor writes the claim, the ledger line carries the policy digest; a pulled tab's claim on another item is refused.
 - [ ] A missing, invalid or project-located policy means no pull; an unfinished tab releases its claim to `open` with a note.
 - [ ] The kill switch and daily cap stop pulls within one wake; a pull performs no human-only act.
+- [ ] A pull is skipped while load, memory or swap is past the policy's thresholds, and no policy value lowers ADR-0122's disk floor (test).
+- [ ] A pulled tab's `backlog_resolve` is recorded as a proposal and changes nothing until derived done or a person or the supervisor resolves with evidence (test).
 - [ ] `AGENTS.md` Golden Rule 1 and ADR-0127 point here; the roadmap lists the pull as in flight.
 
 ## Related
