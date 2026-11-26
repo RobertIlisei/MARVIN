@@ -34,7 +34,7 @@ import SwiftUI
 
     /// The open items, plus the resolved ones loaded so far (`BacklogPaging`).
     @State private var items: [BacklogItem] = []
-    /// The Resolved tab loads from the archive a page at a time when it is
+    /// The Resolved tab loads closed items a page at a time when it is
     /// opened; `resolvedFetched` is how many the server has handed over.
     @State private var resolvedTotal = 0
     @State private var resolvedFetched = 0
@@ -152,7 +152,7 @@ import SwiftUI
             adjustInitialScope()
         }
         .onChange(of: filter) { _, _ in selection.formIntersection(visibleIds) }
-        // The archive is read when its tab is opened, not when the window is.
+        // The closed items are read when their tab is opened, not when the window is.
         .onChange(of: scope) { _, next in
             if next == .resolved { Task { await loadResolved(reset: true) } }
         }

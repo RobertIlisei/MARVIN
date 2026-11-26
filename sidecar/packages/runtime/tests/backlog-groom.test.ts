@@ -18,12 +18,12 @@ function item(over: Partial<BacklogItem> & { id: string }): BacklogItem {
     kind: over.kind ?? "unspecified",
     blocked: over.blocked ?? false,
     blockedOn: over.blockedOn ?? "",
-    priority: over.priority ?? "medium",
+    severity: over.severity ?? "medium",
     sessionId: "",
     claimedBy: "",
     claimedBranch: "",
     claimedAt: "",
-    type: "", release: "", origin: "", waitsOn: "", relatesTo: "", resolvedBy: "", evidence: "", reopenedAt: "",
+    release: "", origin: "", relatesTo: "", resolvedBy: "", evidence: "", reopenedAt: "",
     created: over.created ?? daysAgo(1),
     updated: over.updated ?? daysAgo(1),
   };
@@ -51,7 +51,7 @@ describe("groomBacklog — what it flags", () => {
   });
 
   it("flags a HIGH-severity item left sitting", () => {
-    const items = [item({ id: "urgent", priority: "high", created: daysAgo(30), updated: daysAgo(1) })];
+    const items = [item({ id: "urgent", severity: "high", created: daysAgo(30), updated: daysAgo(1) })];
     expect(kinds(items)).toEqual(["aging-high-severity:urgent"]);
   });
 

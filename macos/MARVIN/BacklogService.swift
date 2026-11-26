@@ -66,7 +66,7 @@ final class BacklogService {
     private struct AddResponse: Codable { let related: [BacklogItem]? }
     private struct PromoteResponse: Codable { let ok: Bool?; let url: String?; let error: String? }
 
-    /// One page of the archive (done + dismissed), newest first: the Resolved
+    /// One page of the closed items (done + dismissed), newest first: the Resolved
     /// tab, loaded when it is opened (ADR-0044 addendum, 2026-11-27).
     struct ResolvedPage { let items: [BacklogItem]; let total: Int; let hasMore: Bool }
 

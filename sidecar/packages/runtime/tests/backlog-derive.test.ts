@@ -1,20 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  addBacklogItem,
-  archiveCounts,
-  getBacklogItem,
-  listBacklog,
-  resetBacklogLayoutCacheForTests,
-  resolveBacklogItem,
-  setBacklogStatus,
-} from "../src/backlog";
+import { addBacklogItem, closedCounts, getBacklogItem, listBacklog, resolveBacklogItem, setBacklogStatus } from "../src/backlog";
 import { deriveBacklogFromGit, integrationBranch, parseTrailerLog, resetBacklogDeriveForTests } from "../src/backlog-derive";
 
 // ADR-0044 addendum (2026-11-27) — an item is done when a commit carrying
@@ -51,7 +43,6 @@ const derive = () => deriveBacklogFromGit(repo, { force: true });
 
 beforeEach(async () => {
   repo = await mkdtemp(join(tmpdir(), "marvin-derive-"));
-  resetBacklogLayoutCacheForTests();
   resetBacklogDeriveForTests();
   git(["init", "-q", "-b", "main"]);
   git(["config", "commit.gpgsign", "false"]);
@@ -73,9 +64,9 @@ describe("derived done", () => {
     const item = await getBacklogItem(repo, id);
     expect(item).toMatchObject({ status: "done", resolvedBy: "derived", evidence: sha });
     expect(item?.body).toContain(sha.slice(0, 12));
-    expect(existsSync(join(repo, ".marvin", "backlog", "archive", `${id}.md`))).toBe(true);
+    expect(existsSync(join(repo, ".marvin", "backlog", `${id}.md`))).toBe(true); // the file stays where it is
     expect(await listBacklog(repo)).toEqual([]);
-    expect(await archiveCounts(repo)).toEqual({ done: 1, dismissed: 0 });
+    expect(await closedCounts(repo)).toEqual({ done: 1, dismissed: 0 });
   });
 
   it("a fix that lands on a side branch first counts only when the branch reaches the integration branch by a merge", async () => {
@@ -215,8 +206,47 @@ describe("derived done", () => {
     }
     const head = git(["rev-parse", "HEAD"]);
     git(["checkout", "-q", "--detach", head]);
-    expect(await integrationBranch(repo)).toBeNull();
+    expect((await integrationBranch(repo)).branch).toBeNull();
     expect((await derive()).skipped).toMatch(/detached/);
+  });
+
+  it("uses the base tabs are cut from while the main checkout sits on another branch", async () => {
+    const id = await park("Fixed on the base");
+    const fix = await commit(`fix: on main\n\nBacklog: ${id}`);
+    // The main checkout moves to a branch that does not have the fix (a merge train working there).
+    git(["checkout", "-q", "-b", "train/wip", "HEAD~1"]);
+    await mkdir(join(repo, ".marvin"), { recursive: true });
+    await writeFile(join(repo, ".marvin", "worktrees.json"), `${JSON.stringify({ worktrees: [{ slug: "t", path: join(repo, "x"), branch: "marvin/tab/t", base: fix, baseRef: "main", createdAt: "2026-11-27T00:00:00Z", task: "t", state: "session" }] })}\n`);
+    expect(await integrationBranch(repo)).toEqual({ branch: "main", source: "configured" });
+    const report = await derive();
+    expect(report.branch).toBe("main");
+    expect(report.resolved.map((r) => r.id)).toEqual([id]);
+  });
+
+  it("falls back to the checkout's branch when no tab base is recorded, or the recorded one is gone", async () => {
+    expect(await integrationBranch(repo)).toEqual({ branch: "main", source: "checkout" });
+    await mkdir(join(repo, ".marvin"), { recursive: true });
+    await writeFile(join(repo, ".marvin", "worktrees.json"), `${JSON.stringify({ worktrees: [{ slug: "t", path: "x", branch: "b", base: "0", baseRef: "deleted-branch", createdAt: "2026-11-27T00:00:00Z", task: "t", state: "session" }] })}\n`);
+    expect(await integrationBranch(repo)).toEqual({ branch: "main", source: "checkout" });
+  });
+
+  it("derives nothing while a merge is in progress in the main checkout, and the next read does", async () => {
+    const id = await park("Fixed during a merge");
+    git(["checkout", "-q", "-b", "side"]);
+    await writeFile(join(repo, "shared.txt"), "side\n");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "side change"]);
+    git(["checkout", "-q", "main"]);
+    await writeFile(join(repo, "shared.txt"), "main\n");
+    git(["add", "-A"]);
+    git(["commit", "-qm", `fix: it\n\nBacklog: ${id}`]);
+    expect(() => git(["merge", "side"])).toThrow(); // conflict: MERGE_HEAD stays
+    const busy = await derive();
+    expect(busy.resolved).toEqual([]);
+    expect(busy.skipped).toMatch(/merge is in progress/);
+    expect((await getBacklogItem(repo, id))?.status).toBe("open");
+    git(["merge", "--abort"]);
+    expect((await derive()).resolved.map((r) => r.id)).toEqual([id]);
   });
 
   it("the resolution is persisted: the next read finds the item done without git", async () => {
@@ -226,7 +256,7 @@ describe("derived done", () => {
     resetBacklogDeriveForTests();
     git(["checkout", "-q", "--detach"]); // git is no longer a source
     expect((await getBacklogItem(repo, id))?.status).toBe("done");
-    expect(await readFile(join(repo, ".marvin", "backlog", "archive", `${id}.md`), "utf-8")).toMatch(/^resolvedBy: derived$/m);
+    expect(await readFile(join(repo, ".marvin", "backlog", `${id}.md`), "utf-8")).toMatch(/^resolvedBy: derived$/m);
   });
 });
 

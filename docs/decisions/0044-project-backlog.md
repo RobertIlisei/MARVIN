@@ -328,37 +328,50 @@ lines.
   `BacklogCountSourceScan` fails the test suite if a file other than the store
   assigns a backlog count.
 
-## Amendment (2026-11-27) — done is derived from git, the closed are archived, the schema is checked
+## Amendment (2026-11-27) — done is derived from git, closed items are indexed, the schema is checked
 
 *Measured on the owner's real project, 26–27.11.2026.* The store held 2,837 item
 files: 293 open, 5 doing, 2,221 done, 318 dismissed. The backlog window parsed
-and shipped all of them to show the 298 that matter (about 4.1 MB, 180–340 ms
+and shipped all of them to show the 298 that matter (about 4.1 MB, 180–430 ms
 warm on the machine this was built on; the owner reported it slow to open). On
 26.11, 54 items were filed and about 50 stayed open although many were fixed the
 same day: the fix landed on a release branch and reached the working branch by a
 merge, and nobody went back to resolve the items; a sweep session then had to
-read all 2,837 files to find the open ones. `priority` had been written as
-`low/med/high`, `medium` and others; items carried no release, origin or "waits
-on"; one item hit the 4,000-character note cap and could take no more. Research:
+read all 2,837 files to find the open ones. `severity` had been written as
+`low/med/high`, `medium` and others; items carried no release or origin; one
+item hit the 4,000-character note cap and could take no more. Research:
 `marvin-supervisor/reports/backlog-practices-2026-11-27.md` (recommendations 1–4
 and 8). Its rejected list stays rejected: no agent self-claiming, no autonomous
 closing by an agent, no age-based auto-close.
+
+**Item files never move.** `.marvin/backlog/` is *tracked in git* on the owner's
+project (1,237 of the 2,837 files). A migration that moved the closed files into
+an `archive/` folder — the first version of this amendment — would have left
+about 1,200 renames in the main checkout, which is also where merges run, and
+MARVIN must not commit in the user's repository. It was removed before it
+shipped: nothing creates an archive folder, no file is rewritten in bulk, and a
+file is rewritten only when its item is next written for another reason.
 
 **1. Done is derived from git (`backlog-derive.ts`; same shape as
 `reconcileWorktrees`, ADR-0103).** A commit may end with the trailer
 `Backlog: <slug>` (one line per item, several allowed; a comma list is read
 too). An `open` or `doing` item whose slug is in such a trailer on a commit
 reachable from the integration branch is `done`, with the commit sha as
-evidence, and the resolution is *persisted* like any other (status done, file in
-the archive, `resolvedBy: derived`, `evidence: <sha>`, a dated note when it
-fits) so it is never recomputed. Decisions:
+evidence, and the resolution is *persisted* like any other (status done,
+`resolvedBy: derived`, `evidence: <sha>`, a dated note when it fits) so it is
+never recomputed. Decisions:
 
-- *Integration branch* = the branch checked out in the project's main checkout:
-  where `mergeWorktree` / `mergeAllWorktrees` fold work and what
-  `detectMergeTarget` aims a merge request at — MARVIN has no other configured
-  base. Reachability is the test, so a fix on a release branch counts the moment
-  that branch merges in, with no special case (the 26.11 failure). A detached
-  HEAD or a non-repository derives nothing and says so.
+- *Integration branch* = the base MARVIN cuts tabs from: the `baseRef` its
+  worktree records carry (`worktrees.ts` stores the main checkout's branch at
+  the moment each tab is cut; the most common one that still exists). MARVIN has
+  no other configured base. The main checkout's own branch is only the
+  *fallback*, for a project with no worktree record: a merge train works in that
+  checkout and may leave it on another branch or half-way through a merge. A
+  merge, rebase or cherry-pick in progress there derives nothing on that read
+  (`skipped` says so; the next read tries again), and so does a detached HEAD
+  when the fallback is all there is. Reachability, not a branch name, is the
+  test, so a fix on a release branch counts the moment that branch merges in
+  (the 26.11 failure).
 - *Cost.* One `git log --grep=^Backlog: --max-count=20000` with the trailer
   format, never one call per item; cached by the branch tip (unchanged tip: one
   `rev-parse`; moved tip: only `oldTip..newTip` when the old tip is an
@@ -371,63 +384,69 @@ fits) so it is never recomputed. Decisions:
   `reopenedAt`), so re-filing a title fixed last month does not close itself.
 - *A revert*: derived done stays done. A revert commit carries no trailer, so
   nothing re-derives; the work is a new item, or `backlog_resolve keep` reopens
-  the old one by hand. *Squash and rebase* keep a message's trailer; a squash that
-  drops the message drops the evidence and the item stays open — the safe
+  the old one by hand. *Squash and rebase* keep a message's trailer; a squash
+  that drops the message drops the evidence and the item stays open — the safe
   direction.
 - Tabs are told once: `personality.ts` step 8 (Ship) and the `backlog_add` /
   `backlog_resolve` tool descriptions say to end a fixing commit with the
   trailer. Golden Rule 1 is intact: the trailer is the author's claim,
-  reachability is git's proof, the rest is derivation; no agent closes its own
-  ticket by a tool call it chooses, and the marker lets the review tell derived
-  from decided.
+  reachability is git's proof; the marker lets the review tell derived from
+  decided.
 
-**2. An open index and an archive.** `.marvin/backlog/<slug>.md` holds only
-open, doing and to-review items; done and dismissed files live in
-`.marvin/backlog/archive/` with `archive/summary.json` (`{layout, done,
-dismissed}`). The index `.marvin/backlog.md` lists the open items with compact
-fields (priority, type, release, waits on) and names the archive count. A write
-that changes status moves the file; `listBacklog` defaults to the open items;
-`listResolved` pages the archive newest first; `getBacklogItem` finds one id in
-either place; the live counter reads the open files plus the summary (a summary
-that disagrees with the archive's file count is recounted, not trusted).
-*Migration* (`ensureBacklogLayout`, runs once per project on first access,
-resumable, idempotent): done/dismissed files are **moved byte for byte**; open
-files are rewritten once with `priority:` while keeping `severity:` beside it
-(the macOS pane, the vault's Dataview tables and an older MARVIN still read it);
-`summary.json` is written last, so a run that stops halfway is finished by the
-next. A `mkdir` lock (`.layout.lock`, taken over after 60 s) keeps two sessions
-(ADR-0102) from doing the same work; the moves are idempotent as well. A
-resolved file that turns up beside the index later (an older MARVIN, a checkout)
-is moved on read. *Undo:* `mv .marvin/backlog/archive/*.md .marvin/backlog/`,
-then delete `archive/` — the files are as they were, the open ones carry an
-extra `priority:` line the old reader ignores.
+**2. Two indexes, no moves (`backlog-index.ts`).** `.marvin/backlog.md` is the
+open index (provisional, open, doing; compact fields: severity, release, what it
+waits on; it names the closed count). `.marvin/backlog-closed.idx` is the closed
+index: one line per done / dismissed item (status, slug, closed date =
+`updated`, the file's mtime and size, title), sorted newest first then by slug.
+A reader lstats the directory, trusts every closed file whose (mtime, size)
+still matches its line, and reads only the rest — the open items and anything
+that changed; a missing, garbled or disagreeing index is rebuilt, and an
+unchanged one is not rewritten (the ADR-0072 shape). Writes keep it in step
+incrementally (`noteItemWritten`). `listBacklog` defaults to the open items;
+`listResolved` pages the closed ones from the index and reads only the page's
+files; `getBacklogItem` finds one id; the pane's overview counts the closed items
+from the index.
+*Git-ignored, not tracked — decided because* the index records mtimes and sizes,
+which differ on every machine and after every checkout: a tracked copy would be
+wrong on arrival and dirty the tree on every rebuild. It is derived, safe to
+delete, and kept out of `git status` through the repository's own
+`.git/info/exclude` (never the user's `.gitignore`; the precedent is the
+worktrees directory). Its content is still deterministic and carries nothing
+that changes on a read, so a copy someone commits does no harm. `backlog.md`
+already existed and is rewritten on every write as before; its lines now say
+`medium`. A test builds the index on a git-tracked store and asserts a clean
+`git status`, and that add and resolve change only the item files and
+`backlog.md`.
 
-**3. The pane.** `GET /api/backlog` returns the open items, the counts (done and
-dismissed from the summary) and `resolved: {done, dismissed, total}`;
+**3. The pane.** `GET /api/backlog` returns the open items, the counts (closed
+ones from the closed index) and `resolved: {done, dismissed, total}`;
 `GET /api/backlog?status=resolved|done|dismissed&limit=100&offset=N` returns one
-page of the archive. The Resolved tab loads its first page when it is opened,
+page of closed items. The Resolved tab loads its first page when it is opened,
 "Load more" the rest; search and filters look at what is loaded, and the footer
-says so. On a synthetic 2,837-file store: before, 4.1 MB and 178–341 ms (3 runs);
-after, 0.47 MB and 25 ms for the open items and counts, 158 KB and 20 ms for the
-first 100 resolved; the one-time migration 0.64 s.
+says so. On a synthetic 2,837-file store (no file moved): before, 4.1 MB and
+253–432 ms (3 runs); after, 0.46 MB and 30–32 ms for the open items and counts
+(116 ms for the first read, which builds the index), 155 KB and 33 ms for the
+first 100 closed items.
 
-**4. Schema checked at write.** `priority` is `low | medium | high`
-(`severity` stays accepted as a deprecated argument name, held to the same
-values; on read `med`, `hi`, `normal`, … fold to the three, an unknown value reads
-as `medium`; `backlog_add` / `backlog_update` and the manual route refuse
-anything else, naming the three). The wire keeps `severity: low|med|high` for
-the macOS pane until it reads `priority`. New optional fields: `type` (bug,
-debt, idea, chore — the research's coarse split; `kind`, ADR-0064, stays and is
-the finer one), `release`, `origin`, `waitsOn` (single lines, capped, refused
-not truncated; an omitted field keeps what is stored). `waitsOn` overlaps
-`blocked`/`blockedOn` (ADR-0064) in intent; both exist because the brief asked
-for the new one and a merge of the two needs a decision about 2,800 files'
-meaning. No `owner` / assignee field: assignment invites pulling (Golden Rule 1).
+**4. Schema checked at write; no duplicate fields.** `severity` stays the one
+field: `low | medium | high`. On read `med`, `hi`, `normal`, … fold to the three
+and an unknown value reads as `medium`, with no rewrite; `backlog_add` /
+`backlog_update` and the manual route refuse anything else, naming the three.
+`priority` is accepted as an input name for `severity`. The wire to the macOS
+pane keeps `med` for medium until the pane reads the normalised value. `kind`
+(ADR-0064: unspecified, bug, feature, investigate, test, docs, chore) and
+`blockedOn` stay the fields: `type` (bug, debt, idea, chore) is an input alias
+that writes `kind` (debt → chore, idea → feature; `kind` wins if both are
+given) and `waitsOn` an input alias that writes `blockedOn` and marks the item
+blocked. New fields: `release` and `origin` (single lines, capped, refused not
+truncated; an omitted field keeps what is stored), `relatesTo`, and the derived
+`resolvedBy` / `evidence` / `reopenedAt`. No `owner` / assignee field:
+assignment invites pulling (Golden Rule 1).
 
 **5. The note cap refuses with advice.** The error names the item and says to
 file the next point as a new item with `backlog_add … relatesTo: "<slug>"`;
-`relatesTo` is accepted on add, must name an existing item (open or archived),
-and is stored. The cap is not raised.
+`relatesTo` is accepted on add, must name an existing item, and is stored. The
+cap is not raised.
 
 **Not in this amendment** (research recommendations 5–7, 9, 10): duplicate
 candidates at filing, the machine-filed template, the per-session filing cap
@@ -437,14 +456,16 @@ with a digest, the metrics panel, and age flags in the review.
 
 - [x] A commit with `Backlog: <slug>` reachable from the integration branch
       makes the item done with the sha as evidence — test with a real temp git
-      repo, including a fix on a side branch that reaches it by a merge
-      (`backlog-derive.test.ts`, 15 tests).
-- [x] Closed items live in the archive; the index and the default list hold only
-      open / doing / to-review; every reader passes its tests
-      (`backlog-archive.test.ts`, 24 tests; the older suites unchanged but for
-      the field rename).
-- [x] The pane's data route returns counts plus open items without reading the
-      archive; resolved items page on demand (`backlog-pane-route.test.ts`, 8
-      tests; `BacklogPaging` in MARVINLogic, 3 Swift tests).
-- [x] Priority normalised and validated; the new fields accepted; the cap refuses
-      with advice; the tools say so (`backlog-mcp.test.ts`, 7 tests).
+      repo, including a fix on a side branch that reaches it by a merge, a base
+      that differs from the checkout's branch, and a merge in progress
+      (`backlog-derive.test.ts`).
+- [x] No item file moves; the open index and the closed index hold the state;
+      every reader passes its tests (`backlog-index.test.ts`; the older suites
+      unchanged but for the new fields and `medium`).
+- [x] A git-tracked store shows a clean `git status` after a full index build
+      and only the item files and `backlog.md` after add / resolve.
+- [x] The pane's route returns counts plus open items without reading a closed
+      file; closed items page on demand (`backlog-pane-route.test.ts`;
+      `BacklogPaging` in MARVINLogic).
+- [x] Severity normalised and validated, aliases write `kind` / `blockedOn`, the
+      cap refuses with advice (`backlog-mcp.test.ts`).

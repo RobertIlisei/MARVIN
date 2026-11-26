@@ -69,7 +69,7 @@ export async function GET(req: NextRequest) {
       kind: f.kind,
       id: f.item.id,
       title: f.item.title,
-      severity: legacySeverity(f.item.priority),
+      severity: legacySeverity(f.item.severity),
       status: f.item.status,
       relatedIds: f.related.map((r) => r.id),
       detail: f.detail,

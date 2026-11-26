@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const issueBody =
-      `${item.body || "(no detail)"}\n\n— parked in MARVIN backlog (\`${item.id}\`, ${item.priority})`;
+      `${item.body || "(no detail)"}\n\n— parked in MARVIN backlog (\`${item.id}\`, ${item.severity})`;
     const { stdout } = await run(
       "gh",
       ["issue", "create", "--title", item.title, "--body", issueBody],

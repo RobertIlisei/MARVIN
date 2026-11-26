@@ -12,11 +12,15 @@
  *
  * The decisions, each with the reason:
  *
- *  - **Integration branch** = the branch checked out in the project's main
- *    checkout. That is where `mergeAllWorktrees` / `mergeWorktree` fold work
- *    (ADR-0109) and what `detectMergeTarget` aims a merge request at, so it is
- *    the one place MARVIN already treats as "where work lands". A detached HEAD
- *    or a directory that is not a repository derives nothing — and says so.
+ *  - **Integration branch** = the base MARVIN cuts tabs from: the `baseRef` its
+ *    worktree records carry (`worktrees.ts`; the most common one, while that
+ *    branch still exists). MARVIN has no other configured base, and a merge
+ *    train working in the main checkout may leave it on another branch or
+ *    half-way through a merge — so the checkout's own branch is only the
+ *    FALLBACK, for a project with no worktree record yet. A merge or rebase in
+ *    progress in the main checkout derives nothing on that read (the tip is
+ *    about to move; the next read tries again), and so does a detached HEAD
+ *    when the fallback is all there is — each says so in `skipped`.
  *    Reachability, not a branch name, is the test: a fix committed on a release
  *    branch counts the moment that branch merges in, with no rule for it.
  *  - **One git call, not one per item.** `git log --grep=^Backlog:` over the
@@ -50,9 +54,12 @@
  */
 
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { getBacklogItem, listBacklog, resolveDerivedBacklogItem } from "./backlog";
+import { listWorktrees } from "./worktrees";
 
 const execFileAsync = promisify(execFile);
 
@@ -77,7 +84,7 @@ export interface DerivedReport {
   skipped?: string;
   /** Items closed by this run. */
   resolved: Array<{ id: string; sha: string; subject: string }>;
-  /** Slugs a trailer names that match no item, open or archived. */
+  /** Slugs a trailer names that match no item, open or closed. */
   unknown: string[];
   /** Commits carrying a `Backlog:` trailer that the cache holds. */
   trailerCommits: number;
@@ -108,13 +115,52 @@ async function git(workDir: string, args: string[]): Promise<string> {
   return stdout;
 }
 
-/** The branch checked out in the project's main checkout, or null (detached, or not a repository). */
-export async function integrationBranch(workDir: string): Promise<string | null> {
+export interface IntegrationChoice {
+  branch: string | null;
+  /** `configured`: the base tabs are cut from. `checkout`: the main checkout's branch, the fallback. */
+  source?: "configured" | "checkout";
+  /** Why nothing can be derived on this read. */
+  skipped?: string;
+}
+
+/** A merge or rebase is under way in the main checkout (a merge train working there). */
+async function operationInProgress(workDir: string): Promise<string | null> {
   try {
-    return (await git(workDir, ["symbolic-ref", "--quiet", "--short", "HEAD"])).trim() || null;
+    const gitDir = (await git(workDir, ["rev-parse", "--absolute-git-dir"])).trim();
+    for (const marker of ["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD"]) {
+      if (existsSync(join(gitDir, marker))) return marker === "MERGE_HEAD" ? "merge" : marker.startsWith("rebase") ? "rebase" : "cherry-pick";
+    }
   } catch {
-    return null;
+    /* not a repository: reported below */
   }
+  return null;
+}
+
+/** The branch a `Backlog:` trailer must be reachable from, and why there is none when there is none. */
+export async function integrationBranch(workDir: string): Promise<IntegrationChoice> {
+  try {
+    await git(workDir, ["rev-parse", "--git-dir"]);
+  } catch {
+    return { branch: null, skipped: "not a git repository" };
+  }
+  const busy = await operationInProgress(workDir);
+  if (busy) return { branch: null, skipped: `a ${busy} is in progress in the main checkout; the next read tries again` };
+  const counts = new Map<string, number>();
+  for (const w of listWorktrees(workDir)) if (w.baseRef) counts.set(w.baseRef, (counts.get(w.baseRef) ?? 0) + 1);
+  for (const [ref] of [...counts.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))) {
+    const exists = await git(workDir, ["rev-parse", "--verify", "--quiet", `refs/heads/${ref}`]).then(
+      () => true,
+      () => false,
+    );
+    if (exists) return { branch: ref, source: "configured" };
+  }
+  try {
+    const head = (await git(workDir, ["symbolic-ref", "--quiet", "--short", "HEAD"])).trim();
+    if (head) return { branch: head, source: "checkout" };
+  } catch {
+    /* detached */
+  }
+  return { branch: null, skipped: "no integration branch: HEAD is detached and no tab base is recorded" };
 }
 
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -216,8 +262,9 @@ async function closeFixed(workDir: string, cache: Cache, report: DerivedReport):
 
 async function run(workDir: string, now: number): Promise<DerivedReport> {
   const empty = (skipped: string, branch: string | null = null): DerivedReport => ({ branch, skipped, resolved: [], unknown: [], trailerCommits: 0, cached: false });
-  const branch = await integrationBranch(workDir);
-  if (!branch) return empty("no integration branch (not a git repository, or HEAD is detached)");
+  const chosen = await integrationBranch(workDir);
+  const branch = chosen.branch;
+  if (!branch) return empty(chosen.skipped ?? "no integration branch");
   let state: { cache: Cache; cached: boolean };
   try {
     state = await refresh(workDir, branch, now);
@@ -229,7 +276,7 @@ async function run(workDir: string, now: number): Promise<DerivedReport> {
   if (cache.bySlug.size === 0) return report;
 
   const openIds = await closeFixed(workDir, cache, report);
-  // A trailer naming nothing: neither open here nor anywhere in the archive.
+  // A trailer naming nothing: neither open here nor among the closed items.
   for (const slug of cache.bySlug.keys()) {
     if (openIds.has(slug)) continue;
     if (!(await getBacklogItem(workDir, slug))) {

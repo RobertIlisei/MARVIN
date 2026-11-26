@@ -21,9 +21,9 @@ import { z } from "zod";
 import {
   addBacklogItem,
   BACKLOG_KINDS,
-  BACKLOG_TYPES,
+  BACKLOG_TYPE_ALIASES,
   type BacklogItem,
-  type BacklogPriority,
+  type BacklogSeverity,
   claimBacklogItem,
   classifyBacklogText,
   describeClaim,
@@ -32,7 +32,7 @@ import {
   MAX_BODY_CHARS,
   MAX_NOTES_CHARS,
   MAX_TITLE_CHARS,
-  parsePriority,
+  parseSeverity,
   resolveBacklogItem,
   setBacklogStatus,
   updateBacklogItem,
@@ -104,12 +104,18 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
           "Only after a capture was refused as a near-duplicate: set true if the item really IS distinct despite the similar wording. Never set it pre-emptively.",
         ),
       body: z.string().optional().describe(`Optional: why it matters + the concrete change (≤${MAX_BODY_CHARS} chars).`),
-      priority: z.string().optional().describe("low | medium | high — exactly these. Default medium. Anything else is refused."),
-      severity: z.string().optional().describe("Deprecated spelling of `priority`; same values (low | medium | high)."),
-      type: z.enum(BACKLOG_TYPES).optional().describe("bug | debt | idea | chore — the coarse nature of the item (kind is the finer one)."),
+      severity: z.string().optional().describe("low | medium | high — exactly these. Default medium. Anything else is refused. (`priority` is accepted as another name for it.)"),
+      priority: z.string().optional().describe("Alias of `severity`; same three values."),
+      type: z
+        .enum(Object.keys(BACKLOG_TYPE_ALIASES) as [string, ...string[]])
+        .optional()
+        .describe("Alias of `kind`, not a second field: bug → bug, chore → chore, debt → chore, idea → feature. `kind` wins when both are given."),
       release: z.string().optional().describe('Free text: the release it was found in or is aimed at, e.g. "v3.2".'),
       origin: z.string().optional().describe("Where it came from: a session id or a review name."),
-      waitsOn: z.string().optional().describe("What it waits on: owner, authority, reviewer, another item's slug, or one line."),
+      waitsOn: z
+        .string()
+        .optional()
+        .describe("Alias of `blockedOn` (and marks the item blocked): owner, authority, reviewer, another item's slug, or one line."),
       relatesTo: z
         .string()
         .optional()
@@ -143,10 +149,10 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
         .optional()
         .describe("true = auto-capture at discovery (no go-ahead); awaits keep/dismiss at the handoff. Default false (user-confirmed)."),
     },
-    async ({ title, body, priority, severity, type, release, origin, waitsOn, relatesTo, kind, blocked, blockedOn, provisional, force }) => {
-      let parsed: BacklogPriority | undefined;
-      if (priority !== undefined || severity !== undefined) {
-        const p = parsePriority(priority ?? severity);
+    async ({ title, body, severity, priority, type, release, origin, waitsOn, relatesTo, kind, blocked, blockedOn, provisional, force }) => {
+      let parsed: BacklogSeverity | undefined;
+      if (severity !== undefined || priority !== undefined) {
+        const p = parseSeverity(severity ?? priority);
         if (!p.ok) return errorResult(p.error);
         parsed = p.value;
       }
@@ -162,9 +168,9 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
         title,
         ...(force ? { force } : {}),
         ...(body ? { body } : {}),
-        ...(parsed ? { priority: parsed } : {}),
+        ...(parsed ? { severity: parsed } : {}),
         ...(kind ? { kind } : {}),
-        ...(type ? { type } : {}),
+        ...(type ? { type: type as keyof typeof BACKLOG_TYPE_ALIASES } : {}),
         ...(release !== undefined ? { release } : {}),
         ...(origin !== undefined ? { origin } : {}),
         ...(waitsOn !== undefined ? { waitsOn } : {}),
@@ -195,7 +201,7 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       const prov = res.item.status === "provisional";
       return textResult(
         `${res.created ? "Parked" : "Updated"} backlog item \`${res.item.id}\` ` +
-          `(${res.item.priority}${prov ? ", provisional" : ""}). ` +
+          `(${res.item.severity}${prov ? ", provisional" : ""}). ` +
           (prov
             ? `Auto-captured — list it at the handoff and keep/dismiss with \`backlog_resolve\`.`
             : `Surfaces next session and in the backlog panel; resolve with \`backlog_resolve\`.`) +
@@ -212,9 +218,9 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
   const listTool = tool(
     "backlog_list",
     "List backlog items. By default the OPEN ones — provisional, open, doing — " +
-      "read from the open directory and the index, never from the archive. " +
+      "read from the open files and the open index; closed files are not read. " +
       "`status` narrows to one of provisional | open | doing, or reads the " +
-      "ARCHIVE: done | dismissed | all (paged: `limit` default 50, `offset`, " +
+      "CLOSED items from the closed index: done | dismissed | all (paged: `limit` default 50, `offset`, " +
       "newest first). Use on intake, when the user asks what's parked, and at " +
       "the scope-met handoff (`status: provisional`) to batch keep/dismiss what " +
       "was auto-captured this turn. Before listing, open items whose fix is on " +
@@ -224,9 +230,9 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       status: z
         .enum(["provisional", "open", "doing", "done", "dismissed", "all"])
         .optional()
-        .describe("Filter; omit for every open item. done | dismissed | all read the archive, paged."),
-      limit: z.number().int().positive().max(200).optional().describe("Archive reads only: page size, default 50."),
-      offset: z.number().int().nonnegative().optional().describe("Archive reads only: how many to skip, newest first."),
+        .describe("Filter; omit for every open item. done | dismissed | all read the closed items, paged."),
+      limit: z.number().int().positive().max(200).optional().describe("Closed-item reads only: page size, default 50."),
+      offset: z.number().int().nonnegative().optional().describe("Closed-item reads only: how many to skip, newest first."),
     },
     async ({ status, limit, offset }) => {
       // Derived done (backlog-derive.ts): what git proves fixed is closed first,
@@ -244,12 +250,12 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
           limit: limit ?? 50,
           offset: offset ?? 0,
         });
-        if (page.items.length === 0) return textResult(status === "all" ? "The archive is empty." : `No ${status} backlog items.`);
+        if (page.items.length === 0) return textResult(status === "all" ? "No closed backlog items." : `No ${status} backlog items.`);
         const lines = page.items.map(
-          (i) => `- [${i.status}${i.resolvedBy === "derived" ? " · derived" : ""}] (${i.priority}) ${i.title} — backlog/archive/${i.id}.md${i.evidence ? ` · ${i.evidence.slice(0, 9)}` : ""}`,
+          (i) => `- [${i.status}${i.resolvedBy === "derived" ? " · derived" : ""}] (${i.severity}) ${i.title} — backlog/${i.id}.md${i.evidence ? ` · ${i.evidence.slice(0, 9)}` : ""}`,
         );
         return textResult(
-          `Archive (${page.offset + 1}–${page.offset + page.items.length} of ${page.total}):\n${lines.join("\n")}` +
+          `Closed (${page.offset + 1}–${page.offset + page.items.length} of ${page.total}):\n${lines.join("\n")}` +
             (page.hasMore ? `\n\nMore: call backlog_list again with offset ${page.offset + page.items.length}.` : "") +
             derivedLine +
             unknownLine,
@@ -262,8 +268,8 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       const lines = items.map((i) => {
         const held = i.status === "doing" ? describeClaim(i) : null;
         const mine = i.status === "doing" && marvinSessionId && i.claimedBy === marvinSessionId;
-        const meta = [i.type, i.release, i.waitsOn ? `waits on ${i.waitsOn}` : ""].filter(Boolean);
-        return `- [${i.status}${held ? ` · ${mine ? "held by THIS tab" : held}` : ""}] (${i.priority}) ${i.title}${meta.length ? ` · ${meta.join(" · ")}` : ""} — backlog/${i.id}.md`;
+        const meta = [i.release, i.blocked && i.blockedOn ? `waits on ${i.blockedOn}` : ""].filter(Boolean);
+        return `- [${i.status}${held ? ` · ${mine ? "held by THIS tab" : held}` : ""}] (${i.severity}) ${i.title}${meta.length ? ` · ${meta.join(" · ")}` : ""} — backlog/${i.id}.md`;
       });
       return textResult(
         `Backlog (${items.length}):\n${lines.join("\n")}` +
@@ -305,8 +311,8 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
     "Resolve or review a backlog item by id — `keep` (confirm a provisional item " +
       "→ open), `dismissed` (won't do), or `done` (completed). Use `keep`/" +
       "`dismissed` at the handoff to clear provisional auto-captures. A " +
-      "done/dismissed item drops from the active index and its file moves to " +
-      "`.marvin/backlog/archive/` (`backlog_list status: done | dismissed | all` " +
+      "done/dismissed item drops from the open index and moves to the closed " +
+      "index (its file stays where it is; `backlog_list status: done | dismissed | all` " +
       "reads it). Do not resolve by hand an item you fixed in a commit: put " +
       "`Backlog: <slug>` in that commit's message and it resolves itself once " +
       "the commit is on the project's branch.",
@@ -347,9 +353,10 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
   // `.marvin/backlog/*.md` by hand, which the tool boundary exists to prevent.
   const updateTool = tool(
     "backlog_update",
-    "EDIT an existing backlog item's fields by id: `priority` (low | medium | " +
-      "high, nothing else), `kind`, `type`, `release`, `origin`, `waitsOn`, " +
-      "`blocked`/`blockedOn`, or REPLACE its `body`. The title and id never " +
+    "EDIT an existing backlog item's fields by id: `severity` (low | medium | " +
+      "high, nothing else; `priority` is another name for it), `kind` (bug | feature | " +
+      "investigate | test | docs | chore | unspecified; `type` is an alias), `release`, " +
+      "`origin`, `blocked`/`blockedOn` (`waitsOn` is an alias), or REPLACE its `body`. The title and id never " +
       "change (a rename is a new item). The description (every line that is " +
       `not a \`> \` note) is capped at ${MAX_BODY_CHARS} chars and the \`> \` notes at ` +
       `${MAX_NOTES_CHARS}; an overflow of either is REFUSED and nothing is written — condense and ` +
@@ -362,33 +369,33 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       "items on the strength of `backlog_groom` alone (ADR-0063).",
     {
       id: z.string().min(1).describe("The item slug (from backlog_list)."),
-      priority: z.string().optional().describe("low | medium | high — exactly these; anything else is refused."),
-      severity: z.string().optional().describe("Deprecated spelling of `priority`."),
+      severity: z.string().optional().describe("low | medium | high — exactly these; anything else is refused."),
+      priority: z.string().optional().describe("Alias of `severity`."),
       kind: z.enum(BACKLOG_KINDS).optional(),
-      type: z.enum(BACKLOG_TYPES).optional().describe("bug | debt | idea | chore."),
+      type: z.enum(Object.keys(BACKLOG_TYPE_ALIASES) as [string, ...string[]]).optional().describe("Alias of `kind`: bug, chore, debt (→ chore), idea (→ feature)."),
       release: z.string().optional().describe('Free text, e.g. "v3.2". Empty string clears it.'),
       origin: z.string().optional().describe("A session id or a review name. Empty string clears it."),
-      waitsOn: z.string().optional().describe("Owner, authority, reviewer, another slug, or one line. Empty string clears it."),
+      waitsOn: z.string().optional().describe("Alias of `blockedOn` (and marks the item blocked). Empty string clears it."),
       blocked: z.boolean().optional(),
       blockedOn: z.string().max(200).optional().describe("Who or what it waits on; an item id where the blocker is another item. Empty string clears it."),
       note: z.string().min(1).optional().describe("A progress note appended as a dated `> note` line; status and claim unchanged."),
       body: z.string().min(1).optional().describe(`The full replacement body (description ≤ ${MAX_BODY_CHARS} chars, \`> \` notes ≤ ${MAX_NOTES_CHARS}).`),
     },
-    async ({ id, priority, severity, kind, type, release, origin, waitsOn, blocked, blockedOn, body, note }) => {
-      const rawPriority = priority ?? severity;
-      if (rawPriority === undefined && kind === undefined && type === undefined && release === undefined && origin === undefined && waitsOn === undefined && blocked === undefined && blockedOn === undefined && body === undefined && note === undefined) {
-        return errorResult("nothing to change — pass at least one of priority, kind, type, release, origin, waitsOn, blocked, blockedOn, body, note.");
+    async ({ id, severity, priority, kind, type, release, origin, waitsOn, blocked, blockedOn, body, note }) => {
+      const rawSeverity = severity ?? priority;
+      if (rawSeverity === undefined && kind === undefined && type === undefined && release === undefined && origin === undefined && waitsOn === undefined && blocked === undefined && blockedOn === undefined && body === undefined && note === undefined) {
+        return errorResult("nothing to change — pass at least one of severity, kind, release, origin, blocked, blockedOn, body, note.");
       }
-      let parsed: BacklogPriority | undefined;
-      if (rawPriority !== undefined) {
-        const p = parsePriority(rawPriority);
+      let parsed: BacklogSeverity | undefined;
+      if (rawSeverity !== undefined) {
+        const p = parseSeverity(rawSeverity);
         if (!p.ok) return errorResult(p.error);
         parsed = p.value;
       }
       const res = await updateBacklogItem(cwd, id, {
-        ...(parsed !== undefined ? { priority: parsed } : {}),
+        ...(parsed !== undefined ? { severity: parsed } : {}),
         ...(kind !== undefined ? { kind } : {}),
-        ...(type !== undefined ? { type } : {}),
+        ...(type !== undefined ? { type: type as keyof typeof BACKLOG_TYPE_ALIASES } : {}),
         ...(release !== undefined ? { release } : {}),
         ...(origin !== undefined ? { origin } : {}),
         ...(waitsOn !== undefined ? { waitsOn } : {}),
@@ -399,12 +406,12 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       });
       if (!res.ok) return errorResult(res.error);
       const changed = [
-        parsed !== undefined && `priority=${parsed}`,
+        parsed !== undefined && `severity=${parsed}`,
         kind !== undefined && `kind=${kind}`,
-        type !== undefined && `type=${type}`,
+        type !== undefined && `kind=${BACKLOG_TYPE_ALIASES[type as keyof typeof BACKLOG_TYPE_ALIASES]} (from type)`,
         release !== undefined && `release=${release || "(cleared)"}`,
         origin !== undefined && `origin=${origin || "(cleared)"}`,
-        waitsOn !== undefined && `waitsOn=${waitsOn || "(cleared)"}`,
+        waitsOn !== undefined && `blockedOn=${waitsOn || "(cleared)"} (from waitsOn)`,
         blocked !== undefined && `blocked=${blocked}`,
         blockedOn !== undefined && `blockedOn=${blockedOn ? `"${blockedOn}"` : "(cleared)"}`,
         body !== undefined && `body (${res.item.body.length} chars)`,

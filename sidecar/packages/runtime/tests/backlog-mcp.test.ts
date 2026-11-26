@@ -12,7 +12,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   createSdkMcpServer: (o: { tools: unknown[] }) => o,
 }));
 
-import { resetBacklogLayoutCacheForTests, resolveBacklogItem } from "../src/backlog";
+import { getBacklogItem, resolveBacklogItem } from "../src/backlog";
 import { resetBacklogDeriveForTests } from "../src/backlog-derive";
 import { createBacklogMcpServer } from "../src/backlog-mcp";
 
@@ -27,7 +27,6 @@ let tools: Record<string, Tool>;
 
 beforeEach(async () => {
   workDir = await mkdtemp(join(tmpdir(), "marvin-backlog-mcp-"));
-  resetBacklogLayoutCacheForTests();
   resetBacklogDeriveForTests();
   const server = createBacklogMcpServer({ cwd: workDir, marvinSessionId: "sess-1" }) as unknown as { tools: Tool[] };
   tools = Object.fromEntries(server.tools.map((t) => [t.name, t]));
@@ -44,7 +43,7 @@ describe("what the tools tell a tab", () => {
     expect(tools.backlog_add?.description).toContain("relatesTo");
     expect(tools.backlog_update?.description).toContain("relatesTo");
     expect(tools.backlog_resolve?.description).toContain("Backlog: <slug>");
-    expect(tools.backlog_list?.description).toContain("archive");
+    expect(tools.backlog_list?.description).toContain("closed index");
   });
 });
 
@@ -53,8 +52,14 @@ describe("priority and the new fields at the tool boundary", () => {
     const r = await tools.backlog_add!.handler({ title: "Add with every field", priority: "high", type: "debt", release: "v3.2", origin: "review-x", waitsOn: "owner" });
     expect(r.isError).toBeUndefined();
     expect(text(r)).toContain("(high)");
+    expect(await getBacklogItem(workDir, "add-with-every-field")).toMatchObject({ severity: "high", kind: "chore", blocked: true, blockedOn: "owner", release: "v3.2", origin: "review-x" });
     const listed = text(await tools.backlog_list!.handler({}));
-    expect(listed).toContain("debt · v3.2 · waits on owner");
+    expect(listed).toContain("v3.2 · waits on owner");
+  });
+
+  it("`severity` is the field and `priority` its alias: both held to low | medium | high", async () => {
+    expect((await tools.backlog_add!.handler({ title: "Severity ok", severity: "low" })).isError).toBeUndefined();
+    expect((await tools.backlog_add!.handler({ title: "Severity bad", severity: "med" })).isError).toBe(true);
   });
 
   it("backlog_add refuses `med` and other values, clearly, and writes nothing", async () => {
@@ -65,17 +70,12 @@ describe("priority and the new fields at the tool boundary", () => {
     expect(text(await tools.backlog_list!.handler({}))).toContain("No open backlog items");
   });
 
-  it("the deprecated `severity` argument is held to the same three values", async () => {
-    expect((await tools.backlog_add!.handler({ title: "Old arg ok", severity: "low" })).isError).toBeUndefined();
-    expect((await tools.backlog_add!.handler({ title: "Old arg bad", severity: "med" })).isError).toBe(true);
-  });
-
   it("backlog_update refuses a bad priority and accepts the new fields", async () => {
     await tools.backlog_add!.handler({ title: "Update me" });
     const bad = await tools.backlog_update!.handler({ id: "update-me", priority: "hi" });
     expect(bad.isError).toBe(true);
     const ok = await tools.backlog_update!.handler({ id: "update-me", priority: "high", release: "v4", waitsOn: "reviewer" });
-    expect(text(ok)).toContain("priority=high");
+    expect(text(ok)).toContain("severity=high");
     expect(text(ok)).toContain("release=v4");
   });
 
@@ -100,10 +100,10 @@ describe("backlog_list reads the open items, and the archive only when asked", (
     expect(open).not.toContain("Archived item");
 
     const page = text(await tools.backlog_list!.handler({ status: "all", limit: 2 }));
-    expect(page).toContain("Archive (1–2 of 5):");
+    expect(page).toContain("Closed (1–2 of 5):");
     expect(page).toContain("offset 2");
     const next = text(await tools.backlog_list!.handler({ status: "all", limit: 2, offset: 2 }));
-    expect(next).toContain("Archive (3–4 of 5):");
+    expect(next).toContain("Closed (3–4 of 5):");
     const done = text(await tools.backlog_list!.handler({ status: "done" }));
     expect(done).toContain("of 3):");
     expect(text(await tools.backlog_list!.handler({ status: "dismissed" }))).toContain("of 2):");
