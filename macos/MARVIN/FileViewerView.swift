@@ -81,11 +81,17 @@ final class FileViewerModel {
         /// Last error surfaced by save / load. Cleared on the next
         /// successful operation.
         var error: String?
+        /// The sidecar showed this file for display only: it lies outside
+        /// the project (a capture a tab copied into /tmp and linked). The
+        /// save routes refuse such a path anyway; this keeps the editor
+        /// from offering an edit that could never be saved.
+        var readOnly: Bool = false
 
         var isDirty: Bool { content != originalContent }
         /// True when the buffer is in a state where the editor can
-        /// display + edit it (not binary, not failed-to-load).
-        var canEdit: Bool { !isBinary && error == nil && !truncated }
+        /// display + edit it (not binary, not failed-to-load, not
+        /// outside the project).
+        var canEdit: Bool { !isBinary && error == nil && !truncated && !readOnly }
     }
 
     /// Per-path buffer cache. Keyed by absolute path. A switch from
@@ -169,7 +175,8 @@ final class FileViewerModel {
                     truncated: res.truncated,
                     isBinary: false,
                     isSaving: false,
-                    error: nil
+                    error: nil,
+                    readOnly: res.readOnly ?? false
                 )
             } catch is CancellationError {
                 return
@@ -215,7 +222,8 @@ final class FileViewerModel {
                     truncated: res.truncated,
                     isBinary: res.binary,
                     isSaving: false,
-                    error: nil
+                    error: nil,
+                    readOnly: res.readOnly ?? false
                 )
                 // Hand the buffer to a language server (ADR-0099). The
                 // server, not the disk, is what makes diagnostics live —

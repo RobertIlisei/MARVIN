@@ -1,7 +1,8 @@
 /**
  * GET /api/files/raw?cwd=…&path=…
  *
- * Stream the raw bytes of a sandbox'd file back to the browser with a
+ * Stream the raw bytes of a sandbox'd file (or a regular file under a system
+ * temp dir that a tab linked — `checkViewPath`, read-only) back to the browser with a
  * best-effort `Content-Type`. Used by the binary-file preview (images /
  * PDFs) embedded in `file-viewer.tsx`. Text files should continue to
  * go through `/api/files/content` so the editor gets its binary +
@@ -14,7 +15,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { checkFsPath } from "@marvin/runtime/fs-sandbox";
+import { checkViewPath, describeSandboxError } from "@marvin/runtime/fs-sandbox";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -47,11 +48,9 @@ export async function GET(req: NextRequest) {
   if (!cwd || !target) {
     return NextResponse.json({ error: "cwd and path required" }, { status: 400 });
   }
-  const check = await checkFsPath({
+  const check = await checkViewPath({
     cwd,
     target,
-    mustExist: true,
-    allowDirectory: false,
   });
   if (!check.ok) {
     const status =
@@ -60,7 +59,10 @@ export async function GET(req: NextRequest) {
         : check.error === "io-error"
           ? 500
           : 400;
-    return NextResponse.json({ error: check.error }, { status });
+    return NextResponse.json(
+      { error: check.error, message: describeSandboxError(check.error, target) },
+      { status },
+    );
   }
   const mime = mimeFor(check.absolutePath);
   if (!mime) {

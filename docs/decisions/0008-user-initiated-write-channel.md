@@ -124,6 +124,28 @@ Add a second filesystem channel with four shared and three parallel primitives.
 - Manual: try to write-through `cwd` itself via the sandbox → `is-directory`.
 - Manual (deferred to M2): the full write-policy matrix (auto / confirm / deny / trash / permanent).
 
+## Addendum — 2026-11-26: reading for display is not writing
+
+The sandbox's one boundary (project root or registered session worktree) was
+applied to the read routes too. A tab links a capture it copied into `/tmp`
+(Playwright wipes `test-results` on each run); clicking the link opened the
+file viewer, whose `/api/files/content` call answered `400 path-escapes-cwd`.
+
+**Rule now.** `checkFsPath` is unchanged and still guards every write route. A
+second function, `checkViewPath`, guards only `/api/files/content` and
+`/api/files/raw`: it accepts what `checkFsPath` accepts, plus a regular file
+under the system temp roots (`/tmp`, `os.tmpdir()`, `$TMPDIR`, realpath'd,
+never `/` or the home directory), never following a symlink, never a directory
+or a non-regular file, and answering a path outside every root without touching
+disk. Such a file is returned `readOnly: true`; saving it is refused by the
+unchanged write sandbox. No listing, no widening of the tree/search/status
+routes.
+
+**Why this is safe.** The routes are loopback GETs with no CORS headers, so a
+web page cannot read the answer; the reader is the local app acting for the
+user. The roots come from the OS and the environment, never from a project
+file, so a hostile repository cannot add one.
+
 ## Related
 
 - [ADR-0004 — Structural confirm gate via Agent SDK](./0004-structural-confirm-gate.md) — the LLM channel.

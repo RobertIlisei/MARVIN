@@ -17,6 +17,7 @@
 // here pre-emptively would be speculative.
 
 import Foundation
+import MARVINLogic
 
 /// Errors surfaced by the files service. Mirrors ChatServiceError's
 /// shape so a caller catching one already knows how to render the
@@ -32,6 +33,22 @@ enum FilesServiceError: Error {
     /// URLSession-level network failure (loopback unreachable,
     /// timeout, etc.).
     case transport(underlying: Error)
+}
+
+/// Without this, `localizedDescription` is the bridged NSError text —
+/// "(MARVIN.FilesServiceError error 0.)", the case index — and the file
+/// viewer printed that for a refused path (2026-11-26).
+extension FilesServiceError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .httpStatus(let code, let body):
+            return FilesErrorText.describe(status: code, body: body)
+        case .decode:
+            return "The files service answered in a shape MARVIN does not understand."
+        case .transport(let underlying):
+            return underlying.localizedDescription
+        }
+    }
 }
 
 @MainActor

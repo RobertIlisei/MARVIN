@@ -8,6 +8,53 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-11-26 — A tab's link to a capture in /tmp opened a viewer that said `FilesServiceError error 0` (ADR-0008 addendum).**
+
+  *Symptom.* Clicking `/tmp/v3214-shots/v3214-pd05-arbori-1280.png` (valid PNG,
+  117,560 bytes, readable by the user) opened the file viewer with "Failed to
+  load: The operation couldn't be completed. (MARVIN.FilesServiceError error 0.)".
+
+  *Measured, not read.* The same request the viewer makes, as a read-only GET
+  (`/api/files/content?cwd=<project root>&path=/tmp/v3214-shots/…png`, and the
+  `/private/tmp` spelling): **400 `{"error":"path-escapes-cwd"}`** for both.
+  `checkFsPath` (`fs-sandbox.ts`) refuses any path that is not inside the
+  project root or a registered session worktree — correct for the write
+  channel, wrong for a read the user asked for by clicking a link. Tabs are told
+  to copy captures out of the project into /tmp (Playwright wipes
+  `test-results`), so the links are normal. "error 0" is the enum case index:
+  `FilesServiceError.httpStatus` (case 0) has no `LocalizedError`, so
+  `localizedDescription` is the bridged NSError text and the route's reason sat
+  unread in the body. The image bytes themselves never needed the sidecar
+  (`ImageFilePreview` reads the file with `NSImage(contentsOfFile:)`); the
+  sidecar call only decides binary vs text, and its refusal ended the load.
+
+  *Fix.* `checkViewPath` (`fs-sandbox.ts`), used only by `/api/files/content`
+  and `/api/files/raw`: everything `checkFsPath` accepts, plus a REGULAR file
+  under the system temp roots (`/tmp`, `os.tmpdir()`, `$TMPDIR`, canonicalised;
+  never `/` or the home directory). Refused: a symlink at the target (even one
+  pointing inside the root), an ancestor symlink whose realpath leaves the
+  roots, a prefix look-alike (`/tmp-evil`), `..` walks, a relative target that
+  climbs out of the project, directories (no listing), FIFOs / sockets /
+  devices, an unregistered cwd. A path lexically outside every root answers
+  without touching disk, so the route is no existence oracle. The response
+  carries `readOnly: true` for such a file; the app's buffer turns `canEdit`
+  off, and the save route still calls `checkFsPath`, which refuses it (tested).
+  Refusals now carry `message` ("This file is outside the project and cannot be
+  shown: <path>"); `FilesServiceError` is `LocalizedError` through the pure
+  `FilesErrorText` (MARVINLogic), which prefers `message`, maps an older
+  sidecar's bare code, and never prints a case index.
+
+  *Trust model found.* The sidecar listens on loopback; GET routes carry no
+  CORS headers, so a web page cannot read a response (the CSRF header guards
+  mutations only). The only reader is the local app, as the user. A hostile
+  repo cannot add a root: the temp roots come from the OS and the environment,
+  not from project files.
+
+  *Verification.* `fs-sandbox-view.test.ts` (20), `files-view-temp-route.test.ts`
+  (10), whole `sidecar/packages/runtime` + `sidecar/tests` suites 2523 passed,
+  `tsc --noEmit` clean in `sidecar` and the runtime package, `swift run
+  MARVINTests` 4453 assertions. Not run: the app itself (no reinstall).
+
 - **2026-11-26 — A stored `mergedInto` could get a tab's unmerged branch deleted (ADR-0103 amendment).**
 
   *Incident.* `marvin/tab/rel-tests-c-last-six` held two unmerged commits and was
