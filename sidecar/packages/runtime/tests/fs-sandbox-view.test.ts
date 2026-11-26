@@ -170,6 +170,46 @@ describe("checkViewPath — files a session linked from a temp dir", () => {
   });
 });
 
+// 2026-11-27 — the first fix passed its tests and still refused the real file:
+// the tests injected the temp root in the SAME spelling as the target, while
+// the default roots held only the canonical form (/private/tmp) and a link
+// says /tmp/... . The lexical gate compared the two spellings and never met.
+describe("checkViewPath — default roots, the spelling a tab actually links", () => {
+  it("opens a file by its /tmp spelling, whatever /tmp resolves to", async () => {
+    const dir = await fs.mkdtemp("/tmp/marvin-view-default-");
+    try {
+      await fs.writeFile(path.join(dir, "capture.png"), "png");
+      const r = await checkViewPath({ cwd: tmp, target: path.join(dir, "capture.png") });
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.outsideProject).toBe(true);
+        expect(r.absolutePath).toBe(path.join(await fs.realpath(dir), "capture.png"));
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("opens a file by the canonical spelling too, and by the raw os.tmpdir() one", async () => {
+    const dir = await fs.mkdtemp(path.join(tmpdir(), "marvin-view-default-"));
+    try {
+      await fs.writeFile(path.join(dir, "c.png"), "png");
+      for (const base of [dir, await fs.realpath(dir)]) {
+        const r = await checkViewPath({ cwd: tmp, target: path.join(base, "c.png") });
+        expect(r.ok, base).toBe(true);
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still refuses a look-alike of /tmp and a file outside every default root", async () => {
+    expect((await checkViewPath({ cwd: tmp, target: "/tmpx/evil.png" })).ok).toBe(false);
+    expect((await checkViewPath({ cwd: tmp, target: path.join(homedir(), ".zshrc") })).ok).toBe(false);
+    expect((await checkViewPath({ cwd: tmp, target: "/tmp/../etc/passwd" })).ok).toBe(false);
+  });
+});
+
 describe("viewableTempRoots", () => {
   it("includes the machine's temp dir, canonicalised", async () => {
     const roots = await viewableTempRoots();

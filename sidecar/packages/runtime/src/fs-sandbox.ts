@@ -296,9 +296,15 @@ export async function viewableTempRoots(): Promise<string[]> {
   const home = await safeRealpath(homedir());
   const out: string[] = [];
   for (const c of candidates) {
-    const real = await safeRealpath(path.resolve(c));
+    const raw = path.resolve(c);
+    const real = await safeRealpath(raw);
     if (real === path.parse(real).root || real === home) continue;
-    if (!out.includes(real)) out.push(real);
+    // BOTH spellings: a link says `/tmp/x.png`, the canonical root is
+    // `/private/tmp`, and the lexical gate in `checkViewPath` compares the
+    // target as written. The canonical form alone refused the file the
+    // owner clicked (2026-11-27); the realpath check afterwards still holds
+    // the line.
+    for (const r of [raw, real]) if (!out.includes(r)) out.push(r);
   }
   return out;
 }

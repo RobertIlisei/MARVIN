@@ -50,7 +50,17 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   repo cannot add a root: the temp roots come from the OS and the environment,
   not from project files.
 
-  *Verification.* `fs-sandbox-view.test.ts` (20), `files-view-temp-route.test.ts`
+  *Second miss, 2026-11-27.* The first fix was installed and still refused the
+  file. Measured with the real inputs: `viewableTempRoots()` returned only the
+  canonical roots (`/private/tmp`, `/private/var/folders/…/T`), while the link
+  says `/tmp/…`, and the lexical gate compares the target as written, so the two
+  spellings never met. The first tests injected roots in the target's own
+  spelling, which hid it. `viewableTempRoots()` now returns the raw and the
+  canonical spelling of each root; the realpath check still decides. New tests
+  use the default roots with a real `/tmp` directory. The installed bundle did
+  contain the new code (not stale).
+
+  *Verification.* `fs-sandbox-view.test.ts` (23), `files-view-temp-route.test.ts`
   (10), whole `sidecar/packages/runtime` + `sidecar/tests` suites 2523 passed,
   `tsc --noEmit` clean in `sidecar` and the runtime package, `swift run
   MARVINTests` 4453 assertions. Not run: the app itself (no reinstall).
