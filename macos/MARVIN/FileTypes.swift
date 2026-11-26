@@ -77,6 +77,10 @@ struct FileContentResponse: Codable, Equatable {
     /// a "binary file, N bytes" placeholder.
     let binary: Bool
     let truncated: Bool
+    /// True when the file lies outside the project and was served for
+    /// display only (a temp-dir capture a tab linked). Absent from an
+    /// older sidecar, which answered such a path with a 400 instead.
+    let readOnly: Bool?
     /// UTF-8 decoded contents. Nil for binary files.
     let content: String?
 }

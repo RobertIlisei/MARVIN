@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 
-import { checkFsPath } from "@marvin/runtime/fs-sandbox";
+import { checkViewPath, describeSandboxError } from "@marvin/runtime/fs-sandbox";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -24,7 +24,10 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const check = await checkFsPath({ cwd, target: file, mustExist: true });
+  // Read-only display: a regular file under a system temp dir that a tab
+  // linked is viewable too (and flagged `readOnly`); every write route keeps
+  // the strict project sandbox.
+  const check = await checkViewPath({ cwd, target: file });
   if (!check.ok) {
     const status =
       check.error === "not-found"
@@ -33,10 +36,13 @@ export async function GET(req: NextRequest) {
             check.error === "symlink-rejected" ||
             check.error === "symlink-escapes-cwd"
           ? 400
-          : check.error === "is-directory"
+          : check.error === "is-directory" || check.error === "not-regular-file"
             ? 400
             : 500;
-    return NextResponse.json({ error: check.error }, { status });
+    return NextResponse.json(
+      { error: check.error, message: describeSandboxError(check.error, file) },
+      { status },
+    );
   }
   const target = check.absolutePath;
 
@@ -72,6 +78,7 @@ export async function GET(req: NextRequest) {
         maxSize: MAX_SIZE,
         binary: true,
         truncated,
+        readOnly: check.outsideProject === true,
         content: null,
       });
     }
@@ -82,6 +89,9 @@ export async function GET(req: NextRequest) {
       maxSize: MAX_SIZE,
       binary: false,
       truncated,
+      // True for a file outside the project (a temp-dir capture a tab
+      // linked): shown, never edited or saved.
+      readOnly: check.outsideProject === true,
       // For truncated files we still ship the first MAX_SIZE bytes so
       // the editor can mount in read-only mode. Save is disabled client-
       // side when `truncated: true` — prevents the "overwrite a 10 MB

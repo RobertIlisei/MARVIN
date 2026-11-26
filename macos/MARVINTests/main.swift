@@ -3779,6 +3779,30 @@ runner.suite("AdvisorTierFloor") {
     }
 }
 
+runner.suite("FilesErrorText") {
+    runner.test("shows the route's own sentence, not a code or an enum dump") {
+        let body = #"{"error":"path-escapes-cwd","message":"This file is outside the project and cannot be shown: /Users/x/a.png"}"#
+        runner.expect(
+            FilesErrorText.describe(status: 400, body: body)
+                == "This file is outside the project and cannot be shown: /Users/x/a.png",
+            "message wins"
+        )
+    }
+    runner.test("an older sidecar sends only a code: map it to a sentence") {
+        let t = FilesErrorText.describe(status: 400, body: #"{"error":"path-escapes-cwd"}"#)
+        runner.expect(t.contains("outside the project"), "code mapped: \(t)")
+        runner.expect(!t.contains("path-escapes-cwd"), "no raw code")
+    }
+    runner.test("falls back to the status, never to 'error 0'") {
+        runner.expect(FilesErrorText.describe(status: 502, body: nil).contains("502"), "status named")
+        runner.expect(FilesErrorText.describe(status: 500, body: "<html>").contains("500"), "non-JSON body")
+        runner.expect(
+            FilesErrorText.describe(status: 400, body: #"{"error":"weird-new-code"}"#).contains("weird-new-code"),
+            "unknown code still named"
+        )
+    }
+}
+
 runner.suite("BenignCancellation") {
     runner.test("matches the error a REAL cancelled URLSession request produces") {
         guard let real = realCancelledRequestError() else {
