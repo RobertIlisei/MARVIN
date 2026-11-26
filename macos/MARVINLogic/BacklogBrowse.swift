@@ -625,3 +625,39 @@ public enum WindowSizeMemory {
         return (min(max(bits[0], minWidth), maxWidth), min(max(bits[1], minHeight), maxHeight))
     }
 }
+
+/// The Resolved tab is loaded a page at a time (ADR-0044 addendum, 2026-11-27).
+///
+/// A real project holds ~2,500 resolved items against ~300 open ones; the
+/// window asks for the open ones and the counts when it opens, and a page of
+/// the archive when the Resolved tab is. These are the rules for joining what
+/// each answer brings into the one list the window shows.
+public enum BacklogPaging {
+    public static let pageSize = 100
+
+    private static func isResolved(_ item: BacklogItem) -> Bool { BacklogScope.resolved.includes(status: item.status) }
+
+    /// After a fresh read of the OPEN items: those, then every resolved row
+    /// already in hand (loaded pages, rows resolved in this window) that the
+    /// server does not now list as open.
+    public static func mergeOpen(_ fresh: [BacklogItem], into current: [BacklogItem]) -> [BacklogItem] {
+        let freshIds = Set(fresh.map(\.id))
+        return fresh + current.filter { isResolved($0) && !freshIds.contains($0.id) }
+    }
+
+    /// After a page of the archive arrives: the open rows, then the resolved
+    /// rows, the page replacing any row with the same id. `reset` starts the
+    /// resolved list over (the tab was opened again).
+    public static func mergePage(_ page: [BacklogItem], into current: [BacklogItem], reset: Bool) -> [BacklogItem] {
+        let open = current.filter { !isResolved($0) }
+        let kept = reset ? [] : current.filter { isResolved($0) }
+        let pageIds = Set(page.map(\.id))
+        return open + kept.filter { !pageIds.contains($0.id) } + page
+    }
+
+    /// "Showing 100 of 2,544" under the list, or nil when everything is loaded.
+    public static func footer(loaded: Int, total: Int) -> String? {
+        guard total > loaded else { return nil }
+        return "Showing \(loaded) of \(total). Search and filters look at what is loaded."
+    }
+}

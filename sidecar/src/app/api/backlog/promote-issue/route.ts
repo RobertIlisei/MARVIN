@@ -14,7 +14,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { type NextRequest, NextResponse } from "next/server";
-import { listBacklog, setBacklogStatus } from "@marvin/runtime/backlog";
+import { getBacklogItem, setBacklogStatus } from "@marvin/runtime/backlog";
 import { validateProjectCwd } from "@marvin/runtime/projects";
 import { requireMarvinClient } from "@/lib/csrf";
 
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
-  const item = (await listBacklog(v.workDir)).find((i) => i.id === body.id);
+  const item = await getBacklogItem(v.workDir, body.id);
   if (!item) return NextResponse.json({ error: `no backlog item "${body.id}"` }, { status: 404 });
 
   // Remote check first — no remote means there's nowhere to file an issue.
@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const issueBody =
-      `${item.body || "(no detail)"}\n\n— parked in MARVIN backlog (\`${item.id}\`, ${item.severity})`;
+      `${item.body || "(no detail)"}\n\n— parked in MARVIN backlog (\`${item.id}\`, ${item.priority})`;
     const { stdout } = await run(
       "gh",
       ["issue", "create", "--title", item.title, "--body", issueBody],

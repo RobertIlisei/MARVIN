@@ -66,7 +66,33 @@ final class BacklogService {
     private struct AddResponse: Codable { let related: [BacklogItem]? }
     private struct PromoteResponse: Codable { let ok: Bool?; let url: String?; let error: String? }
 
-    /// Fetch backlog items, optionally filtered by status.
+    /// One page of the archive (done + dismissed), newest first: the Resolved
+    /// tab, loaded when it is opened (ADR-0044 addendum, 2026-11-27).
+    struct ResolvedPage { let items: [BacklogItem]; let total: Int; let hasMore: Bool }
+
+    func fetchResolved(workDir: String, offset: Int, limit: Int = BacklogPaging.pageSize) async throws -> ResolvedPage {
+        var comps = URLComponents(
+            url: baseURL.appendingPathComponent("api/backlog"),
+            resolvingAgainstBaseURL: false
+        )!
+        comps.queryItems = [
+            URLQueryItem(name: "workDir", value: workDir),
+            URLQueryItem(name: "status", value: "resolved"),
+            URLQueryItem(name: "offset", value: String(offset)),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        guard let url = comps.url else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        let (data, resp) = try await session.data(for: req)
+        try Self.ensure2xx(resp)
+        struct Wire: Decodable { let items: [BacklogItem]; let total: Int; let hasMore: Bool }
+        let w = try JSONDecoder().decode(Wire.self, from: data)
+        return ResolvedPage(items: w.items, total: w.total, hasMore: w.hasMore)
+    }
+
+    /// Fetch the OPEN backlog items (provisional, open, doing), optionally narrowed
+    /// to one status. Resolved items are not here: `fetchResolved` pages them.
     func fetch(workDir: String, status: String? = nil) async throws -> [BacklogItem] {
         var comps = URLComponents(
             url: baseURL.appendingPathComponent("api/backlog"),

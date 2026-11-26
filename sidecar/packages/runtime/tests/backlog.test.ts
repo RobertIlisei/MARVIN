@@ -43,20 +43,21 @@ afterEach(async () => {
 
 const indexPath = () => join(workDir, ".marvin", "backlog.md");
 const itemPath = (slug: string) => join(workDir, ".marvin", "backlog", `${slug}.md`);
+const archivedPath = (slug: string) => join(workDir, ".marvin", "backlog", "archive", `${slug}.md`);
 
 describe("backlog store — add / list / resolve", () => {
   it("add writes a slugged file + an index entry, status open", async () => {
     const res = await addBacklogItem(workDir, {
       title: "Tighten conformance test to flag handler⊆spec",
       body: "One-directional check lets handler-without-spec pass silently.",
-      severity: "high",
+      priority: "high",
       sessionId: "sess-1",
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.created).toBe(true);
     expect(res.item.status).toBe("open");
-    expect(res.item.severity).toBe("high");
+    expect(res.item.priority).toBe("high");
     expect(res.item.sessionId).toBe("sess-1");
 
     expect(existsSync(itemPath(res.item.id))).toBe(true);
@@ -70,12 +71,12 @@ describe("backlog store — add / list / resolve", () => {
 
   it("re-adding the same title dedups (updates in place, no second file)", async () => {
     const a = await addBacklogItem(workDir, { title: "Cache the computed field" });
-    const b = await addBacklogItem(workDir, { title: "Cache the computed field", severity: "low" });
+    const b = await addBacklogItem(workDir, { title: "Cache the computed field", priority: "low" });
     expect(a.ok && b.ok).toBe(true);
     if (!a.ok || !b.ok) return;
     expect(b.created).toBe(false);
     expect(b.item.id).toBe(a.item.id);
-    expect(b.item.severity).toBe("low"); // updated in place
+    expect(b.item.priority).toBe("low"); // updated in place
     const all = await listBacklog(workDir);
     expect(all).toHaveLength(1);
   });
@@ -95,7 +96,8 @@ describe("backlog store — add / list / resolve", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.item.status).toBe("done");
-    expect(existsSync(itemPath(add.item.id))).toBe(true); // file kept
+    expect(existsSync(itemPath(add.item.id))).toBe(false); // out of the open directory…
+    expect(existsSync(archivedPath(add.item.id))).toBe(true); // …file kept, in the archive
     const index = await readFile(indexPath(), "utf-8");
     expect(index).not.toContain("Resolve me"); // dropped from index
     expect(index).toContain("_No open backlog items._");
@@ -106,34 +108,34 @@ describe("backlog store — add / list / resolve", () => {
     const add = await addBacklogItem(workDir, {
       title: "Edit me",
       body: "original body",
-      severity: "low",
+      priority: "low",
     });
     expect(add.ok).toBe(true);
     if (!add.ok) return;
 
-    const sev = await updateBacklogItem(workDir, add.item.id, { severity: "high" });
-    expect(sev.ok && sev.item.severity === "high").toBe(true);
+    const sev = await updateBacklogItem(workDir, add.item.id, { priority: "high" });
+    expect(sev.ok && sev.item.priority === "high").toBe(true);
     if (sev.ok) expect(sev.item.body).toBe("original body"); // body untouched
 
     const bod = await updateBacklogItem(workDir, add.item.id, { body: "rewritten body" });
     expect(bod.ok && bod.item.body === "rewritten body").toBe(true);
-    if (bod.ok) expect(bod.item.severity).toBe("high"); // severity preserved
+    if (bod.ok) expect(bod.item.priority).toBe("high"); // severity preserved
 
     const index = await readFile(indexPath(), "utf-8");
     expect(index).toContain("(high)"); // index rewritten with new severity
 
     // An over-cap body is REFUSED, never silently cut — nothing is written.
     const both = await updateBacklogItem(workDir, add.item.id, {
-      severity: "med",
+      priority: "medium",
       body: `${"x".repeat(MAX_BODY_CHARS + 100)}`,
     });
     expect(both.ok).toBe(false);
     if (!both.ok) expect(both.error).toContain(String(MAX_BODY_CHARS));
     const still = (await listBacklog(workDir)).find((i) => i.id === add.item.id)!;
     expect(still.body).toBe("rewritten body");
-    expect(still.severity).toBe("high");
+    expect(still.priority).toBe("high");
 
-    const missing = await updateBacklogItem(workDir, "no-such-id", { severity: "low" });
+    const missing = await updateBacklogItem(workDir, "no-such-id", { priority: "low" });
     expect(missing.ok).toBe(false);
   });
 
@@ -326,11 +328,12 @@ function item(over: Partial<BacklogItem> & { title: string }): BacklogItem {
     kind: over.kind ?? "unspecified",
     blocked: over.blocked ?? false,
     blockedOn: over.blockedOn ?? "",
-    severity: over.severity ?? "med",
+    priority: over.priority ?? "medium",
     sessionId: "",
     claimedBy: "",
     claimedBranch: "",
     claimedAt: "",
+    type: "", release: "", origin: "", waitsOn: "", relatesTo: "", resolvedBy: "", evidence: "", reopenedAt: "",
     created: "2026-08-06T00:00:00.000Z",
     updated: "2026-08-06T00:00:00.000Z",
   };
@@ -536,18 +539,18 @@ describe("backlog store — kind + blocked (ADR-0064)", () => {
     const item = (await listBacklog(workDir)).find((i) => i.id === "legacy");
     expect(item?.kind).toBe("unspecified");
     expect(item?.blocked).toBe(false);
-    expect(item?.severity).toBe("high"); // unrelated fields still parse
+    expect(item?.priority).toBe("high"); // unrelated fields still parse
   });
 
   it("an omitted kind on re-add KEEPS the existing classification", async () => {
     // A provisional confirm or a re-add must not wipe what the user set.
     const a = await addBacklogItem(workDir, { title: "Keep my kind", kind: "docs" });
     if (!a.ok) return;
-    const b = await addBacklogItem(workDir, { title: "Keep my kind", severity: "high" });
+    const b = await addBacklogItem(workDir, { title: "Keep my kind", priority: "high" });
     expect(b.ok).toBe(true);
     if (!b.ok) return;
     expect(b.item.kind).toBe("docs");
-    expect(b.item.severity).toBe("high");
+    expect(b.item.priority).toBe("high");
   });
 
   it("updateBacklogItem edits kind/blocked without touching status", async () => {
@@ -700,12 +703,12 @@ describe("near-duplicate capture gate", () => {
   it("never blocks an UPDATE to an existing item", async () => {
     // Same title = same slug = an update, which must always be allowed.
     const dir = await mkdtemp(join(tmpdir(), "marvin-dupe4-"));
-    const a = await addBacklogItem(dir, { title: "Fix the flaky retention IT", severity: "low" });
-    const b = await addBacklogItem(dir, { title: "Fix the flaky retention IT", severity: "high" });
+    const a = await addBacklogItem(dir, { title: "Fix the flaky retention IT", priority: "low" });
+    const b = await addBacklogItem(dir, { title: "Fix the flaky retention IT", priority: "high" });
     expect(b.ok).toBe(true);
     if (b.ok) {
       expect(b.duplicateOf).toBeUndefined();
-      expect(b.item.severity).toBe("high");
+      expect(b.item.priority).toBe("high");
       expect(b.item.id).toBe(a.ok ? a.item.id : "");
     }
     await rm(dir, { recursive: true, force: true });
@@ -717,7 +720,7 @@ describe("near-duplicate capture gate", () => {
 // named wherever a second tab would otherwise start the same work.
 describe("claims (ADR-0113)", () => {
   it("claims open → doing with a holder; a second claimant is refused and told who holds it; resolve releases", async () => {
-    const added = await addBacklogItem(workDir, { title: "Fix the advisory lock autocommit in the reverify job", severity: "high" });
+    const added = await addBacklogItem(workDir, { title: "Fix the advisory lock autocommit in the reverify job", priority: "high" });
     expect(added.ok).toBe(true);
     const id = added.ok ? added.item.id : "";
     const first = await claimBacklogItem(workDir, id, { sessionId: "sess-a", branch: "marvin/tab/fix-the-lock" });
@@ -740,7 +743,7 @@ describe("claims (ADR-0113)", () => {
   });
 
   it("a near-duplicate of a held item names the holder; a claim without a branch is named by session and gains the branch later", async () => {
-    const a = await addBacklogItem(workDir, { title: "CustomDomainReverifyJob runScheduled self-invokes transactional run without a transaction", severity: "high" });
+    const a = await addBacklogItem(workDir, { title: "CustomDomainReverifyJob runScheduled self-invokes transactional run without a transaction", priority: "high" });
     const id = a.ok ? a.item.id : "";
     await claimBacklogItem(workDir, id, { sessionId: "8cb24ed6-2262-4f2a-91a7-c908fbfe8b58" });
     expect(describeClaim((await listBacklog(workDir))[0]!)).toBe("session 8cb24ed6");
@@ -750,7 +753,7 @@ describe("claims (ADR-0113)", () => {
     const same = await addBacklogItem(workDir, { title: "CustomDomainReverifyJob runScheduled self-invokes transactional run without a transaction", sessionId: "other-tab" });
     expect(same).toMatchObject({ ok: true, created: false, duplicateOf: id, duplicateHeldBy: "tab: fix-customdomain" });
     // A near-duplicate wording (different slug), other tab: the same answer.
-    const twin = await addBacklogItem(workDir, { title: "Fix: CustomDomainReverifyJob runScheduled self-invokes transactional run without a transaction", severity: "high", sessionId: "other-tab" });
+    const twin = await addBacklogItem(workDir, { title: "Fix: CustomDomainReverifyJob runScheduled self-invokes transactional run without a transaction", priority: "high", sessionId: "other-tab" });
     expect(twin).toMatchObject({ ok: true, created: false, duplicateOf: id, duplicateHeldBy: "tab: fix-customdomain" });
     expect(await listBacklog(workDir)).toHaveLength(1);
   });

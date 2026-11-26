@@ -61,11 +61,11 @@ describe("countsFromRows", () => {
 
 describe("the file counter", () => {
   it("agrees with the store's own list on a mixed directory", async () => {
-    await addBacklogItem(workDir, { title: "first thing", body: "b", severity: "high" });
+    await addBacklogItem(workDir, { title: "first thing", body: "b", priority: "high" });
     await addBacklogItem(workDir, { title: "second thing", body: "b" });
     await addBacklogItem(workDir, { title: "third thing", body: "b", provisional: true });
     await setBacklogStatus(workDir, "second-thing", "done");
-    const items = await listBacklog(workDir);
+    const items = await listBacklog(workDir, { status: "all" }); // the open files + the archive
     const counter = createBacklogCounter();
     const got = await counter.count(workDir);
     expect(got).toEqual(countsFromRows(items));

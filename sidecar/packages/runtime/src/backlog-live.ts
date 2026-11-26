@@ -9,7 +9,9 @@
  *
  *   - counts the project's items by status (and `blocked`) WITHOUT parsing the
  *     directory on every event: an incremental scan that `lstat`s each file and
- *     re-reads only the ones whose mtime or size moved;
+ *     re-reads only the ones whose mtime or size moved. Only the OPEN items are
+ *     files beside the index; the resolved ones are counted from the archive's
+ *     small `archive/summary.json` (ADR-0044 addendum, 2026-11-27);
  *   - turns every write — the store's own (`noteBacklogWrite`, called from the
  *     one function every write path goes through) and a change from outside
  *     MARVIN (one `fs.watch` on `.marvin/backlog` per project) — into ONE
@@ -80,6 +82,20 @@ export function backlogChangedPayload(projectId: string, c: BacklogChange) {
 export const MAX_BACKLOG_FILES = 20_000;
 
 const STATUSES = ["provisional", "open", "doing", "done", "dismissed"] as const;
+
+/** `archive/summary.json`: the resolved items' counts, or null when there is none (an old layout, or no archive). Read, never written, here. */
+async function archiveSummary(dir: string): Promise<{ done: number; dismissed: number; stamp: string } | null> {
+  const path = join(dir, "archive", "summary.json");
+  try {
+    const st = await lstat(path);
+    if (!st.isFile()) return null;
+    const raw = JSON.parse(await readFile(path, "utf-8")) as { done?: unknown; dismissed?: unknown };
+    const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+    return { done: n(raw.done), dismissed: n(raw.dismissed), stamp: `${st.mtimeMs}:${st.size}` };
+  } catch {
+    return null;
+  }
+}
 
 /** Pure: tally rows. An unknown status reads as `open`, like `parseItem`. */
 export function countsFromRows(rows: ReadonlyArray<{ status: string; blocked: boolean }>): BacklogCounts {
@@ -166,7 +182,13 @@ export function createBacklogCounter(): {
         );
       }
       caches.set(workDir, next);
-      return { counts: countsFromRows([...next.values()]), signature: signatureOf(next) };
+      const counts = countsFromRows([...next.values()]);
+      const archived = await archiveSummary(dir);
+      if (archived) {
+        counts.done += archived.done;
+        counts.dismissed += archived.dismissed;
+      }
+      return { counts, signature: `${signatureOf(next)}|${archived?.stamp ?? "-"}` };
     }
   };
   return { scan, count: async (workDir) => (await scan(workDir)).counts };

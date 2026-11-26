@@ -21,20 +21,23 @@ import { z } from "zod";
 import {
   addBacklogItem,
   BACKLOG_KINDS,
-  BACKLOG_SEVERITIES,
+  BACKLOG_TYPES,
   type BacklogItem,
-  type BacklogStatus,
+  type BacklogPriority,
   claimBacklogItem,
   classifyBacklogText,
   describeClaim,
   listBacklog,
+  listResolved,
   MAX_BODY_CHARS,
   MAX_NOTES_CHARS,
   MAX_TITLE_CHARS,
+  parsePriority,
   resolveBacklogItem,
   setBacklogStatus,
   updateBacklogItem,
 } from "./backlog";
+import { deriveBacklogFromGit } from "./backlog-derive";
 import { groomBacklog, renderGroomReport } from "./backlog-groom";
 import { notifyTabsOfResolution } from "./backlog-notify";
 
@@ -87,7 +90,11 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       "(or pass false) only for an item the user has explicitly confirmed. NOT " +
       "for durable facts (→ remember), verification/commit status (→ git), or " +
       "decisions (→ ADR) — those are rejected. A parking lot the user revisits, " +
-      "never an auto-executed queue.",
+      "never an auto-executed queue. When YOU later fix an item, end the commit " +
+      "message with the trailer `Backlog: <slug>` (one line per item): the item " +
+      "resolves itself, with the commit as evidence, once that commit is on the " +
+      "project's branch. An item whose notes are full takes no more: file the next " +
+      "point as a new item with `relatesTo: <slug>`.",
     {
       title: z.string().min(1).describe(`One actionable line; the dedup key (≤${MAX_TITLE_CHARS} chars).`),
       force: z
@@ -97,7 +104,16 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
           "Only after a capture was refused as a near-duplicate: set true if the item really IS distinct despite the similar wording. Never set it pre-emptively.",
         ),
       body: z.string().optional().describe(`Optional: why it matters + the concrete change (≤${MAX_BODY_CHARS} chars).`),
-      severity: z.enum(BACKLOG_SEVERITIES).optional().describe("low | med | high. Default med."),
+      priority: z.string().optional().describe("low | medium | high — exactly these. Default medium. Anything else is refused."),
+      severity: z.string().optional().describe("Deprecated spelling of `priority`; same values (low | medium | high)."),
+      type: z.enum(BACKLOG_TYPES).optional().describe("bug | debt | idea | chore — the coarse nature of the item (kind is the finer one)."),
+      release: z.string().optional().describe('Free text: the release it was found in or is aimed at, e.g. "v3.2".'),
+      origin: z.string().optional().describe("Where it came from: a session id or a review name."),
+      waitsOn: z.string().optional().describe("What it waits on: owner, authority, reviewer, another item's slug, or one line."),
+      relatesTo: z
+        .string()
+        .optional()
+        .describe("Slug of an existing item this one follows up — use it when that item's notes are full and cannot take more."),
       kind: z
         .enum(BACKLOG_KINDS)
         .optional()
@@ -127,7 +143,13 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
         .optional()
         .describe("true = auto-capture at discovery (no go-ahead); awaits keep/dismiss at the handoff. Default false (user-confirmed)."),
     },
-    async ({ title, body, severity, kind, blocked, blockedOn, provisional, force }) => {
+    async ({ title, body, priority, severity, type, release, origin, waitsOn, relatesTo, kind, blocked, blockedOn, provisional, force }) => {
+      let parsed: BacklogPriority | undefined;
+      if (priority !== undefined || severity !== undefined) {
+        const p = parsePriority(priority ?? severity);
+        if (!p.ok) return errorResult(p.error);
+        parsed = p.value;
+      }
       const cls = classifyBacklogText(title, body ?? "");
       if (!cls.ok) {
         return errorResult(
@@ -140,8 +162,13 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
         title,
         ...(force ? { force } : {}),
         ...(body ? { body } : {}),
-        ...(severity ? { severity } : {}),
+        ...(parsed ? { priority: parsed } : {}),
         ...(kind ? { kind } : {}),
+        ...(type ? { type } : {}),
+        ...(release !== undefined ? { release } : {}),
+        ...(origin !== undefined ? { origin } : {}),
+        ...(waitsOn !== undefined ? { waitsOn } : {}),
+        ...(relatesTo ? { relatesTo } : {}),
         ...(blocked !== undefined ? { blocked } : {}),
         ...(blockedOn ? { blockedOn } : {}),
         ...(provisional ? { provisional } : {}),
@@ -168,7 +195,7 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       const prov = res.item.status === "provisional";
       return textResult(
         `${res.created ? "Parked" : "Updated"} backlog item \`${res.item.id}\` ` +
-          `(${res.item.severity}${prov ? ", provisional" : ""}). ` +
+          `(${res.item.priority}${prov ? ", provisional" : ""}). ` +
           (prov
             ? `Auto-captured — list it at the handoff and keep/dismiss with \`backlog_resolve\`.`
             : `Surfaces next session and in the backlog panel; resolve with \`backlog_resolve\`.`) +
@@ -184,31 +211,67 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
 
   const listTool = tool(
     "backlog_list",
-    "List backlog items, optionally filtered by status (provisional | open | " +
-      "doing | done | dismissed). Use on intake, when the user asks what's " +
-      "parked, and at the scope-met handoff (`status: provisional`) to batch " +
-      "keep/dismiss what was auto-captured this turn.",
+    "List backlog items. By default the OPEN ones — provisional, open, doing — " +
+      "read from the open directory and the index, never from the archive. " +
+      "`status` narrows to one of provisional | open | doing, or reads the " +
+      "ARCHIVE: done | dismissed | all (paged: `limit` default 50, `offset`, " +
+      "newest first). Use on intake, when the user asks what's parked, and at " +
+      "the scope-met handoff (`status: provisional`) to batch keep/dismiss what " +
+      "was auto-captured this turn. Before listing, open items whose fix is on " +
+      "the project's branch (a commit with a `Backlog: <slug>` trailer) are " +
+      "closed, and the answer names them.",
     {
       status: z
-        .enum(["provisional", "open", "doing", "done", "dismissed"])
+        .enum(["provisional", "open", "doing", "done", "dismissed", "all"])
         .optional()
-        .describe("Filter; omit for all."),
+        .describe("Filter; omit for every open item. done | dismissed | all read the archive, paged."),
+      limit: z.number().int().positive().max(200).optional().describe("Archive reads only: page size, default 50."),
+      offset: z.number().int().nonnegative().optional().describe("Archive reads only: how many to skip, newest first."),
     },
-    async ({ status }) => {
-      const items = await listBacklog(cwd, status ? { status: status as BacklogStatus } : undefined);
+    async ({ status, limit, offset }) => {
+      // Derived done (backlog-derive.ts): what git proves fixed is closed first,
+      // so the list a tab reads is the list as it is, not as it was last touched.
+      const derived = await deriveBacklogFromGit(cwd);
+      const derivedLine = derived.resolved.length
+        ? `\n\nClosed just now because their fix is on ${derived.branch}: ${derived.resolved.map((r) => `\`${r.id}\` (${r.sha.slice(0, 9)})`).join(", ")}.`
+        : "";
+      const unknownLine = derived.unknown.length
+        ? `\n\nCommit trailers naming no backlog item (a typo? nothing was created): ${derived.unknown.slice(0, 5).map((u) => `\`${u}\``).join(", ")}${derived.unknown.length > 5 ? ` and ${derived.unknown.length - 5} more` : ""}.`
+        : "";
+      if (status === "done" || status === "dismissed" || status === "all") {
+        const page = await listResolved(cwd, {
+          ...(status === "done" || status === "dismissed" ? { status } : {}),
+          limit: limit ?? 50,
+          offset: offset ?? 0,
+        });
+        if (page.items.length === 0) return textResult(status === "all" ? "The archive is empty." : `No ${status} backlog items.`);
+        const lines = page.items.map(
+          (i) => `- [${i.status}${i.resolvedBy === "derived" ? " · derived" : ""}] (${i.priority}) ${i.title} — backlog/archive/${i.id}.md${i.evidence ? ` · ${i.evidence.slice(0, 9)}` : ""}`,
+        );
+        return textResult(
+          `Archive (${page.offset + 1}–${page.offset + page.items.length} of ${page.total}):\n${lines.join("\n")}` +
+            (page.hasMore ? `\n\nMore: call backlog_list again with offset ${page.offset + page.items.length}.` : "") +
+            derivedLine +
+            unknownLine,
+        );
+      }
+      const items = await listBacklog(cwd, status ? { status } : undefined);
       if (items.length === 0) {
-        return textResult(status ? `No ${status} backlog items.` : "Backlog is empty.");
+        return textResult((status ? `No ${status} backlog items.` : "No open backlog items.") + derivedLine + unknownLine);
       }
       const lines = items.map((i) => {
         const held = i.status === "doing" ? describeClaim(i) : null;
         const mine = i.status === "doing" && marvinSessionId && i.claimedBy === marvinSessionId;
-        return `- [${i.status}${held ? ` · ${mine ? "held by THIS tab" : held}` : ""}] (${i.severity}) ${i.title} — backlog/${i.id}.md`;
+        const meta = [i.type, i.release, i.waitsOn ? `waits on ${i.waitsOn}` : ""].filter(Boolean);
+        return `- [${i.status}${held ? ` · ${mine ? "held by THIS tab" : held}` : ""}] (${i.priority}) ${i.title}${meta.length ? ` · ${meta.join(" · ")}` : ""} — backlog/${i.id}.md`;
       });
       return textResult(
         `Backlog (${items.length}):\n${lines.join("\n")}` +
           (items.some((i) => i.status === "doing" && i.claimedBy && i.claimedBy !== marvinSessionId)
             ? `\n\nAn item marked \`doing · tab: …\` is being worked by ANOTHER tab right now — do not start it here; tell the user.`
-            : ""),
+            : "") +
+          derivedLine +
+          unknownLine,
       );
     },
   );
@@ -242,7 +305,11 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
     "Resolve or review a backlog item by id — `keep` (confirm a provisional item " +
       "→ open), `dismissed` (won't do), or `done` (completed). Use `keep`/" +
       "`dismissed` at the handoff to clear provisional auto-captures. A " +
-      "done/dismissed item drops from the active index (its file is kept).",
+      "done/dismissed item drops from the active index and its file moves to " +
+      "`.marvin/backlog/archive/` (`backlog_list status: done | dismissed | all` " +
+      "reads it). Do not resolve by hand an item you fixed in a commit: put " +
+      "`Backlog: <slug>` in that commit's message and it resolves itself once " +
+      "the commit is on the project's branch.",
     {
       id: z.string().min(1).describe("The item slug (from backlog_list)."),
       resolution: z.enum(["keep", "done", "dismissed"]).describe("keep (provisional → open) | done | dismissed."),
@@ -280,32 +347,51 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
   // `.marvin/backlog/*.md` by hand, which the tool boundary exists to prevent.
   const updateTool = tool(
     "backlog_update",
-    "EDIT an existing backlog item's fields by id: `severity`, `kind`, " +
+    "EDIT an existing backlog item's fields by id: `priority` (low | medium | " +
+      "high, nothing else), `kind`, `type`, `release`, `origin`, `waitsOn`, " +
       "`blocked`/`blockedOn`, or REPLACE its `body`. The title and id never " +
       "change (a rename is a new item). The description (every line that is " +
       `not a \`> \` note) is capped at ${MAX_BODY_CHARS} chars and the \`> \` notes at ` +
       `${MAX_NOTES_CHARS}; an overflow of either is REFUSED and nothing is written — condense and ` +
       "retry. To add a dated progress note without changing status or claim, pass " +
-      "`note` (it is appended; the body is untouched). Replacing a body must keep every outcome, exit-gate, blocker and " +
+      "`note` (it is appended; the body is untouched). When the notes are full the " +
+      "call is refused: file the next point as a new item with `backlog_add` and " +
+      "`relatesTo: <this slug>`. Replacing a body must keep every outcome, exit-gate, blocker and " +
       "build-order line: move history to a pointer (ADR, doc), never drop it. " +
       "Only change what the user approved; never re-prioritise or rewrite " +
       "items on the strength of `backlog_groom` alone (ADR-0063).",
     {
       id: z.string().min(1).describe("The item slug (from backlog_list)."),
-      severity: z.enum(BACKLOG_SEVERITIES).optional(),
+      priority: z.string().optional().describe("low | medium | high — exactly these; anything else is refused."),
+      severity: z.string().optional().describe("Deprecated spelling of `priority`."),
       kind: z.enum(BACKLOG_KINDS).optional(),
+      type: z.enum(BACKLOG_TYPES).optional().describe("bug | debt | idea | chore."),
+      release: z.string().optional().describe('Free text, e.g. "v3.2". Empty string clears it.'),
+      origin: z.string().optional().describe("A session id or a review name. Empty string clears it."),
+      waitsOn: z.string().optional().describe("Owner, authority, reviewer, another slug, or one line. Empty string clears it."),
       blocked: z.boolean().optional(),
       blockedOn: z.string().max(200).optional().describe("Who or what it waits on; an item id where the blocker is another item. Empty string clears it."),
       note: z.string().min(1).optional().describe("A progress note appended as a dated `> note` line; status and claim unchanged."),
       body: z.string().min(1).optional().describe(`The full replacement body (description ≤ ${MAX_BODY_CHARS} chars, \`> \` notes ≤ ${MAX_NOTES_CHARS}).`),
     },
-    async ({ id, severity, kind, blocked, blockedOn, body, note }) => {
-      if (severity === undefined && kind === undefined && blocked === undefined && blockedOn === undefined && body === undefined && note === undefined) {
-        return errorResult("nothing to change — pass at least one of severity, kind, blocked, blockedOn, body, note.");
+    async ({ id, priority, severity, kind, type, release, origin, waitsOn, blocked, blockedOn, body, note }) => {
+      const rawPriority = priority ?? severity;
+      if (rawPriority === undefined && kind === undefined && type === undefined && release === undefined && origin === undefined && waitsOn === undefined && blocked === undefined && blockedOn === undefined && body === undefined && note === undefined) {
+        return errorResult("nothing to change — pass at least one of priority, kind, type, release, origin, waitsOn, blocked, blockedOn, body, note.");
+      }
+      let parsed: BacklogPriority | undefined;
+      if (rawPriority !== undefined) {
+        const p = parsePriority(rawPriority);
+        if (!p.ok) return errorResult(p.error);
+        parsed = p.value;
       }
       const res = await updateBacklogItem(cwd, id, {
-        ...(severity !== undefined ? { severity } : {}),
+        ...(parsed !== undefined ? { priority: parsed } : {}),
         ...(kind !== undefined ? { kind } : {}),
+        ...(type !== undefined ? { type } : {}),
+        ...(release !== undefined ? { release } : {}),
+        ...(origin !== undefined ? { origin } : {}),
+        ...(waitsOn !== undefined ? { waitsOn } : {}),
         ...(blocked !== undefined ? { blocked } : {}),
         ...(blockedOn !== undefined ? { blockedOn } : {}),
         ...(body !== undefined ? { body } : {}),
@@ -313,8 +399,12 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       });
       if (!res.ok) return errorResult(res.error);
       const changed = [
-        severity !== undefined && `severity=${severity}`,
+        parsed !== undefined && `priority=${parsed}`,
         kind !== undefined && `kind=${kind}`,
+        type !== undefined && `type=${type}`,
+        release !== undefined && `release=${release || "(cleared)"}`,
+        origin !== undefined && `origin=${origin || "(cleared)"}`,
+        waitsOn !== undefined && `waitsOn=${waitsOn || "(cleared)"}`,
         blocked !== undefined && `blocked=${blocked}`,
         blockedOn !== undefined && `blockedOn=${blockedOn ? `"${blockedOn}"` : "(cleared)"}`,
         body !== undefined && `body (${res.item.body.length} chars)`,

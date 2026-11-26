@@ -36,7 +36,7 @@
 
 import {
   type BacklogItem,
-  type BacklogSeverity,
+  type BacklogPriority,
   extractPathRefs,
   relatedBacklogItems,
 } from "./backlog";
@@ -117,7 +117,7 @@ const KIND_ORDER: GroomFindingKind[] = [
   "stale",
 ];
 
-const SEVERITY_RANK: Record<BacklogSeverity, number> = { high: 0, med: 1, low: 2 };
+const SEVERITY_RANK: Record<BacklogPriority, number> = { high: 0, medium: 1, low: 2 };
 
 function daysBetween(now: Date, iso: string): number | null {
   const then = Date.parse(iso);
@@ -197,7 +197,7 @@ export function groomBacklog(items: BacklogItem[], opts: GroomOptions): GroomRep
     }
 
     if (
-      item.severity === "high" &&
+      item.priority === "high" &&
       item.status === "open" &&
       ageCreated !== null &&
       ageCreated >= highSeverityDays
@@ -267,7 +267,7 @@ export function groomBacklog(items: BacklogItem[], opts: GroomOptions): GroomRep
   findings.sort(
     (a, b) =>
       KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) ||
-      SEVERITY_RANK[a.item.severity] - SEVERITY_RANK[b.item.severity] ||
+      SEVERITY_RANK[a.item.priority] - SEVERITY_RANK[b.item.priority] ||
       a.item.id.localeCompare(b.item.id),
   );
 
@@ -294,7 +294,7 @@ export function renderGroomReport(report: GroomReport): string {
     );
   }
   const lines = report.findings.map(
-    (f) => `- [${f.kind}] \`${f.item.id}\` (${f.item.severity}) — ${f.detail}. → ${f.suggestion}`,
+    (f) => `- [${f.kind}] \`${f.item.id}\` (${f.item.priority}) — ${f.detail}. → ${f.suggestion}`,
   );
   return (
     `Backlog groom — ${report.live} live of ${report.scanned} total, ` +
