@@ -8,6 +8,33 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-11-26 — A stored `mergedInto` could get a tab's unmerged branch deleted (ADR-0103 amendment).**
+
+  *Incident.* `marvin/tab/rel-tests-c-last-six` held two unmerged commits and was
+  deleted when an unrelated tab closed (sidecar log `worktree.session.swept
+  trigger=close swept=1`; the archive ref `refs/marvin/archive/…` pinned the tip,
+  so nothing was lost).
+
+  *Diagnosis.* `mergedInto` is derived from git, but `reconcileOne` returned
+  `{ ...record, … }` and `mergeDerived` saved the result, so a value recorded
+  while the branch sat on another ref's tip (a fast-forward, seconds before its
+  first own commit) outlived the derivation. `adoptOrphans` had adopted the
+  branch unbound; `sweepReconciled`'s `unboundMerged` rule reclaims such a record
+  once `mergedInto` is set. A real registry showed the same shape (state `ready`
+  plus a `mergedInto`, no containing ref). The stale value also fed the watch row
+  and so the Swift close decision (`mergedInto != nil` = reclaim silently).
+
+  *Fix.* `reconcileOne` drops the saved `mergedInto` before rebuilding the record.
+  The sweep re-verifies from git immediately before removing a checkout or branch
+  and, on doubt, keeps both and logs `worktree.sweep.refused` with branch and
+  reason. No new ADR: this restores ADR-0103's own rule (derived, never trusted
+  from storage); addendum added there.
+
+  *Verification.* `worktree-stale-merged-into.test.ts` reproduces the timeline in
+  a real temp repo (red before the fix: branch deleted), plus the refusal line,
+  the watch row, the unmerged-adopted case and a truly merged unbound branch
+  still swept. Swift needs no change.
+
 - **2026-11-25 — v1.1.3: supervising fourteen tabs from the app: a fleet view that tells the truth, panes on one standard, skills a brief names are checked.**
 
   *Where it came from.* A UX review of MARVIN with fourteen tabs open
