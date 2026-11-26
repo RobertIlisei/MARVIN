@@ -173,12 +173,14 @@ describe("an accepted new-tab item opens exactly one tab", () => {
 // so the item stayed open, nothing was ledgered and a second click answered
 // "in-flight". Opening returns once the turn has started.
 describe("opening a tab returns when its first turn has started, not when it ends", () => {
-  it("settles the item and ledgers the consent once while the first turn still runs; a second click is told it is settled", async () => {
+  // `hung` is a deadlock detector around a real worktree creation, so it must outlast a
+  // loaded machine, and the test timeout must outlast it.
+  it("settles the item and ledgers the consent once while the first turn still runs; a second click is told it is settled", { timeout: 30_000 }, async () => {
     let endTurn: () => void = () => {};
     runAgentImpl = () => new Promise((done) => (endTurn = () => done({ ok: true, costUsd: 0 })));
     const { projectId, consent } = await setup();
     const item = await proposeTab(projectId, { mode: "plan" });
-    const hung = new Promise<"hung">((r) => setTimeout(() => r("hung"), 2_000));
+    const hung = new Promise<"hung">((r) => setTimeout(() => r("hung"), 15_000));
     const r = await Promise.race([consent({ id: item.id, actionId: "open" }), hung]);
     expect(r).not.toBe("hung");
     const res = r as Response;
@@ -198,7 +200,7 @@ describe("opening a tab returns when its first turn has started, not when it end
     expect(body.code).not.toBe("in-flight");
     expect(body.error).toMatch(/already resolved/);
     endTurn();
-    await vi.waitFor(() => expect(getLiveTurn(outcome.marvinSessionId)?.ended ?? true).toBe(true));
+    await vi.waitFor(() => expect(getLiveTurn(outcome.marvinSessionId)?.ended ?? true).toBe(true), { timeout: 15_000 });
   });
 });
 

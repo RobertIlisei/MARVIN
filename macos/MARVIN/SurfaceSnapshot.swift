@@ -296,6 +296,24 @@ enum SurfaceSnapshot {
                         SurfaceFixtures.populateBridge(b)
                         ChatPreviewModel.shared.messages = SurfaceFixtures.transcript
                     }) { AnyView(ChatPreviewView()) },
+            // ADR-0044 addendum — the "N backlog items parked" strip before and
+            // after the sidecar says the backlog moved: same row, same height,
+            // only the number differs (the store is fed the same event the
+            // announce stream carries).
+            Surface("chat-backlog-live-261", "Chat pane: the backlog strip with 261 parked", .populated, widths: [520, 900], height: 720,
+                    configure: { b in
+                        SurfaceFixtures.populateBridge(b)
+                        ChatPreviewModel.shared.messages = SurfaceFixtures.transcript
+                        SurfaceFixtures.feedBacklog(active: 261)
+                    }) { AnyView(ChatPreviewView()) },
+            Surface("chat-backlog-live-262", "Chat pane: the same strip after one item was filed elsewhere (262 parked)", .populated,
+                    widths: [520, 900], height: 720,
+                    configure: { b in
+                        SurfaceFixtures.populateBridge(b)
+                        ChatPreviewModel.shared.messages = SurfaceFixtures.transcript
+                        SurfaceFixtures.feedBacklog(active: 261)
+                        SurfaceFixtures.feedBacklog(active: 262)
+                    }) { AnyView(ChatPreviewView()) },
             // A short window with the largest persisted composer and plan-strip
             // heights (audit C6). Proves the persisted sizes yield to the window.
             Surface("chat-pane-short", "Chat pane in a short window with the composer and plan strip persisted at their maximum heights",
@@ -552,6 +570,15 @@ enum SurfaceSnapshot {
                 return true
             }
             WorkAreaSnapshot.run(out: URL(fileURLWithPath: outPath, isDirectory: true))
+            return true
+        }
+
+        if which == "window-editor" {
+            guard let outPath = env["MARVIN_SNAPSHOT_OUT"], !outPath.isEmpty else {
+                fail("MARVIN_SNAPSHOT_OUT=<directory> is required")
+                return true
+            }
+            EditorSnapshot.run(out: URL(fileURLWithPath: outPath, isDirectory: true))
             return true
         }
 

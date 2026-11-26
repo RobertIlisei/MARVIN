@@ -430,9 +430,10 @@ MARVIN's SDK sessions inherit the user's Claude Code skills from
 bash scripts/install-skills.sh
 ```
 
-Only the four **MARVIN-adopted** skills (ports with no upstream source —
+Only the five **MARVIN-adopted** skills (ports with no upstream source —
 `pr-review`, `security-audit`, `systematic-debugging`,
-`test-driven-development`) are vendored at `.claude/skills/`. The upstream
+`test-driven-development`, `verification-before-completion`) are vendored at
+`.claude/skills/`. The upstream
 Anthropic skills are **not committed** (they're ~10 MB; open-source tidy
 2026-06-15) — `install-skills.sh` shallow-clones them from `anthropics/skills`
 on demand and copies all of them into `~/.claude/skills/` (idempotent — existing
@@ -451,15 +452,25 @@ user-level skills are left alone):
 | Productivity — docs | `doc-coauthoring`, `docx`, `pdf`, `pptx` |
 | Data | `xlsx` |
 | Engineering | `claude-api`, `mcp-builder`, `webapp-testing`, `web-artifacts-builder`, `skill-creator` |
-| Engineering — MARVIN-adopted | `test-driven-development`, `systematic-debugging`, `pr-review`, `security-audit` (ports from Superpowers + gstack; honour `REVIEW.md` at repo root) |
+| Engineering — MARVIN-adopted | `test-driven-development`, `systematic-debugging`, `verification-before-completion`, `pr-review`, `security-audit` (ports from Superpowers v7.0.2 + gstack; honour `REVIEW.md` at repo root) |
 | Operations / PM | `internal-comms` |
 | Knowledge graph | `graphify` (install separately — see `~/.claude/skills/graphify/SKILL.md`) |
 | Observability | Honeycomb skills ship as a Claude Code plugin — `/plugin install honeycomb` |
 | Built-in Claude Code | `/review` (reviews a PR), `/security-review` (security pass on pending changes), `/init` (scaffolds CLAUDE.md) — no install step |
 
-`sidecar/packages/runtime/src/personality.ts` ▸ "Skills" gives each one a
+`sidecar/packages/runtime/src/personality.ts` ▸ "Skills" gives most of them a
 one-line trigger. If you add a skill MARVIN should reach for, add its line
-there.
+there. **`verification-before-completion` deliberately has none** (2026-11-25):
+the prompt has an 8K-token budget, and a brief's `Skills: verification-before-completion`
+line is recorded and checked at the scope-met close by
+[ADR-0138](./docs/decisions/0138-skills-a-brief-names-are-recorded-and-checked-at-the-close.md)
+at no prompt cost. The three Superpowers ports (`test-driven-development`,
+`systematic-debugging`, `verification-before-completion`) were refreshed
+against Superpowers v7.0.2 on the same day; the rest of Superpowers
+(subagent-driven-development, executing-plans, dispatching-parallel-agents,
+using-git-worktrees, finishing-a-development-branch, requesting-code-review,
+brainstorming, the session-start bootstrap) is **not adopted**: each collides
+with Golden Rule 1 or duplicates a MARVIN gate.
 
 **MARVIN's own skills** (`marvin:adr`, `marvin:graph-tools`, `marvin:browser`,
 `marvin:skill-audit`, `marvin:workflow-audit`, `marvin:greenfield`,

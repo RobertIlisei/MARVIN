@@ -512,9 +512,16 @@ import SwiftUI
         let fills = mode == .chatFills
         return HStack(spacing: 0) {
             webIsland
+                // NOT `.clipped()` / `.clipShape` / `.mask`. A clip here strips the safe
+                // area from the column's AppKit split view (measured 25.11.2026,
+                // `window-editor`): the editor's tab bar and file header, 61 pt, were
+                // laid out under the 52 pt title bar, and the editor read as having lost
+                // its tabs and its Markdown toggle. The collapsed column is hidden with
+                // opacity instead, which keeps the safe area; `EditorSourceGuard` fails
+                // the build on a clip here.
                 .frame(minWidth: Self.editorMinWidth)
                 .frame(minWidth: fills ? 0 : Self.editorMinWidth, maxWidth: fills ? 0 : .infinity)
-                .clipped()
+                .opacity(fills ? 0 : 1)
                 .allowsHitTesting(!fills)
                 .accessibilityHidden(fills)
             chatDivider

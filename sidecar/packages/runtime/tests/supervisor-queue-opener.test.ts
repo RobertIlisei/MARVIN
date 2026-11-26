@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { slugifyWorkDir } from "../src/projects";
 import { readLedger, supervisorDir } from "../src/supervisor-ledger";
@@ -362,7 +362,12 @@ describe("invariant 7 — `after` waits for the DERIVED merged state", () => {
 });
 
 describe("woken by the project event stream, never a timer", () => {
+  // A negative ("B still waits") needs a quiet window, and a short one only
+  // makes it a weaker check on a loaded machine. A positive must not guess one:
+  // the opener's async chain took longer than 30 ms under load (2026-11-25), so
+  // wait for the entry to be opened, however long that takes, up to the poll's limit.
   const settle = () => new Promise((r) => setTimeout(r, 30));
+  const opened = (f: Fake, n: number) => vi.waitFor(() => expect(f.opened.length).toBeGreaterThanOrEqual(n), { timeout: 15_000 });
 
   it("an approval opens the entry; a closing tab frees the slot for the next; the opener's own bookkeeping wakes nothing", async () => {
     const f = fake();
@@ -370,14 +375,14 @@ describe("woken by the project event stream, never a timer", () => {
     o.start(subscribeProjectEvents);
     try {
       approve(proposal("A"), proposal("B"));
-      await settle();
+      await opened(f, 1);
       expect(f.opened.map((e) => e.id)).toEqual(["A"]);
       // B waits for a slot: nothing else happens until an event says one may have freed.
       await settle();
       expect(f.opened.map((e) => e.id)).toEqual(["A"]);
       f.tabs.n = 0;
       announceProjectEvent({ event: "session.closed", data: { marvinSessionId: "tab-A", projectId: "proj" } });
-      await settle();
+      await opened(f, 2);
       expect(f.opened.map((e) => e.id)).toEqual(["A", "B"]);
     } finally {
       o.stop();
@@ -391,11 +396,11 @@ describe("woken by the project event stream, never a timer", () => {
     const o = new QueueOpener(f.deps);
     o.start(subscribeProjectEvents);
     try {
-      await settle();
+      await opened(f, 1);
       expect(f.opened.map((e) => e.id)).toEqual(["A"]);
       f.merged.add("marvin/tab/A");
       announceProjectEvent({ event: "turn.ended", data: { marvinSessionId: "other", projectId: "proj", turnId: "t", outcome: "completed" } });
-      await settle();
+      await opened(f, 2);
       expect(f.opened.map((e) => e.id)).toEqual(["A", "B"]);
     } finally {
       o.stop();

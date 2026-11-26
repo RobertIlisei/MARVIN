@@ -83,11 +83,26 @@ final class BacklogService {
         return try JSONDecoder().decode(ListResponse.self, from: data).items
     }
 
-    /// Count of active items — drives the tray chip. Includes `provisional`
-    /// (ADR-0047) so auto-captured items nudge the user to review them.
-    func openCount(workDir: String) async -> Int {
-        guard let items = try? await fetch(workDir: workDir) else { return 0 }
-        return items.filter { $0.status == "provisional" || $0.status == "open" || $0.status == "doing" }.count
+    /// The project's counts by status — `BacklogLiveStore`'s re-read, for the
+    /// moments its event stream cannot be trusted (the window coming back to
+    /// the front, a slow safety net). The sidecar answers from an incremental
+    /// counter, not a parse of every item. nil on any failure: the store keeps
+    /// the numbers it has.
+    func counts(workDir: String) async -> BacklogStatusCounts? {
+        var comps = URLComponents(
+            url: baseURL.appendingPathComponent("api/backlog/counts"),
+            resolvingAgainstBaseURL: false
+        )!
+        comps.queryItems = [URLQueryItem(name: "workDir", value: workDir)]
+        guard let url = comps.url else { return nil }
+        var req = URLRequest(url: url)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        struct Wire: Decodable { let counts: BacklogStatusCounts }
+        guard let (data, resp) = try? await session.data(for: req),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let wire = try? JSONDecoder().decode(Wire.self, from: data) else { return nil }
+        return wire.counts
     }
 
     /// Review the backlog (ADR-0063) and return what looks wrong.

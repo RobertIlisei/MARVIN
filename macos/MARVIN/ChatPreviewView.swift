@@ -577,18 +577,16 @@ final class ChatPreviewModel {
         runningJobsCheckedAt = Date()
     }
 
-    /// ADR-0044 — count of open+doing backlog items; drives the tray chip.
-    /// Refreshed on session load + turn completion (cheap GET).
-    private(set) var backlogOpenCount: Int = 0
-    func refreshBacklogCount() {
-        guard let wd = MarvinBridge.shared.projectWorkDir else {
-            backlogOpenCount = 0
-            return
-        }
-        Task { @MainActor in
-            backlogOpenCount = await BacklogService.shared.openCount(workDir: wd)
-        }
-    }
+    /// ADR-0044 — parked backlog items (provisional + open + doing); drives the
+    /// tray chip. A READ of the project's one store (ADR-0044 addendum,
+    /// 2026-11-25): this used to be a copy taken when the session was created
+    /// and never refreshed, so the chip kept its old number while other tabs
+    /// filed and resolved items all day. The sidecar pushes every change to
+    /// the store; nothing here captures it.
+    var backlogOpenCount: Int { BacklogLiveStore.shared.counts.active }
+    /// A poke for the moment this tab itself wrote the backlog (a promote, a
+    /// park): ask for the numbers now rather than waiting out the debounce.
+    func refreshBacklogCount() { BacklogLiveStore.shared.refresh() }
 
     /// The outcome of an action whose own surface disappears when it
     /// finishes — closing a tab is the only one today.
@@ -1250,7 +1248,6 @@ final class ChatPreviewModel {
         tailingServerTurn = false
         backgroundJobRunning = false
         runningJobs = []
-        backlogOpenCount = 0  // ADR-0044
         messages.removeAll()
         pendingConfirms.removeAll()
         resolvedConfirms.removeAll()
@@ -1263,12 +1260,8 @@ final class ChatPreviewModel {
         isHydrating = false
         resetSessionStrips()
         // ADR-0044 — the backlog is PROJECT-scoped, not session-scoped: it
-        // survives a new chat. Zeroing the count above hides the tray chip; a
-        // new session isn't guaranteed to hydrate() (fresh chats have no
-        // transcript) and the turn-completion refresh only fires after the
-        // first message — so without this the parked items stay invisible
-        // until the user sends something. Re-light immediately.
-        refreshBacklogCount()
+        // survives a new chat, and so does its count (the store's, not this
+        // session's). Nothing to re-light here.
     }
 
     /// Dismiss the plan checklist (the ✕ on the strip). ADR-0046 — drops only
@@ -4021,7 +4014,7 @@ final class ChatPreviewModel {
             let job = jobStatusItem
             rows.append(TrayEntry(.job, job.line, attention: job.attention, backgroundJobChip))
         }
-        if model.backlogOpenCount > 0 {
+        if BacklogSurface.showsChip(active: model.backlogOpenCount) {
             rows.append(TrayEntry(.backlog, ChatStatusStrip.backlogLine(model.backlogOpenCount), backlogChip))
         }
         if model.resetSdkOnNextSend {
@@ -4735,7 +4728,7 @@ final class ChatPreviewModel {
             Image(systemName: "tray.full")
                 .font(.system(size: 10))
                 .foregroundStyle(.blue)
-            Text("\(model.backlogOpenCount) backlog item\(model.backlogOpenCount == 1 ? "" : "s") parked")
+            Text(BacklogSurface.chipText(active: model.backlogOpenCount))
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
             Spacer()

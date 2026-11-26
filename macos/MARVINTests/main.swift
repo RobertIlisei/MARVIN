@@ -7515,6 +7515,146 @@ runner.suite("chat-status-strip") {
     }
 }
 
+// MARK: - the backlog count, live (ADR-0044 addendum, 2026-11-25)
+//
+// The chat's "N backlog items parked" strip read its number once and never
+// again. One store now holds the project's counts; the sidecar says when they
+// move (`backlog.changed`), and every surface reads the store.
+
+private func backlogWire(_ rev: Int, _ reason: String, _ p: Int, _ o: Int, _ d: Int, _ done: Int, _ x: Int, _ b: Int) -> Data {
+    Data(#"{"projectId":"p1","revision":\#(rev),"reason":"\#(reason)","counts":{"provisional":\#(p),"open":\#(o),"doing":\#(d),"done":\#(done),"dismissed":\#(x),"blocked":\#(b),"active":\#(p + o + d)}}"#.utf8)
+}
+
+runner.suite("backlog live count") {
+    runner.test("the event decodes with every status and the blocked flag") {
+        let e = BacklogFeedEvent.decode(name: "backlog.changed", data: backlogWire(7, "change", 2, 5, 1, 10, 3, 4))
+        runner.expect(e, equals: .changed(projectId: "p1", revision: 7, isSnapshot: false,
+                                          counts: BacklogStatusCounts(provisional: 2, open: 5, doing: 1, done: 10, dismissed: 3, blocked: 4)), "change")
+        let s = BacklogFeedEvent.decode(name: "backlog.changed", data: backlogWire(0, "snapshot", 0, 1, 0, 0, 0, 0))
+        runner.expect(s, equals: .changed(projectId: "p1", revision: 0, isSnapshot: true,
+                                          counts: BacklogStatusCounts(open: 1)), "snapshot")
+        runner.expect(BacklogFeedEvent.decode(name: "turn.ended", data: Data("{}".utf8)) == nil, "not ours")
+        runner.expect(BacklogFeedEvent.decode(name: "backlog.changed", data: Data("{".utf8)) == nil, "malformed")
+        runner.expect(BacklogFeedEvent.decode(name: "backlog.changed", data: Data(#"{"projectId":"p","revision":1,"reason":"change","counts":{"open":2}}"#.utf8)),
+                      equals: .changed(projectId: "p", revision: 1, isSnapshot: false, counts: BacklogStatusCounts(open: 2)), "a sidecar that sends fewer fields reads the rest as zero")
+    }
+
+    runner.test("a frame exactly as the sidecar sent it (captured from the real announce route, 2026-11-25) lands in the state") {
+        let frame = #"{"projectId":"private-var-tmp-proj","revision":3,"reason":"change","counts":{"provisional":1,"open":3,"doing":0,"done":1,"dismissed":0,"blocked":0,"active":4}}"#
+        var st = BacklogLiveState()
+        guard let e = BacklogFeedEvent.decode(name: "backlog.changed", data: Data(frame.utf8)) else {
+            runner.expect(false, "the captured frame decodes")
+            return
+        }
+        runner.expect(st.apply(e, project: "private-var-tmp-proj"), "applies")
+        runner.expect(st.counts.active, equals: 4, "the strip's number")
+        runner.expect(st.counts.scopeCounts, equals: BacklogCounts(open: 3, review: 1, resolved: 1), "the window's scopes")
+    }
+
+    runner.test("active is what the strip shows: provisional + open + doing, never the resolved") {
+        let c = BacklogStatusCounts(provisional: 2, open: 5, doing: 1, done: 200, dismissed: 50, blocked: 9)
+        runner.expect(c.active, equals: 8, "active")
+        runner.expect(BacklogStatusCounts.zero.active, equals: 0, "zero")
+    }
+
+    runner.test("the window's scope counts come from the same numbers") {
+        let c = BacklogStatusCounts(provisional: 2, open: 5, doing: 1, done: 10, dismissed: 3, blocked: 4)
+        runner.expect(c.scopeCounts, equals: BacklogCounts(open: 6, review: 2, resolved: 13), "open = open + doing; review = provisional; resolved = done + dismissed")
+        runner.expect(c.scopeCounts.open + c.scopeCounts.review, equals: c.active, "the two live scopes add up to the strip's number")
+    }
+
+    runner.test("a change replaces the counts and ticks the generation; an older one is dropped") {
+        var st = BacklogLiveState()
+        runner.expect(!st.hasData, "nothing yet")
+        let a = st.apply(.changed(projectId: "p1", revision: 3, isSnapshot: true, counts: BacklogStatusCounts(open: 4)), project: "p1")
+        runner.expect(a && st.counts.active == 4 && st.hasData, "snapshot applies")
+        let g1 = st.generation
+        runner.expect(st.apply(.changed(projectId: "p1", revision: 4, isSnapshot: false, counts: BacklogStatusCounts(open: 9)), project: "p1"), "newer change applies")
+        runner.expect(st.counts.active, equals: 9, "nine")
+        runner.expect(st.generation, equals: g1 + 1, "views watching the generation reload")
+        runner.expect(!st.apply(.changed(projectId: "p1", revision: 4, isSnapshot: false, counts: BacklogStatusCounts(open: 1)), project: "p1"), "the same revision is not a new change")
+        runner.expect(!st.apply(.changed(projectId: "p1", revision: 2, isSnapshot: false, counts: BacklogStatusCounts(open: 1)), project: "p1"), "an older one is dropped")
+        runner.expect(st.counts.active, equals: 9, "still nine")
+        runner.expect(st.generation, equals: g1 + 1, "no tick for a dropped event")
+    }
+
+    runner.test("a snapshot always applies and re-bases the revision: a restarted sidecar counts from zero again") {
+        var st = BacklogLiveState()
+        _ = st.apply(.changed(projectId: "p1", revision: 41, isSnapshot: false, counts: BacklogStatusCounts(open: 7)), project: "p1")
+        runner.expect(st.apply(.changed(projectId: "p1", revision: 0, isSnapshot: true, counts: BacklogStatusCounts(open: 3)), project: "p1"), "snapshot after a restart")
+        runner.expect(st.counts.active, equals: 3, "three")
+        runner.expect(st.revision, equals: 0, "re-based")
+        runner.expect(st.apply(.changed(projectId: "p1", revision: 1, isSnapshot: false, counts: BacklogStatusCounts(open: 4)), project: "p1"), "the first change of the new sidecar is not mistaken for an old one")
+        runner.expect(st.counts.active, equals: 4, "four")
+    }
+
+    runner.test("another project's event is ignored") {
+        var st = BacklogLiveState()
+        runner.expect(!st.apply(.changed(projectId: "other", revision: 1, isSnapshot: false, counts: BacklogStatusCounts(open: 99)), project: "p1"), "wrong project")
+        runner.expect(st.counts.active, equals: 0, "untouched")
+        runner.expect(!st.apply(.changed(projectId: "p1", revision: 1, isSnapshot: false, counts: BacklogStatusCounts(open: 5)), project: nil), "no project loaded")
+    }
+
+    runner.test("a plain re-read (window back to the front) replaces the numbers whatever their revision") {
+        var st = BacklogLiveState()
+        _ = st.apply(.changed(projectId: "p1", revision: 41, isSnapshot: false, counts: BacklogStatusCounts(open: 7)), project: "p1")
+        let g = st.generation
+        runner.expect(st.adoptRead(BacklogStatusCounts(open: 2)), "differs")
+        runner.expect(st.counts.active, equals: 2, "two")
+        runner.expect(st.generation, equals: g + 1, "ticks")
+        runner.expect(!st.adoptRead(BacklogStatusCounts(open: 2)), "the same numbers are not a change")
+        runner.expect(st.generation, equals: g + 1, "no tick")
+    }
+
+    runner.test("reset forgets everything when the project changes") {
+        var st = BacklogLiveState()
+        _ = st.apply(.changed(projectId: "p1", revision: 3, isSnapshot: true, counts: BacklogStatusCounts(open: 4)), project: "p1")
+        st.reset()
+        runner.expect(!st.hasData && st.counts == .zero && st.revision == -1, "empty")
+    }
+
+    runner.test("what each surface says for a state") {
+        runner.expect(BacklogSurface.chipText(active: 261), equals: "261 backlog items parked", "the strip's wording is unchanged")
+        runner.expect(BacklogSurface.chipText(active: 1), equals: "1 backlog item parked", "singular")
+        runner.expect(!BacklogSurface.showsChip(active: 0), "zero: no strip row, as before")
+        runner.expect(BacklogSurface.showsChip(active: 1), "one")
+        runner.expect(BacklogSurface.windowSubtitle(BacklogCounts(open: 6, review: 2, resolved: 13)), equals: "6 open \u{B7} 2 to review", "window header")
+        runner.expect(BacklogSurface.windowSubtitle(BacklogCounts(open: 6, review: 0, resolved: 13)), equals: "6 open", "nothing to review")
+    }
+
+    runner.test("a burst of events reduces to the last one's numbers") {
+        var st = BacklogLiveState()
+        for (i, n) in [3, 4, 5, 4, 6].enumerated() {
+            _ = st.apply(.changed(projectId: "p1", revision: i + 1, isSnapshot: false, counts: BacklogStatusCounts(open: n)), project: "p1")
+        }
+        runner.expect(st.counts.active, equals: 6, "six")
+        runner.expect(st.revision, equals: 5, "revision")
+    }
+}
+
+runner.suite("backlog count source guard") {
+    let macosDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().path
+    runner.test("no view or model keeps its own copy of the backlog count") {
+        let hits = BacklogCountSourceScan.violations(in: BacklogCountSourceScan.loadSources(macosDir: macosDir))
+        runner.expect(hits.isEmpty, "a copy of the count outside BacklogLiveStore: \(hits.joined(separator: "; "))")
+    }
+    runner.test("the guard catches the shapes that caused the staleness") {
+        func hits(_ text: String, file: String = "Fake.swift") -> [String] { BacklogCountSourceScan.violations(in: [file: text]) }
+        runner.expect(!hits("    private(set) var backlogOpenCount: Int = 0").isEmpty, "a stored count")
+        runner.expect(!hits("    backlogOpenCount = await BacklogService.shared.openCount(workDir: wd)").isEmpty, "an assignment from a one-time read")
+        runner.expect(!hits("    let n = await BacklogService.shared.openCount(workDir: wd)").isEmpty, "a count read through the service")
+        runner.expect(!hits("    @State private var parkedBacklogCount = 0").isEmpty, "a @State copy named for the backlog")
+        runner.expect(!hits("    let items = try await BacklogService.shared.fetch(workDir: wd)\n    Text(\"\\(items.count) backlog items parked\")").isEmpty, "a count derived from a fetched list in a view")
+        runner.expect(hits("    var backlogOpenCount: Int { BacklogLiveStore.shared.counts.active }").isEmpty, "a computed read of the store is the right shape")
+        runner.expect(hits("    private(set) var counts = BacklogStatusCounts.zero", file: "BacklogLiveStore.swift").isEmpty, "the store itself holds it")
+        runner.expect(hits("    if model.backlogOpenCount > 0 { }").isEmpty, "comparing is reading")
+        runner.expect(hits("    let n = BacklogLiveStore.shared.counts.active").isEmpty, "reading the store")
+        runner.expect(hits("    keywords: [\"todo\", \"parked\", \"backlog\"]").isEmpty, "the word alone is not a count")
+        runner.expect(hits("    headline: \"Nothing parked\" // backlog").isEmpty, "a headline without a number")
+        runner.expect(hits("    // backlogOpenCount = 0 used to live here").isEmpty, "a comment")
+    }
+}
+
 runner.suite("scope-met-bar") {
     runner.test("Mark reviewed is the primary action; Review changes sits beside it only when there is a diff") {
         let withDiff = ScopeMetBar.layout(hasChanges: true)
@@ -8460,6 +8600,354 @@ runner.suite("sessions-groups-r3") {
         runner.expect(SessionFleet.summary(c, detail: .full).contains("2 failed"), "and the failures, which the badge also counts")
         runner.expect(SessionFleet.badge(SessionFleet.counts([FleetItem(state: .finished, hasTab: false)], now: now)) == nil, "a tabless finished session alone lights nothing")
     }
+}
+
+// MARK: - editor area regressions (owner, 25.11.2026: tab bar, Markdown preview toggle, header gone)
+//
+// The W-11 work-area change put `.clipped()` on the editor column. Clipping an
+// AppKit-backed view (the `VSplitView` inside it) drops the safe area SwiftUI hands
+// its content, so the tab bar and the file header - 61 pt of chrome - were laid
+// out UNDER the 52 pt title bar and the editor looked chromeless. Nothing in the
+// code had been deleted, which is why a read of the source found nothing. These
+// tests pin the decisions as values and the source shape that lost them.
+
+private let editorMacosDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().path
+
+runner.suite("editor area: Markdown preview toggle") {
+    runner.test("only Markdown files have a preview") {
+        runner.expect(MarkdownPreviewToggle.isPreviewable("/p/docs/0616-adr.md"), ".md")
+        runner.expect(MarkdownPreviewToggle.isPreviewable("/p/README.MARKDOWN"), "case does not matter")
+        runner.expect(MarkdownPreviewToggle.isPreviewable("/p/page.mdx"), ".mdx")
+        runner.expect(!MarkdownPreviewToggle.isPreviewable("/p/Sources/App.swift"), "source has none")
+        runner.expect(!MarkdownPreviewToggle.isPreviewable("/p/notes"), "no extension")
+    }
+    runner.test("a Markdown file opens as source, and a toggle flips only that file") {
+        var previewing: Set<String> = []
+        runner.expect(MarkdownPreviewToggle.mode(for: "/p/a.md", previewing: previewing), equals: .source, "the default is the source")
+        MarkdownPreviewToggle.toggle("/p/a.md", in: &previewing)
+        runner.expect(MarkdownPreviewToggle.mode(for: "/p/a.md", previewing: previewing), equals: .preview, "after one toggle")
+        runner.expect(MarkdownPreviewToggle.mode(for: "/p/b.md", previewing: previewing), equals: .source, "another file is untouched")
+        MarkdownPreviewToggle.toggle("/p/a.md", in: &previewing)
+        runner.expect(MarkdownPreviewToggle.mode(for: "/p/a.md", previewing: previewing), equals: .source, "and back")
+    }
+    runner.test("a file with no preview is never previewed, whatever the set holds") {
+        runner.expect(MarkdownPreviewToggle.mode(for: "/p/a.swift", previewing: ["/p/a.swift"]), equals: .source, "no preview for source")
+        var previewing: Set<String> = []
+        MarkdownPreviewToggle.toggle("/p/a.swift", in: &previewing)
+        runner.expect(previewing.isEmpty, "toggling a non-Markdown file changes nothing")
+    }
+    runner.test("the control names the action it will perform, not the state it is in") {
+        let toSource = MarkdownPreviewToggle.control(for: .preview)
+        runner.expect(toSource.title, equals: "Show Source", "showing the preview, the button goes to the source")
+        runner.expect(toSource.accessibilityLabel, equals: "Show Markdown source", "spoken the same way")
+        runner.expect(toSource.help.contains("⇧⌘V"), "and the key is in the tooltip")
+        let toPreview = MarkdownPreviewToggle.control(for: .source)
+        runner.expect(toPreview.title, equals: "Preview", "showing the source, the button goes to the preview")
+        runner.expect(toPreview.accessibilityLabel, equals: "Preview rendered Markdown", "spoken the same way")
+        runner.expect(toPreview.systemImage != toSource.systemImage, "the icon changes with the action")
+    }
+}
+
+runner.suite("editor area: tabs") {
+    let tabs = ["/p/a.swift", "/p/b.md", "/p/c.go"]
+    runner.test("closing the selected tab selects the one that took its place, else the one before") {
+        runner.expect(EditorTabs.selectionAfterClosing("/p/b.md", in: tabs, selected: "/p/b.md"), equals: "/p/c.go", "the next tab")
+        runner.expect(EditorTabs.selectionAfterClosing("/p/c.go", in: tabs, selected: "/p/c.go"), equals: "/p/b.md", "the last one falls back to the previous")
+        runner.expect(EditorTabs.selectionAfterClosing("/p/a.swift", in: ["/p/a.swift"], selected: "/p/a.swift"), equals: nil, "the only tab leaves none")
+    }
+    runner.test("closing a tab that is not selected keeps the selection") {
+        runner.expect(EditorTabs.selectionAfterClosing("/p/a.swift", in: tabs, selected: "/p/c.go"), equals: "/p/c.go", "selection stays")
+        runner.expect(EditorTabs.selectionAfterClosing("/p/zzz", in: tabs, selected: "/p/c.go"), equals: "/p/c.go", "an unknown path changes nothing")
+    }
+}
+
+runner.suite("editor area: tab width, truncation and equal names") {
+    let slug = "0659-a-delegated-session-reads-the-farm-years-uploaded-documents-through-a-document-namedinterface-that-applies-the-callers-own-read-gate-the-ledger-and-receipt-proofs-stay-with-the-administrator-b87.md"
+    let root = "/w/proj"
+    let long = "\(root)/docs/adr/\(slug)"
+    let short = "\(root)/docs/adr/14ebe4.md"
+    let ellipsis = "\u{2026}"
+
+    runner.test("a name that fits is left alone") {
+        runner.expect(EditorTabTitle.shorten("main.swift", maxChars: 12), equals: "main.swift", "fits")
+        runner.expect(EditorTabTitle.shorten("main.swift", maxChars: 10), equals: "main.swift", "fits exactly")
+    }
+    runner.test("a long name is cut in the middle: the start and the extension survive") {
+        let s = EditorTabTitle.shorten(slug, maxChars: 19)
+        runner.expect(s.count, equals: 19, "exactly the budget")
+        runner.expect(s.hasPrefix("0659-a-deleg"), "the distinguishing start is kept: \(s)")
+        runner.expect(s.hasSuffix("87.md"), "the extension and the last two characters are kept: \(s)")
+        runner.expect(s.filter { String($0) == ellipsis }.count, equals: 1, "one ellipsis")
+        runner.expect(!s.hasPrefix(ellipsis), "never cut from the front")
+    }
+    runner.test("a name without an extension and a hidden file are cut the same way") {
+        let a = EditorTabTitle.shorten("Dockerfile.production-build-image", maxChars: 14)
+        runner.expect(a.count, equals: 14, "budget kept: \(a)")
+        runner.expect(a.hasPrefix("Dockerf") || a.hasPrefix("Dockerfi"), "start kept: \(a)")
+        runner.expect(a.hasSuffix("image"), "an extension-less name keeps its last characters: \(a)")
+        let b = EditorTabTitle.shorten(".gitignore-template-extra", maxChars: 12)
+        runner.expect(b.count, equals: 12, "a dotfile keeps the budget: \(b)")
+        runner.expect(b.hasPrefix(".gitig"), "and its start: \(b)")
+        let c = EditorTabTitle.shorten("foo.test.integration.ts", maxChars: 14)
+        runner.expect(c.hasSuffix(".ts"), "the last extension is kept: \(c)")
+    }
+    runner.test("a very small budget still shows the start and says it was cut") {
+        let s = EditorTabTitle.shorten(slug, maxChars: 5)
+        runner.expect(s.count, equals: 5, "budget kept")
+        runner.expect(s.contains(ellipsis), "marked as cut: \(s)")
+        runner.expect(s.hasPrefix("0659"), "start kept: \(s)")
+        runner.expect(EditorTabTitle.shorten(slug, maxChars: 0), equals: ellipsis, "nothing to spend")
+    }
+    runner.test("a name is never longer than its budget, whatever the budget") {
+        for n in 1...60 {
+            let s = EditorTabTitle.shorten(slug, maxChars: n)
+            runner.expect(s.count <= n, "budget \(n) got \(s.count)")
+        }
+    }
+
+    runner.test("equal base names are told apart by their nearest folder, deeper only when needed") {
+        let q = EditorTabQualifiers.qualifiers(for: ["/w/proj/a/index.ts", "/w/proj/b/index.ts", "/w/proj/c/other.ts"], root: root)
+        runner.expect(q["/w/proj/a/index.ts"], equals: "a", "parent folder")
+        runner.expect(q["/w/proj/b/index.ts"], equals: "b", "parent folder")
+        runner.expect(q["/w/proj/c/other.ts"] == nil, "a unique name needs no qualifier")
+        let deep = EditorTabQualifiers.qualifiers(for: ["/w/proj/x/api/index.ts", "/w/proj/y/api/index.ts"], root: root)
+        runner.expect(deep["/w/proj/x/api/index.ts"], equals: "x/api", "the same parent name goes one level up")
+        runner.expect(deep["/w/proj/y/api/index.ts"], equals: "y/api", "both sides")
+        let top = EditorTabQualifiers.qualifiers(for: ["/w/proj/index.ts", "/w/proj/src/index.ts"], root: root)
+        runner.expect(top["/w/proj/index.ts"], equals: "/", "a file at the project root says so")
+        runner.expect(top["/w/proj/src/index.ts"], equals: "src", "the other by its folder")
+        let outside = EditorTabQualifiers.qualifiers(for: ["/etc/hosts", "/w/proj/hosts"], root: root)
+        runner.expect(outside["/etc/hosts"], equals: "etc", "outside the project, the folder it is in")
+    }
+
+    runner.test("the label keeps the name and spends what is left on the folder, or shows it short") {
+        let roomy = EditorTabTitle.fit(name: "index.ts", qualifier: "api", budget: 19)
+        runner.expect(roomy, equals: EditorTabTitle.Fit(name: "index.ts", qualifier: "api"), "room for both")
+        let tight = EditorTabTitle.fit(name: "index.ts", qualifier: "api/v2/handlers", budget: 16)
+        runner.expect(tight.name, equals: "index.ts", "the name is whole")
+        runner.expect((tight.qualifier ?? "").count <= 7, "the folder takes what is left: \(tight.qualifier ?? "nil")")
+        let none = EditorTabTitle.fit(name: "a-longer-file-name.ts", qualifier: "api", budget: 11)
+        runner.expect(none.qualifier != nil && (none.name.count + 1 + (none.qualifier ?? "").count) <= 11, "both fit the budget: \(none)")
+        let noQ = EditorTabTitle.fit(name: slug, qualifier: nil, budget: 19)
+        runner.expect(noQ.name.count, equals: 19, "no folder: the name gets everything")
+        runner.expect(noQ.qualifier == nil, "and no folder is invented")
+    }
+
+    runner.test("one long name never takes the bar: its tab stops at the maximum") {
+        let plan = EditorTabPlan.make(paths: [long, short], root: root, dirty: [], available: 1250)
+        runner.expect(plan.tabs.count, equals: 2, "two tabs")
+        runner.expect(plan.tabs[0].width <= EditorTabWidths.maxWidth, "the long tab is at most the maximum: \(plan.tabs[0].width)")
+        runner.expect(plan.tabs[0].width, equals: EditorTabWidths.maxWidth, "and uses all of it")
+        runner.expect(plan.tabs[1].width >= EditorTabWidths.minWidth, "the short tab is not squeezed below the minimum")
+        runner.expect(plan.tabs[1].shownName, equals: "14ebe4.md", "its name is whole, not cut from the front")
+        runner.expect(plan.tabs[0].shownName.hasPrefix("0659-a-deleg") && plan.tabs[0].shownName.hasSuffix(".md"), "the long name keeps start and extension")
+        runner.expect(!plan.overflows, "two tabs fit in 1250")
+    }
+    runner.test("the tooltip and the spoken label carry the whole name and the project path") {
+        let plan = EditorTabPlan.make(paths: [long], root: root, dirty: [], available: 900)
+        runner.expect(plan.tabs[0].help, equals: "docs/adr/\(slug)", "tooltip: the path from the project root")
+        runner.expect(plan.tabs[0].accessibilityLabel.contains(slug), "spoken: the whole name")
+        runner.expect(plan.tabs[0].accessibilityLabel.contains("docs/adr"), "and where it is")
+        runner.expect(plan.tabs[0].fileName, equals: slug, "the file name stays whole in the plan")
+    }
+
+    runner.test("tabs that fit keep their natural width; short names are not stretched to the maximum") {
+        let w = EditorTabWidths.distribute(ideals: [150, 160, 170], available: 1000)
+        runner.expect(w.widths, equals: [150, 160, 170], "unchanged")
+        runner.expect(!w.overflows, "fits")
+        let tiny = EditorTabWidths.distribute(ideals: [10, 400], available: 1000)
+        runner.expect(tiny.widths, equals: [EditorTabWidths.minWidth, EditorTabWidths.maxWidth], "clamped to the minimum and the maximum")
+    }
+    runner.test("when they do not fit, the widest give way first and the short ones keep what they have") {
+        let lo = EditorTabWidths.minWidth, hi = EditorTabWidths.maxWidth, gap = EditorTabWidths.spacing
+        let avail = 2 * hi + lo + 2 * gap - 40
+        let w = EditorTabWidths.distribute(ideals: [hi, hi, lo], available: avail)
+        runner.expect(w.widths[2], equals: lo, "the short one is untouched")
+        runner.expect(w.widths[0], equals: w.widths[1], "the two long ones share the loss evenly")
+        runner.expect(w.widths[0] < hi && w.widths[0] >= lo, "and both shrank: \(w.widths[0])")
+        let used = w.widths.reduce(0, +) + 2 * gap
+        runner.expect(used <= avail && used > avail - 3, "the bar is filled, not under-used: \(used) of \(avail)")
+        runner.expect(!w.overflows, "no scrolling yet")
+    }
+    runner.test("only below the minimum does the bar overflow") {
+        let lo = EditorTabWidths.minWidth, gap = EditorTabWidths.spacing
+        let ideals = [CGFloat](repeating: EditorTabWidths.maxWidth, count: 8)
+        let exact = EditorTabWidths.distribute(ideals: ideals, available: 8 * lo + 7 * gap)
+        runner.expect(!exact.overflows, "eight tabs at exactly the minimum fit")
+        runner.expect(exact.widths.allSatisfy { $0 == lo }, "all at the minimum")
+        let over = EditorTabWidths.distribute(ideals: ideals, available: 8 * lo + 7 * gap - 1)
+        runner.expect(over.overflows, "one point short: scroll")
+        runner.expect(over.widths.allSatisfy { $0 == lo }, "never below the minimum")
+        runner.expect(EditorTabWidths.distribute(ideals: [], available: 500).widths.isEmpty, "no tabs, no widths")
+        runner.expect(!EditorTabWidths.distribute(ideals: [], available: 500).overflows, "and nothing overflows")
+    }
+    runner.test("widths always honour the bounds, the total and the order (400 random bars)") {
+        var seed: UInt64 = 0x9E3779B97F4A7C15
+        func next() -> Double {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Double(seed >> 33) / Double(1 << 31)
+        }
+        var bad = 0
+        for _ in 0..<400 {
+            let n = 1 + Int(next() * 12)
+            let ideals = (0..<n).map { _ in CGFloat(40 + next() * 400) }
+            let avail = CGFloat(200 + next() * 1400)
+            let r = EditorTabWidths.distribute(ideals: ideals, available: avail)
+            let total = r.widths.reduce(0, +) + CGFloat(n - 1) * EditorTabWidths.spacing
+            let bounded = r.widths.allSatisfy { $0 >= EditorTabWidths.minWidth && $0 <= EditorTabWidths.maxWidth }
+            let fitsOrOverflows = r.overflows ? total > avail : total <= avail + 0.001
+            var ordered = true
+            for i in 0..<n { for j in 0..<n where ideals[i] > ideals[j] && r.widths[i] + 0.001 < r.widths[j] { ordered = false } }
+            if !(bounded && fitsOrOverflows && ordered && r.widths.count == n) { bad += 1 }
+        }
+        runner.expect(bad, equals: 0, "every random bar obeyed the rules")
+    }
+
+    runner.test("six tabs of mixed length in a narrow bar all stay readable; a dirty tab keeps room for its dot") {
+        let paths = ["\(root)/a.go", "\(root)/docs/adr/\(slug)", "\(root)/src/Main.swift", "\(root)/README.md",
+                     "\(root)/internal/service/handler_test.go", "\(root)/docs/0616-ledger-retention.md"]
+        let narrow = EditorTabPlan.make(paths: paths, root: root, dirty: [paths[2]], available: 980 - 330)
+        runner.expect(narrow.tabs.count, equals: 6, "six tabs")
+        runner.expect(narrow.tabs.allSatisfy { $0.width >= EditorTabWidths.minWidth && $0.width <= EditorTabWidths.maxWidth }, "all within the bounds")
+        runner.expect(narrow.tabs[0].shownName, equals: "a.go", "the short name is whole")
+        runner.expect(narrow.tabs[3].shownName, equals: "README.md", "so is README.md")
+        let wide = EditorTabPlan.make(paths: paths, root: root, dirty: [], available: 1500 - 330)
+        runner.expect(wide.tabs.map { $0.width }.reduce(0, +) <= 1500 - 330, "never wider than the bar")
+        let dirty = EditorTabPlan.make(paths: [paths[4]], root: root, dirty: [paths[4]], available: 600)
+        let clean = EditorTabPlan.make(paths: [paths[4]], root: root, dirty: [], available: 600)
+        runner.expect(dirty.tabs[0].width >= clean.tabs[0].width, "a dirty tab asks for at least the width of a clean one (the dot has its own room)")
+    }
+    runner.test("two files with one base name are told apart in the tab") {
+        let plan = EditorTabPlan.make(paths: ["\(root)/web/index.ts", "\(root)/api/index.ts", "\(root)/README.md"], root: root, dirty: [], available: 1000)
+        runner.expect(plan.tabs[0].shownQualifier, equals: "web", "folder on the first")
+        runner.expect(plan.tabs[1].shownQualifier, equals: "api", "folder on the second")
+        runner.expect(plan.tabs[2].shownQualifier == nil, "none on the unique one")
+        runner.expect(plan.tabs[0].help, equals: "web/index.ts", "and the tooltip says where")
+    }
+
+    runner.test("the header path: the folder is shortened from the front, the file name keeps its start and extension") {
+        let fits = EditorHeaderPath.fit(relativePath: "docs/adr/0001-x.md", budget: 80)
+        runner.expect(fits, equals: EditorHeaderPath.Fit(folder: "docs/adr/", name: "0001-x.md"), "whole, split at the last slash")
+        let narrow = EditorHeaderPath.fit(relativePath: "docs/adr/\(slug)", budget: 60)
+        runner.expect(narrow.folder.count + narrow.name.count <= 60, "within the budget: \(narrow)")
+        runner.expect(narrow.name.hasPrefix("0659-a-delegated"), "the name keeps its start: \(narrow.name)")
+        runner.expect(narrow.name.hasSuffix(".md"), "and its extension: \(narrow.name)")
+        runner.expect(narrow.folder.hasSuffix("adr/"), "the folder keeps the part nearest the file: \(narrow.folder)")
+        let deep = EditorHeaderPath.fit(relativePath: "a/very/deep/tree/of/folders/inside/main.swift", budget: 30)
+        runner.expect(deep.folder.hasPrefix("\(ellipsis)/"), "dropped leading folders are marked: \(deep.folder)")
+        runner.expect(deep.folder.hasSuffix("inside/") && deep.name == "main.swift", "nearest folder and whole name: \(deep)")
+        runner.expect(deep.folder.count + deep.name.count <= 30, "within the budget")
+        let bare = EditorHeaderPath.fit(relativePath: "Makefile", budget: 30)
+        runner.expect(bare, equals: EditorHeaderPath.Fit(folder: "", name: "Makefile"), "a file at the root has no folder")
+    }
+}
+
+runner.suite("editor area: the chrome must not be laid out under the title bar") {
+    // The two files, as they ship.
+    let fileViewer = (try? String(contentsOfFile: editorMacosDir + "/MARVIN/FileViewerView.swift", encoding: .utf8)) ?? ""
+    let contentView = (try? String(contentsOfFile: editorMacosDir + "/MARVIN/ContentView.swift", encoding: .utf8)) ?? ""
+
+    runner.test("the shipped editor builds the tab bar, the header, the Markdown preview and the toggle") {
+        runner.expect(!fileViewer.isEmpty && !contentView.isEmpty, "both files were read")
+        let hits = EditorSourceGuard.violations(fileViewer: fileViewer, contentView: contentView)
+        runner.expect(hits.isEmpty, "the editor lost: \(hits.joined(separator: "; "))")
+    }
+
+    runner.test("the guard fails on each shape that lost the editor chrome") {
+        let fv = EditorGuardFixtures.fileViewer
+        let cv = EditorGuardFixtures.contentView
+        func dropLines(_ text: String, containing needle: String) -> String {
+            text.components(separatedBy: "\n").filter { !$0.contains(needle) }.joined(separator: "\n")
+        }
+        func swapped(_ text: String) -> String {
+            text.components(separatedBy: "\n").map { line -> String in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if t == "tabBar" { return line.replacingOccurrences(of: "tabBar", with: "header") }
+                if t == "header" { return line.replacingOccurrences(of: "header", with: "tabBar") }
+                return line
+            }.joined(separator: "\n")
+        }
+        let ok = EditorSourceGuard.violations(fileViewer: fv, contentView: cv)
+        runner.expect(ok.isEmpty, "the fixtures are a passing editor: \(ok)")
+
+        let noTabBar = fv.components(separatedBy: "\n").filter { $0.trimmingCharacters(in: .whitespaces) != "tabBar" }.joined(separator: "\n")
+        runner.expect(noTabBar != fv && !EditorSourceGuard.violations(fileViewer: noTabBar, contentView: cv).isEmpty,
+                      "a body without the tab bar")
+        let noPreview = fv.replacingOccurrences(of: "MarkdownFilePreview(", with: "Text(")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: noPreview, contentView: cv).isEmpty,
+                      "a content branch without the Markdown preview")
+        let noToggle = fv.replacingOccurrences(of: "MarkdownPreviewToggle.control(", with: "other(")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: noToggle, contentView: cv).isEmpty,
+                      "a header whose toggle is not built from the rule")
+        let wrongOrder = swapped(fv)
+        runner.expect(wrongOrder != fv && !EditorSourceGuard.violations(fileViewer: wrongOrder, contentView: cv).isEmpty,
+                      "the header above the tab bar")
+        let bareClip = cv.replacingOccurrences(of: ".opacity(fills ? 0 : 1)", with: ".clipped()")
+        runner.expect(bareClip != cv && !EditorSourceGuard.violations(fileViewer: fv, contentView: bareClip).isEmpty,
+                      "the W-11 shape: a clip on the editor column")
+        let shapeClip = cv.replacingOccurrences(of: ".opacity(fills ? 0 : 1)", with: ".clipShape(Rectangle())")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: fv, contentView: shapeClip).isEmpty,
+                      "a clipShape does the same damage as clipped")
+        let maskIt = cv.replacingOccurrences(of: ".opacity(fills ? 0 : 1)", with: ".mask(Rectangle())")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: fv, contentView: maskIt).isEmpty,
+                      "and so does a mask")
+        let noWorkArea = cv.replacingOccurrences(of: "var workArea: some View", with: "var somethingElse: some View")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: fv, contentView: noWorkArea).isEmpty,
+                      "a renamed workArea is noticed, not silently unchecked")
+        let noViewer = cv.replacingOccurrences(of: "FileViewerView()", with: "EmptyView()")
+        runner.expect(!EditorSourceGuard.violations(fileViewer: fv, contentView: noViewer).isEmpty,
+                      "an editor area that never builds the file viewer")
+    }
+}
+
+private enum EditorGuardFixtures {
+    static let fileViewer = """
+    @MainActor struct FileViewerView: View {
+        var body: some View {
+            VStack(spacing: 0) {
+                tabBar
+                    .zIndex(1)
+                MarvinDivider()
+                header
+                    .zIndex(1)
+                MarvinDivider()
+                content
+            }
+        }
+        private var tabBar: some View {
+            ScrollView(.horizontal) { ForEach(bridge.openFiles, id: \\.self) { path in tabButton(path: path) } }
+        }
+        private var header: some View {
+            let control = MarkdownPreviewToggle.control(for: mode)
+            Button { togglePreview(path) } label: { Label(control.title, systemImage: control.systemImage) }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+        }
+        @ViewBuilder private var content: some View {
+            if isPreviewing {
+                MarkdownFilePreview(text: buffer.content, workDir: bridge.projectWorkDir)
+            } else {
+                FileViewerNSView(path: path)
+            }
+        }
+    }
+    """
+
+    static let contentView = """
+    private var editorArea: some View {
+        ZStack {
+            FileViewerView().transition(.opacity)
+        }
+    }
+    private var workArea: some View {
+        HStack(spacing: 0) {
+            webIsland
+                .frame(minWidth: Self.editorMinWidth)
+                .opacity(fills ? 0 : 1)
+            chatDivider
+        }
+    }
+    private var chatDivider: some View { MarvinDivider() }
+    """
 }
 
 if runner.failures.isEmpty {

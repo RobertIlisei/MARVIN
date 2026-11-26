@@ -1090,70 +1090,62 @@ final class MarvinEditorTextView: STTextView {
 
     // MARK: - Tab bar
 
-    /// Intrinsic width of the tab row and of the space it has. Compared to
-    /// decide whether the ‹ › arrows are needed at all.
-    @State private var tabsContentWidth: CGFloat = 0
-    @State private var tabsViewportWidth: CGFloat = 0
+    /// Width of the whole bar, measured with `onGeometryChange` (AGENTS.md "Measure
+    /// before theorising": no `GeometryReader` background, which adds views).
+    @State private var tabBarWidth: CGFloat = 0
     /// Which tab the arrows last scrolled to. Its own cursor rather than the
     /// selection: scrolling the strip must not change which file is open.
     @State private var tabScrollIndex: Int = 0
 
+    /// What the bar draws, decided by `EditorTabPlan` in `MARVINLogic`: each tab's
+    /// width (between `EditorTabWidths.minWidth` and `maxWidth`), its shortened name
+    /// and folder qualifier, its tooltip and spoken label, and whether the bar has to
+    /// scroll. Before the first measurement the bar is treated as roomy.
+    private var tabPlan: EditorTabPlan {
+        let dirty = Set(bridge.openFiles.filter { model.buffer(for: $0)?.isDirty ?? false })
+        return EditorTabPlan.make(
+            paths: bridge.openFiles, root: bridge.projectWorkDir, dirty: dirty,
+            available: tabBarWidth > 0 ? tabBarWidth : 10_000)
+    }
+
     /// The open-tabs strip.
     ///
-    /// Horizontally scrollable, with **‹ › buttons** at the edges once the
-    /// tabs overflow. The scroll view alone was reachable only by a
-    /// horizontal wheel or a trackpad two-finger swipe — user, 2026-08-31:
-    /// *"I can scroll with my side mouse scroll but we need to add buttons,
-    /// not everybody has a mouse with side scroller."* A plain mouse had no
-    /// way to reach a tab past the right edge at all.
+    /// A tab is a label for switching, so no name takes the bar: tabs are 144 to
+    /// 200 pt wide, a longer name is cut in the middle (start and extension kept),
+    /// and when they do not fit they shrink together, widest first, down to the
+    /// minimum. Only below that does the strip scroll, with **‹ › buttons** at the
+    /// edges (user, 2026-08-31: *"not everybody has a mouse with side scroller"*).
     ///
     /// Two behaviours worth naming:
     ///
-    ///   • The buttons **appear only on overflow**. Two open tabs should not
-    ///     grow chrome they will never use, so the strip measures its content
-    ///     against its viewport and the arrows fade in when it does not fit.
+    ///   • The buttons **appear only on overflow**, which `EditorTabPlan` decides from
+    ///     the bar's width, not from a second measurement of the content.
     ///   • Selecting a file **scrolls it into view**. Opening something via
     ///     ⌘P or the file tree used to select a tab that could be entirely
     ///     off-screen, which read as "the click did nothing".
     private var tabBar: some View {
-        ScrollViewReader { proxy in
+        let plan = tabPlan
+        return ScrollViewReader { proxy in
             HStack(spacing: 0) {
-                if tabsOverflow {
+                if plan.overflows {
                     tabScrollButton(.leading, proxy: proxy)
                     MarvinDivider().frame(height: 18)
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 1) {
+                    HStack(spacing: EditorTabWidths.spacing) {
                         ForEach(bridge.openFiles, id: \.self) { path in
-                            tabButton(path: path).id(path)
+                            if let tab = plan.tabs.first(where: { $0.path == path }) {
+                                tabButton(tab).id(path)
+                            }
                         }
                     }
-                    // Measured WITHOUT a trailing Spacer: a Spacer would
-                    // stretch the row to the viewport, so content width would
-                    // always equal viewport width and overflow could never be
-                    // detected.
-                    .background(
-                        GeometryReader { g in
-                            Color.clear.preference(
-                                key: TabStripWidthKey.self, value: g.size.width
-                            )
-                        }
-                    )
                 }
-                .onPreferenceChange(TabStripWidthKey.self) { tabsContentWidth = $0 }
-                .background(
-                    GeometryReader { g in
-                        Color.clear.preference(
-                            key: TabStripViewportKey.self, value: g.size.width
-                        )
-                    }
-                )
-                .onPreferenceChange(TabStripViewportKey.self) { tabsViewportWidth = $0 }
-                if tabsOverflow {
+                if plan.overflows {
                     MarvinDivider().frame(height: 18)
                     tabScrollButton(.trailing, proxy: proxy)
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { tabBarWidth = $0 }
             .onChange(of: bridge.selectedFilePath) { _, path in
                 guard let path else { return }
                 // Re-anchor the arrow cursor on the selection. Without this,
@@ -1174,13 +1166,6 @@ final class MarvinEditorTextView: STTextView {
         }
         .frame(height: 30)
         .background(MarvinTheme.background)
-    }
-
-    /// True when the tabs are wider than the space they have. The 1pt slack
-    /// absorbs sub-pixel rounding, which would otherwise flicker the arrows
-    /// on and off during a live resize.
-    private var tabsOverflow: Bool {
-        tabsContentWidth > tabsViewportWidth + 1
     }
 
     /// One edge arrow. Scrolls by a whole tab rather than a fixed number of
@@ -1215,17 +1200,21 @@ final class MarvinEditorTextView: STTextView {
         .help(edge == .leading ? "Scroll tabs left" : "Scroll tabs right")
     }
 
-    private func tabButton(path: String) -> some View {
+    /// One tab, exactly `tab.width` wide (a fixed-height bar, 30 pt, like the strip
+    /// it sits in). Left to right: file icon, name (already shortened by the plan, in
+    /// the middle, so the extension stays), the folder when another open file has the
+    /// same name, the modified dot, then the close button. The icon, the dot and the
+    /// close button are outside the text and never shrink, so they keep their place
+    /// and their hit target at every width. The whole tab, not just its name, selects.
+    private func tabButton(_ tab: EditorTabPlan.Tab) -> some View {
+        let path = tab.path
         let isActive = bridge.selectedFilePath == path
-        let buffer = model.buffer(for: path)
-        let isDirty = buffer?.isDirty ?? false
+        let isDirty = model.buffer(for: path)?.isDirty ?? false
         let kind = FileTypeIcon.kind(for: path)
-        let fileName = (path as NSString).lastPathComponent
-        return HStack(spacing: 6) {
-            // The tab itself is a Button, not a tap gesture on a stack: it is
-            // reachable with full keyboard access, VoiceOver announces it as a
-            // button, and the active tab carries the selected trait (K3). The
-            // whole-tab `onTapGesture` below stays as the pointer's wider target.
+        return HStack(spacing: 0) {
+            // The tab is a Button, not a tap gesture on a stack: it is reachable
+            // with full keyboard access, VoiceOver announces it as a button, and
+            // the active tab carries the selected trait (K3).
             Button {
                 if !isActive { bridge.setSelectedFile(path) }
             } label: {
@@ -1233,22 +1222,35 @@ final class MarvinEditorTextView: STTextView {
                     Image(systemName: FileTypeIcon.symbol(for: kind))
                         .font(.system(size: 11))
                         .foregroundStyle(FileTypeIcon.color(for: kind))
-                    Text(fileName)
+                        .frame(width: 12)
+                    Text(tab.shownName)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(isActive ? .primary : .secondary)
                         .lineLimit(1)
-                    // Dirty marker — IDE convention is a bullet point that
-                    // replaces the close × until the user hovers, but we
-                    // keep both visible. Simpler, less hover-state surface.
+                        .truncationMode(.middle)
+                    if let qualifier = tab.shownQualifier {
+                        // Quieter than the name: it tells two equal names apart, it is
+                        // not the name.
+                        Text(qualifier)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    // Dirty marker: IDE convention is a bullet that replaces the close
+                    // x until hover; both stay visible, with less hover-state surface.
                     if isDirty {
                         Circle()
                             .fill(Color.accentColor)
                             .frame(width: 6, height: 6)
                     }
                 }
+                .padding(.leading, 8)
+                .padding(.trailing, 6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(fileName)
+            .accessibilityLabel(tab.accessibilityLabel)
             .accessibilityValue(isDirty ? "unsaved changes" : "")
             .accessibilityAddTraits(isActive ? .isSelected : [])
             Button {
@@ -1257,15 +1259,15 @@ final class MarvinEditorTextView: STTextView {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 18, height: 18)
+                    .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .help("Close \(fileName)")
-            .accessibilityLabel("Close \(fileName)")
+            .padding(.trailing, 4)
+            .help("Close \(tab.fileName)")
+            .accessibilityLabel("Close \(tab.fileName)")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .frame(width: tab.width, height: 30)
         .background(
             Rectangle()
                 .fill(isActive
@@ -1280,13 +1282,7 @@ final class MarvinEditorTextView: STTextView {
                 .fill(isActive ? Color.accentColor : Color.clear)
                 .frame(height: 2)
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if !isActive {
-                bridge.setSelectedFile(path)
-            }
-        }
-        .help(path)
+        .help(tab.help)
     }
 
     // Phase 5d — tab icon resolution moved to FileTypeIcon (shared
@@ -1299,49 +1295,23 @@ final class MarvinEditorTextView: STTextView {
         HStack(spacing: 8) {
             Image(systemName: "doc.text")
                 .foregroundStyle(.secondary)
-            Text(headerSubtitle)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
-                .help(bridge.selectedFilePath ?? "No file open")
-            if let buffer = activeBuffer, buffer.truncated {
-                Text("truncated")
-                    .font(.caption2.monospaced())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.yellow.opacity(0.2))
-                    .foregroundStyle(.secondary)
-                    .clipShape(Capsule())
-            }
-            if let buffer = activeBuffer, buffer.isDirty {
-                Text("modified")
-                    .font(.caption2.monospaced())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.18))
-                    .foregroundStyle(.secondary)
-                    .clipShape(Capsule())
-            }
-            Spacer()
+            headerPathLine
             // Markdown preview toggle (⇧⌘V), shown only for files that have
             // a preview. Rendering replaces the editor rather than splitting
             // it: the pane is already one column of a three-pane window, and
             // half of it is too narrow to read prose in.
             if let path = bridge.selectedFilePath, Self.isPreviewable(path) {
+                let control = MarkdownPreviewToggle.control(for: previewMode(of: path))
                 Button {
                     togglePreview(path)
                 } label: {
-                    Label(
-                        isPreviewing ? "Show Source" : "Preview",
-                        systemImage: isPreviewing ? "chevron.left.forwardslash.chevron.right" : "doc.richtext"
-                    )
-                    .labelStyle(.iconOnly)
+                    Label(control.title, systemImage: control.systemImage)
+                        .labelStyle(.iconOnly)
                 }
                 .buttonStyle(.borderless)
                 .keyboardShortcut("v", modifiers: [.command, .shift])
-                .help(isPreviewing ? "Show the Markdown source (⇧⌘V)" : "Preview the rendered Markdown (⇧⌘V)")
+                .help(control.help)
+                .accessibilityLabel(control.accessibilityLabel)
             }
             // Find in file (⌘F). The menu command alone is invisible — twice
             // now a capability has shipped with no on-screen affordance and
@@ -1435,6 +1405,67 @@ final class MarvinEditorTextView: STTextView {
         .background(MarvinTheme.background)
     }
 
+    // MARK: - Header path line
+
+    /// Width the path line has: the leftover between the icon and the buttons,
+    /// measured with `onGeometryChange`.
+    @State private var headerPathWidth: CGFloat = 0
+
+    /// The file's path from the project root, on ONE line: the folders quiet, the
+    /// file name in the normal style, the "truncated" / "modified" badges after it.
+    /// What does not fit is decided by `EditorHeaderPath` (folders give way from the
+    /// front, the name is cut in the middle keeping its start and extension); the
+    /// whole absolute path is the tooltip. A cut line is not selectable, because
+    /// copying it would copy the ellipsis.
+    private var headerPathLine: some View {
+        let truncatedBadge = activeBuffer?.truncated ?? false
+        let modifiedBadge = activeBuffer?.isDirty ?? false
+        let reserved: CGFloat = (truncatedBadge ? 84 : 0) + (modifiedBadge ? 74 : 0)
+        let chars = headerPathWidth > 0
+            ? max(8, Int((headerPathWidth - reserved) / EditorTabTitle.charWidth))
+            : 400
+        let whole = headerSubtitle
+        let fit = EditorHeaderPath.fit(relativePath: whole, budget: chars)
+        let isCut = fit.folder + fit.name != whole
+        let pathText = HStack(spacing: 0) {
+            if !fit.folder.isEmpty {
+                Text(fit.folder).foregroundStyle(.secondary)
+            }
+            Text(fit.name).foregroundStyle(.primary)
+        }
+        .font(.system(size: 12, design: .monospaced))
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .help(bridge.selectedFilePath ?? "No file open")
+        return HStack(spacing: 8) {
+            if isCut {
+                pathText
+            } else {
+                pathText.textSelection(.enabled)
+            }
+            if let buffer = activeBuffer, buffer.truncated {
+                Text("truncated")
+                    .font(.caption2.monospaced())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.yellow.opacity(0.2))
+                    .foregroundStyle(.secondary)
+                    .clipShape(Capsule())
+            }
+            if let buffer = activeBuffer, buffer.isDirty {
+                Text("modified")
+                    .font(.caption2.monospaced())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.18))
+                    .foregroundStyle(.secondary)
+                    .clipShape(Capsule())
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { headerPathWidth = $0 }
+    }
+
     // MARK: - Content area
 
     private static let imageExtensions: Set<String> = [
@@ -1445,20 +1476,20 @@ final class MarvinEditorTextView: STTextView {
     /// `ChatMarkdown`, which is a Markdown parser; pointing it at anything
     /// else would render garbage confidently.
     static func isPreviewable(_ path: String) -> Bool {
-        ["md", "markdown", "mdx"].contains((path as NSString).pathExtension.lowercased())
+        MarkdownPreviewToggle.isPreviewable(path)
+    }
+
+    private func previewMode(of path: String) -> MarkdownPreviewToggle.Mode {
+        MarkdownPreviewToggle.mode(for: path, previewing: previewPaths)
     }
 
     private var isPreviewing: Bool {
         guard let path = bridge.selectedFilePath else { return false }
-        return previewPaths.contains(path)
+        return previewMode(of: path) == .preview
     }
 
     private func togglePreview(_ path: String) {
-        if previewPaths.contains(path) {
-            previewPaths.remove(path)
-        } else {
-            previewPaths.insert(path)
-        }
+        MarkdownPreviewToggle.toggle(path, in: &previewPaths)
     }
 
     @ViewBuilder
@@ -1803,22 +1834,5 @@ final class MarvinEditorTextView: STTextView {
         }
         .background(Color(nsColor: .underPageBackgroundColor))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-
-/// Intrinsic width of the tab row.
-private struct TabStripWidthKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-/// Width of the scroll view showing it.
-private struct TabStripViewportKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }

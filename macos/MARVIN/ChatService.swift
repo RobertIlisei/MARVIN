@@ -474,6 +474,12 @@ final class ChatService {
                 Task { @MainActor in SupervisorModel.shared.apply(feed: sup) }
                 return
             }
+            // ADR-0044 addendum — the project's backlog counts: one store holds
+            // them, every surface reads it.
+            if let backlog = BacklogFeedEvent.decode(name: name, data: Data(frame.data.utf8)) {
+                Task { @MainActor in BacklogLiveStore.shared.apply(backlog) }
+                return
+            }
             guard let event = SessionFeedEvent.decode(name: name, data: Data(frame.data.utf8)) else { return }
             continuation.yield(event)
         }

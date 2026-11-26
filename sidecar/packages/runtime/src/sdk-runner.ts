@@ -82,6 +82,7 @@ import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createMemoryMcpServer } from "./memory-mcp";
 import { ensureProviderModelId, latestForTier } from "./models";
+import { settleOwnConsequences } from "./own-consequence-close";
 import { makeNestedInstructionsPostToolUse, resetNestedInstructions } from "./nested-instructions";
 import { noticesReminder } from "./notices";
 import { createObsidianMcpServer } from "./obsidian-mcp";
@@ -111,6 +112,7 @@ import {
   mergeOpenItems,
   openPlanSteps,
   openTodos,
+  OWN_CONSEQUENCE_MAX_BLOCKS,
   ownChangeConsequences,
   scopeOfDoneEntirelyUnticked,
   type WorkflowGap,
@@ -3497,6 +3499,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           own.files,
           own.branch || undefined,
         );
+        // ADR-0121 addendum — a `Handed over:` line answers an item, and an
+        // item that has refused two closes lets this one through.
+        ownConsequences = await settleOwnConsequences({
+          workDir,
+          projectId: wakeupCtx.projectId,
+          sessionId: wakeupCtx.marvinSessionId,
+          finalText: finalAssistantText,
+          own: ownConsequences ?? [],
+          maxBlocks: OWN_CONSEQUENCE_MAX_BLOCKS,
+        });
       }
     } catch {
       /* the check is a backstop, never a reason to fail a finished turn */

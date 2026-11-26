@@ -842,19 +842,12 @@ final class MarvinBridge {
     /// the tab to the left, then nil if the list is empty. Matches
     /// VS Code's tab-close behaviour.
     func closeFile(_ path: String) {
-        guard let idx = openFiles.firstIndex(of: path) else {
+        guard openFiles.contains(path) else {
             return
         }
-        openFiles.remove(at: idx)
-        if selectedFilePath == path {
-            if idx < openFiles.count {
-                selectedFilePath = openFiles[idx]
-            } else if idx > 0 {
-                selectedFilePath = openFiles[idx - 1]
-            } else {
-                selectedFilePath = nil
-            }
-        }
+        let next = EditorTabs.selectionAfterClosing(path, in: openFiles, selected: selectedFilePath)
+        openFiles.removeAll { $0 == path }
+        if selectedFilePath == path { selectedFilePath = next }
         persistFileState()
     }
 

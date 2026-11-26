@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ADR-0128 §5 / plan [7.3] DoD "open, follow, report, merge", end to end on a
 // real repository: the message route, the real loop, a stubbed model that
@@ -20,6 +20,30 @@ const savedMin = process.env.MARVIN_WORKTREE_MIN_FREE_GB;
 const POSTURE = { model: "claude-sonnet-5-5", advisorModel: null, personality: "marvin" as const, permissionStrategy: "auto" as const, thinkingMode: "medium", mode: "agent" as const };
 const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf-8", stdio: "pipe" }).trim();
 const BASE = "http://localhost:3030";
+
+// Measured 2026-11-25 on a loaded machine (one busy loop per core, full suite
+// running): the first test spent ~2.5 s of its ~4.5 s importing and
+// transforming the module graph (`turn-orchestrator` pulls in most of the
+// runtime), and it hit the 5 s default. Loading code is not what the test
+// asserts, so it is paid here, under the hook's own budget. `vi.resetModules()`
+// in beforeEach still gives every test fresh module state; the transforms stay
+// cached, so only the transform cost moves.
+beforeAll(async () => {
+  await import("@marvin/runtime/supervisor-state");
+  await import("@marvin/runtime/projects");
+  await import("@marvin/runtime/session-meta");
+  await import("@marvin/runtime/supervisor-loop");
+  await import("@marvin/runtime/supervisor-inbox");
+  await import("@marvin/runtime/supervisor-follows");
+  await import("@marvin/runtime/turn-registry");
+  await import("@marvin/runtime/wakeup-scheduler");
+  await import("../src/lib/turn-orchestrator");
+  await import("../packages/runtime/src/supervisor-mcp");
+  await import("next/server");
+  await import("../src/app/api/supervisor/inbox/route");
+  await import("../src/app/api/supervisor/message/route");
+  await import("../src/app/api/supervisor/follows/route");
+}, 60_000);
 
 beforeEach(() => {
   vi.resetModules();
@@ -107,7 +131,13 @@ async function setup(script: Script) {
 }
 
 describe("open, follow, report, merge", () => {
-  it("one new-tab card → a followed tab at the confirmed delegation → a report at scope-met → one merge card; nothing merges before the click", async () => {
+  // The end-to-end loop on a real repository: `git init`, a real worktree, two
+  // commits and a real merge, through the real routes. Real work, not waiting:
+  // ~2 s with the machine idle, ~3 to 4.5 s loaded, against the 5 s default.
+  // 30 s only keeps a loaded machine from failing it; every poll inside returns
+  // the moment its condition holds, and a hang still fails at that poll's own
+  // timeout.
+  it("one new-tab card → a followed tab at the confirmed delegation → a report at scope-met → one merge card; nothing merges before the click", { timeout: 30_000 }, async () => {
     const { listInbox } = await import("@marvin/runtime/supervisor-inbox");
     let projectId = "";
     const { meta, consent, say, conversation, wakes, st, ...rest } = await setup(async (items, v) => {
@@ -135,7 +165,7 @@ describe("open, follow, report, merge", () => {
     // 1. One new-tab card, in the chat, at the default delegation, followed until merge-ready.
     const posted = await say("Open a tab to fix the flags page, and merge it when it's done.");
     expect(posted.status).toBe(200);
-    await vi.waitFor(async () => expect((await conversation()).some((m) => m.from === "supervisor")).toBe(true), { timeout: 3_000 });
+    await vi.waitFor(async () => expect((await conversation()).some((m) => m.from === "supervisor")).toBe(true), { timeout: 15_000 });
     const cards = listInbox(projectId).filter((i) => i.kind === "new-tab");
     expect(cards).toHaveLength(1);
     const card = cards[0] as NonNullable<(typeof cards)[0]>;
@@ -158,7 +188,7 @@ describe("open, follow, report, merge", () => {
     expect(follow).toMatchObject({ sessionId: tab, until: "merge-ready", requestId: card.act?.type === "new-tab" ? card.act.requestId : "?" });
 
     // Its first turn (the supervisor's message) ends and wakes the supervisor once; the script does nothing there.
-    await vi.waitFor(() => expect(wakes.some((w) => w.some((i) => i.trigger === "turn-ended" && i.marvinSessionId === tab))).toBe(true), { timeout: 3_000 });
+    await vi.waitFor(() => expect(wakes.some((w) => w.some((i) => i.trigger === "turn-ended" && i.marvinSessionId === tab))).toBe(true), { timeout: 15_000 });
     const tree = opened?.tree as { path: string; branch: string; slug: string };
     writeFileSync(path.join(tree.path, "flags.ts"), "export const fixed = true;\n");
     git(tree.path, "add", ".");
@@ -168,7 +198,7 @@ describe("open, follow, report, merge", () => {
     const { announceProjectEvent } = await import("@marvin/runtime/turn-registry");
     meta.updateSessionMeta(projectId, tab, { scopeMetAt: new Date().toISOString() });
     announceProjectEvent({ event: "turn.ended", data: { marvinSessionId: tab, projectId, turnId: "t-done", outcome: "completed", kind: "machine", author: "supervisor" } });
-    await vi.waitFor(async () => expect((await conversation()).some((m) => m.kind === "report")).toBe(true), { timeout: 3_000 });
+    await vi.waitFor(async () => expect((await conversation()).some((m) => m.kind === "report")).toBe(true), { timeout: 15_000 });
     const report = (await conversation()).find((m) => m.kind === "report") as Record<string, unknown>;
     expect(report).toMatchObject({ from: "supervisor", origin: { kind: "follow", followId: follow.id }, refs: [{ kind: "tab", id: tab }] });
 

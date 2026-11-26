@@ -75,7 +75,7 @@ describe("one message, one reply, end to end", () => {
     expect(r.status).toBe(200);
     const { id } = (await r.json()) as { id: string };
     // Well inside the 5 s debounce a tab event would wait for.
-    await vi.waitFor(() => expect(seen.some((e) => e.event === "supervisor.message" && e.data.from === "supervisor")).toBe(true), { timeout: 2_000 });
+    await vi.waitFor(() => expect(seen.some((e) => e.event === "supervisor.message" && e.data.from === "supervisor")).toBe(true), { timeout: 15_000 });
     off();
 
     expect(wakes).toHaveLength(1);

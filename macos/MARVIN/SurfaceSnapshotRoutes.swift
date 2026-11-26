@@ -8,6 +8,7 @@
 // resolved to `SurfaceFixtures.project` when served.
 
 import Foundation
+import MARVINLogic
 
 enum SurfaceRoutes {
     /// Resolve a request to its fixture. Unknown paths are a 404, logged once
@@ -219,10 +220,45 @@ enum SurfaceRoutes {
 
     """
 
+    /// What a `.md` path opens as: an ADR-shaped document, enough Markdown to tell a
+    /// rendered view from the source (headings, bold, code, a list, a table, a rule).
+    static let markdownSource = """
+    # 0616 — Keep the usage ledger append-only
+
+    **Status:** Accepted · 2026-11-24
+
+    ## Context
+
+    The ledger is read by `UsageLedger.record(costUsd:turns:on:)` and by the cost popover.
+    Rewriting an entry in place made two totals disagree for one day.
+
+    ## Decision
+
+    - Entries are **append-only**; a correction is a new entry with a negative cost.
+    - `lifetimeCost` is the sum of every entry, never a cached figure.
+    - The sort stays by day, then by insertion order.
+
+    | Field | Type | Note |
+    |---|---|---|
+    | `day` | String | `yyyy-MM-dd` |
+    | `costUsd` | Double | may be negative for a correction |
+
+    ## Consequences
+
+    A day's total can be recomputed from the entries alone.
+
+    ---
+
+    Anything else is a new decision.
+    """
+
     /// Any file opens as the same Swift source — the viewer's chrome, gutter and
     /// highlighting are what the snapshot is for, not the file's identity.
     static func fileContent(_ path: String) -> String {
-        let body = swiftSource.replacingOccurrences(of: "\\\\", with: "\\")
+        // A Markdown path opens as Markdown, so the editor's preview toggle has
+        // something to render (`window-editor`). Every other path stays Swift.
+        let isMarkdown = MarkdownPreviewToggle.isPreviewable(path)
+        let body = isMarkdown ? markdownSource : swiftSource.replacingOccurrences(of: "\\\\", with: "\\")
         let wire: [String: Any] = [
             "path": path, "size": body.utf8.count, "mtime": 1_793_318_400_000.0, "maxSize": 4_194_304,
             "binary": false, "truncated": false, "content": body,

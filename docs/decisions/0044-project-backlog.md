@@ -279,3 +279,51 @@ session worktree (ADR-0107) is a snapshot cut with the branch; the gate turns
 back reads aimed at it. Nothing in this ADR's file format changes for items
 that were never claimed.
 
+
+## Amendment (2026-11-25) — the count is project state, pushed to every surface
+
+The chat's "N backlog items parked" strip showed a number it read once, when a
+session or its view was created, and only that session's own turn end ever
+re-read it. Other tabs file, claim and resolve items all day (about 40 a day on
+the largest project), the Project Backlog window writes too, and a hand edit or
+a git checkout changes the files — none of it reached a strip that had already
+looked ("this is not being automatically or dynamically updated, i need to open
+a new session"). The same capture-at-creation shape held for the window's scope
+counts (loaded once, never reloaded while open) and for the sessions' "holds"
+lines.
+
+- **The sidecar says when it changed.** `backlog-live.ts`: `writeItem` — the one
+  function every write path ends in (tool add / resolve / claim / classify, the
+  app's keep / dismiss / resolve, bulk review) — calls `noteBacklogWrite`, and
+  one `fs.watch` on `.marvin/backlog` per project (refcounted by the announce
+  streams, re-attached if the directory is replaced) feeds the same debouncer
+  for writes made outside MARVIN. 300 ms quiet / 1.5 s max wait, so one tool
+  write that the watcher also sees is one signal, and a bulk review of 200
+  items is one signal. **What is guaranteed is not "one signal per burst"** —
+  no debounce can promise that against events that arrive slowly (one
+  `writeFile` raised two watcher events 51 ms apart on a loaded machine, and a
+  test that asserted "exactly one" against the real clock failed 7 runs in
+  30) — **but this:** a subscriber is told whenever the directory (the scan's
+  signature of every counted file's name, mtime and size) differs from the last
+  frame *it* received, never for a state it already has, and the last frame
+  carries the final counts. The knowledge is per subscriber, not per project: a
+  baseline shared between subscribers hid a change from one that had not seen
+  it (a snapshot read a moment before a write). A new watch and a re-attached
+  one each ask for one recount, because a watch does not see what happened
+  before it went live. The signal is `backlog.changed` on `/api/chat/announce`:
+  a revision and the counts by status (provisional / open / doing / done /
+  dismissed) plus `blocked` — never a path or a title, that stream holds no
+  token. A snapshot is sent at attach, so a reconnect after sleep or a sidecar
+  restart resyncs. `GET /api/backlog/counts` is the re-read.
+- **Counting is incremental.** `lstat` of each file, re-read only where mtime
+  or size moved: on a 2,700-file directory ~71 ms cold, ~10 ms warm, against
+  ~170 ms for the full parse the list route does. A path inside the user's
+  repository is attacker-controlled: a symlinked directory or entry is never
+  followed, the scan is bounded (20,000 names), only `.md` is counted.
+- **One store in the app.** `BacklogLiveStore` holds `BacklogLiveState`
+  (MARVINLogic); the strip, the window's scope counts and header, and the
+  sessions' claim lines read it. The window reloads its list in place when the
+  store's generation ticks. Safety nets, because a stream can be missed: a
+  re-read when the app comes to the front and every five minutes.
+  `BacklogCountSourceScan` fails the test suite if a file other than the store
+  assigns a backlog count.
