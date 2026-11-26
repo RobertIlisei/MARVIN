@@ -90,10 +90,11 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       "(or pass false) only for an item the user has explicitly confirmed. NOT " +
       "for durable facts (→ remember), verification/commit status (→ git), or " +
       "decisions (→ ADR) — those are rejected. A parking lot the user revisits, " +
-      "never an auto-executed queue. When YOU later fix an item, end the commit " +
-      "message with the trailer `Backlog: <slug>` (one line per item): the item " +
+      "never an auto-executed queue. When a commit COMPLETES an item, end its " +
+      "message with the trailer `Fixes-Backlog: <slug>[, <slug>…]` (the whole value " +
+      "a comma-separated list of existing slugs, nothing else on the line): the item " +
       "resolves itself, with the commit as evidence, once that commit is on the " +
-      "project's branch. An item whose notes are full takes no more: file the next " +
+      "project's branch. A plain `Backlog: <slug>` is a reference and closes nothing. An item whose notes are full takes no more: file the next " +
       "point as a new item with `relatesTo: <slug>`.",
     {
       title: z.string().min(1).describe(`One actionable line; the dedup key (≤${MAX_TITLE_CHARS} chars).`),
@@ -224,7 +225,7 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       "newest first). Use on intake, when the user asks what's parked, and at " +
       "the scope-met handoff (`status: provisional`) to batch keep/dismiss what " +
       "was auto-captured this turn. Before listing, open items whose fix is on " +
-      "the project's branch (a commit with a `Backlog: <slug>` trailer) are " +
+      "the project's branch (a commit with a `Fixes-Backlog: <slug>` trailer) are " +
       "closed, and the answer names them.",
     {
       status: z
@@ -241,9 +242,13 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       const derivedLine = derived.resolved.length
         ? `\n\nClosed just now because their fix is on ${derived.branch}: ${derived.resolved.map((r) => `\`${r.id}\` (${r.sha.slice(0, 9)})`).join(", ")}.`
         : "";
-      const unknownLine = derived.unknown.length
-        ? `\n\nCommit trailers naming no backlog item (a typo? nothing was created): ${derived.unknown.slice(0, 5).map((u) => `\`${u}\``).join(", ")}${derived.unknown.length > 5 ? ` and ${derived.unknown.length - 5} more` : ""}.`
-        : "";
+      const unknownLine =
+        (derived.ignored.length
+          ? `\n\n\`Fixes-Backlog:\` lines that closed nothing (the whole value must be a comma-separated list of existing slugs): ${derived.ignored.slice(0, 5).map((u) => `${u.sha.slice(0, 9)} "${u.value}" — ${u.why}`).join("; ")}.`
+          : "") +
+        (derived.held.length
+          ? `\n\nFixed on the branch but held by an open tab, so left as they are: ${derived.held.map((h) => `\`${h}\``).join(", ")}.`
+          : "");
       if (status === "done" || status === "dismissed" || status === "all") {
         const page = await listResolved(cwd, {
           ...(status === "done" || status === "dismissed" ? { status } : {}),
@@ -314,7 +319,7 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       "done/dismissed item drops from the open index and moves to the closed " +
       "index (its file stays where it is; `backlog_list status: done | dismissed | all` " +
       "reads it). Do not resolve by hand an item you fixed in a commit: put " +
-      "`Backlog: <slug>` in that commit's message and it resolves itself once " +
+      "`Fixes-Backlog: <slug>` in that commit's message and it resolves itself once " +
       "the commit is on the project's branch.",
     {
       id: z.string().min(1).describe("The item slug (from backlog_list)."),

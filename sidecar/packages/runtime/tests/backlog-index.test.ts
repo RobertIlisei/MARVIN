@@ -134,6 +134,15 @@ describe("the closed index; item files never move", () => {
     expect(await readFile(idxPath(), "utf-8")).not.toContain("999999");
   });
 
+  it("concurrent scans in one process cannot tear the index: every write has its own temp file", async () => {
+    await seedLegacy(2, 40, 10);
+    await Promise.all(Array.from({ length: 12 }, () => listResolved(workDir, { limit: 5 })));
+    const text = await readFile(idxPath(), "utf-8");
+    expect(parseClosedIndex(text).size).toBe(50);
+    expect(serializeClosedIndex(parseClosedIndex(text).values())).toBe(text);
+    expect((await readdir(join(workDir, ".marvin"))).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
   it("a symlinked item is not an item", async () => {
     await seedLegacy(1, 0, 0);
     const { symlink } = await import("node:fs/promises");

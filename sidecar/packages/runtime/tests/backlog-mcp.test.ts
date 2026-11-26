@@ -2,19 +2,38 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The SDK's `tool` / `createSdkMcpServer` are replaced by recorders so the
 // handlers can be called directly: what is under test is what the model is
 // told and what the boundary accepts.
-vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
+// (`vi.doMock` + a fresh module registry rather than a hoisted `vi.mock`: the
+// suite runs with `isolate: false`, so another file may already have loaded the
+// real server module.)
+const sdkMock = () => ({
   tool: (name: string, description: string, schema: unknown, handler: (args: Record<string, unknown>) => Promise<unknown>) => ({ name, description, schema, handler }),
   createSdkMcpServer: (o: { tools: unknown[] }) => o,
-}));
+});
 
-import { getBacklogItem, resolveBacklogItem } from "../src/backlog";
-import { resetBacklogDeriveForTests } from "../src/backlog-derive";
-import { createBacklogMcpServer } from "../src/backlog-mcp";
+type BacklogModule = typeof import("../src/backlog");
+type DeriveModule = typeof import("../src/backlog-derive");
+type McpModule = typeof import("../src/backlog-mcp");
+let getBacklogItem: BacklogModule["getBacklogItem"];
+let resolveBacklogItem: BacklogModule["resolveBacklogItem"];
+let resetBacklogDeriveForTests: DeriveModule["resetBacklogDeriveForTests"];
+let createBacklogMcpServer: McpModule["createBacklogMcpServer"];
+
+beforeAll(async () => {
+  vi.resetModules();
+  vi.doMock("@anthropic-ai/claude-agent-sdk", sdkMock);
+  ({ getBacklogItem, resolveBacklogItem } = await import("../src/backlog"));
+  ({ resetBacklogDeriveForTests } = await import("../src/backlog-derive"));
+  ({ createBacklogMcpServer } = await import("../src/backlog-mcp"));
+});
+afterAll(() => {
+  vi.doUnmock("@anthropic-ai/claude-agent-sdk");
+  vi.resetModules();
+});
 
 interface Tool {
   name: string;
@@ -39,10 +58,11 @@ const text = (r: { content: Array<{ text: string }> }) => r.content.map((c) => c
 
 describe("what the tools tell a tab", () => {
   it("backlog_add names the commit trailer and relatesTo; backlog_update names the cap advice; resolve names the trailer", () => {
-    expect(tools.backlog_add?.description).toContain("Backlog: <slug>");
+    expect(tools.backlog_add?.description).toContain("Fixes-Backlog: <slug>");
+    expect(tools.backlog_add?.description).toContain("closes nothing");
     expect(tools.backlog_add?.description).toContain("relatesTo");
     expect(tools.backlog_update?.description).toContain("relatesTo");
-    expect(tools.backlog_resolve?.description).toContain("Backlog: <slug>");
+    expect(tools.backlog_resolve?.description).toContain("Fixes-Backlog: <slug>");
     expect(tools.backlog_list?.description).toContain("closed index");
   });
 });

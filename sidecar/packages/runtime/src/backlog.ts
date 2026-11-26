@@ -18,7 +18,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { CLOSED_INDEX_FILE, type ClosedEntry, noteItemWritten, scanStore } from "./backlog-index";
@@ -777,6 +777,15 @@ async function readActive(workDir: string): Promise<BacklogItem[]> {
   return (await readStore(workDir)).open;
 }
 
+/** Every item slug in the store, open or closed: the file names, nothing read. */
+export async function backlogSlugs(workDir: string): Promise<Set<string>> {
+  try {
+    return new Set((await readdir(backlogDir(workDir))).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)));
+  } catch {
+    return new Set();
+  }
+}
+
 /** One item by id, open or closed. */
 export async function getBacklogItem(workDir: string, id: string): Promise<BacklogItem | null> {
   const path = locate(workDir, id);
@@ -1284,7 +1293,7 @@ export async function resolveDerivedBacklogItem(
   if (!loc) return { ok: false, error: `no backlog item "${id}".` };
   const item = parseItem(id, await readFile(loc, "utf-8"));
   if (item.status !== "open" && item.status !== "doing") return { ok: false, error: `backlog item "${id}" is ${item.status}, not open.` };
-  const note = `> done — derived: commit ${evidence.sha.slice(0, 12)} "${evidence.subject.slice(0, 90)}" carries \`Backlog: ${id}\` and is on ${evidence.branch}.`;
+  const note = `> done — derived: commit ${evidence.sha.slice(0, 12)} "${evidence.subject.slice(0, 90)}" carries \`Fixes-Backlog: ${id}\` and is on ${evidence.branch}.`;
   const withNote = `${item.body}\n\n${note}`.trim();
   if (!bodyLimitError(withNote, id)) item.body = withNote;
   item.status = "done";

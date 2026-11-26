@@ -33,6 +33,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { lstat, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
@@ -134,7 +135,8 @@ async function writeIndex(workDir: string, entries: Iterable<ClosedEntry>, previ
   if (text === previousText) return;
   try {
     ensureExcluded(workDir);
-    const tmp = `${indexPath(workDir)}.${process.pid}.tmp`;
+    // A random suffix per write: two scans in one process (or two sessions) must not share a temp file.
+    const tmp = `${indexPath(workDir)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     await writeFile(tmp, text, "utf-8");
     await rename(tmp, indexPath(workDir));
   } catch {

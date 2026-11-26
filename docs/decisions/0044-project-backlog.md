@@ -353,14 +353,29 @@ shipped: nothing creates an archive folder, no file is rewritten in bulk, and a
 file is rewritten only when its item is next written for another reason.
 
 **1. Done is derived from git (`backlog-derive.ts`; same shape as
-`reconcileWorktrees`, ADR-0103).** A commit may end with the trailer
-`Backlog: <slug>` (one line per item, several allowed; a comma list is read
-too). An `open` or `doing` item whose slug is in such a trailer on a commit
-reachable from the integration branch is `done`, with the commit sha as
-evidence, and the resolution is *persisted* like any other (status done,
-`resolvedBy: derived`, `evidence: <sha>`, a dated note when it fits) so it is
-never recomputed. Decisions:
+`reconcileWorktrees`, ADR-0103).** A commit that completes items ends with the
+trailer `Fixes-Backlog: <slug>[, <slug>…]`. An `open` or `doing` item whose slug
+is in such a trailer on a commit reachable from the integration branch is
+`done`, with the commit sha as evidence, and the resolution is *persisted* like
+any other (status done, `resolvedBy: derived`, `evidence: <sha>`, a dated note
+when it fits) so it is never recomputed. Decisions:
 
+- *A key that only means "completes it".* The first version read `Backlog:
+  <slug>`; review found the real repository already has bodies such as `Backlog:
+  <slug>, points 1 to 4.` and `Backlog: a (tab half), b`, and prose tokens
+  ("points", "to", "1") pass a slug pattern. `Backlog:` stays a reference and
+  closes nothing. `Fixes-Backlog:` closes only when the WHOLE value is a
+  comma-separated list of slugs that ALL exist (open or closed); any other line
+  closes nothing on it and is reported once per process (`ignored`), so a typo is
+  seen rather than half-obeyed.
+- *A claim held by an open tab is not closed from under it.* A `doing` item whose
+  `claimedBy` session has a meta and no `closedAt` is skipped and reported
+  (`held`), and looked at again on the next run even if the tip has not moved —
+  chosen over closing-and-leaving-the-claim because closing clears the claim
+  fields mid-work and sends the tab's scope-met check (ADR-0137) looking for an
+  item that no longer says `doing`; the tab's own `backlog_resolve` or the first
+  run after it closes ends it. A claim whose session is closed or unknown is
+  stale and is cleared with the closure.
 - *Integration branch* = the base MARVIN cuts tabs from: the `baseRef` its
   worktree records carry (`worktrees.ts` stores the main checkout's branch at
   the moment each tab is cut; the most common one that still exists). MARVIN has
@@ -372,13 +387,17 @@ never recomputed. Decisions:
   when the fallback is all there is. Reachability, not a branch name, is the
   test, so a fix on a release branch counts the moment that branch merges in
   (the 26.11 failure).
-- *Cost.* One `git log --grep=^Backlog: --max-count=20000` with the trailer
-  format, never one call per item; cached by the branch tip (unchanged tip: one
-  `rev-parse`; moved tip: only `oldTip..newTip` when the old tip is an
-  ancestor; calls inside 10 s share an answer). The pane's route starts it
-  without waiting; `backlog_list` and the session-start context wait for it.
-- *A slug that names no item* is reported (`unknown`), never created. *An item
-  already done or dismissed* is not touched, and a provisional item waits for the
+- *Cost.* One `git log --grep=^Fixes-Backlog: --max-count=20000` with the
+  trailer format, never one call per item; cached by the branch tip. An
+  unchanged tip costs one `rev-parse` and **no read of the backlog** (a pane open,
+  a list or a turn start must not each scan the store; sound because an item
+  filed after the last derivation is newer than every commit already seen); a
+  moved tip scans only `oldTip..newTip` and then closes what the new commits
+  prove, each closure updating the closed index by one line. Calls inside 10 s
+  skip even the `rev-parse`. The pane's route starts it without waiting;
+  `backlog_list` and the session-start context wait for it.
+- *A slug that names no item* makes its line ignored and reported, never
+  created. *An item already done or dismissed* is not touched, and a provisional item waits for the
   person's keep or dismiss (ADR-0047) — a trailer is not that decision. *Only a
   commit made after the item was filed or last reopened counts* (`created`,
   `reopenedAt`), so re-filing a title fixed last month does not close itself.
@@ -454,8 +473,10 @@ with a digest, the metrics panel, and age flags in the review.
 
 ### Scope of Done — amendment (2026-11-27)
 
-- [x] A commit with `Backlog: <slug>` reachable from the integration branch
-      makes the item done with the sha as evidence — test with a real temp git
+- [x] A commit with `Fixes-Backlog: <slug>` reachable from the integration
+      branch makes the item done with the sha as evidence; `Backlog:` closes
+      nothing; a line with anything but existing slugs is ignored and reported
+      once; an item held by an open tab is left alone — test with a real temp git
       repo, including a fix on a side branch that reaches it by a merge, a base
       that differs from the checkout's branch, and a merge in progress
       (`backlog-derive.test.ts`).
