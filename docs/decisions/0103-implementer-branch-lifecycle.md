@@ -269,3 +269,46 @@ sweep-under-proof rule. Every pre-0107 record reconciles exactly as before
 (pinned by `session-worktrees.test.ts`). See
 [ADR-0107](./0107-one-worktree-per-tab-and-a-multi-session-watch.md).
 
+
+## Amendment — 2026-11-26: a derived field was also stored, and the sweep believed the stored copy
+
+**Incident.** A tab cut `marvin/tab/rel-tests-c-last-six` with `git switch -c`
+inside its session worktree, committed two real, unmerged commits on it, then
+switched the worktree to another branch. Three minutes later the sweep that
+runs when an *unrelated* tab is closed deleted the branch (`worktree.session.swept
+trigger=close swept=1`); the archive-ref pin kept the commits, nothing else did.
+
+**Cause.** `mergedInto` is derived, and it was also stored: `mergeDerived`
+saves it to `.marvin/worktrees.json`, and `reconcileOne` rebuilt each record as
+`{ ...record, … }`, so a saved value survived every later reconcile that did
+not re-derive it. The branch had sat on another ref's tip for a few seconds
+before its first own commit; a reconcile in that window recorded `mergedInto`
+(true then), and after the commits it was no longer true but stuck.
+`adoptOrphans` had adopted the unregistered `marvin/tab/*` branch as an unbound
+`session` record, and the sweep's `unboundMerged` rule reclaims such a record
+once `mergedInto` is set and no open tab's checkout matches. Independent proof
+that stale values exist: a real registry held a record in state `ready` that
+also carried a `mergedInto`, with no ref containing its branch. The same stale
+value fed the tab-close decision (`session-watch.ts` → `TabCloseDecision`),
+where `mergedInto != nil` means "reclaim silently".
+
+**The rule, restated.** A derived field is derived on every read and stored
+only as a cache for readers that cannot run git. Nothing that destroys work
+reads the cache.
+
+1. `reconcileOne` drops the saved `mergedInto` before it rebuilds the record,
+   so a value exists only when the current derivation produced it. Every
+   reader (sweep, watch rows, the close decision, `mergeAllWorktrees`) gets the
+   fresh value.
+2. Immediately before it removes a checkout or a branch, the sweep asks git
+   again (`staleSpentReason`): `empty` must still have no commits past its base,
+   `merged` must still pass the ancestry-then-content proof. If not, nothing is
+   removed, the outcome says why, and one `worktree.sweep.refused` telemetry
+   line carries the branch and the reason. The archive pin in
+   `deleteBranchPreserving` stays as the last net.
+3. An adopted, unbound `marvin/tab/*` branch whose commits no other ref holds
+   derives `session`/`ready` with no `mergedInto` and is never swept (pinned).
+
+No Swift change: `TabCloseDecision` is correct given a server that only sends a
+`mergedInto` it has just derived. Tests:
+`sidecar/packages/runtime/tests/worktree-stale-merged-into.test.ts`.

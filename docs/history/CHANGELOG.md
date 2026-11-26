@@ -8,6 +8,33 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-11-26 — A stored `mergedInto` could get a tab's unmerged branch deleted (ADR-0103 amendment).**
+
+  *Incident.* `marvin/tab/rel-tests-c-last-six` held two unmerged commits and was
+  deleted when an unrelated tab closed (sidecar log `worktree.session.swept
+  trigger=close swept=1`; the archive ref `refs/marvin/archive/…` pinned the tip,
+  so nothing was lost).
+
+  *Diagnosis.* `mergedInto` is derived from git, but `reconcileOne` returned
+  `{ ...record, … }` and `mergeDerived` saved the result, so a value recorded
+  while the branch sat on another ref's tip (a fast-forward, seconds before its
+  first own commit) outlived the derivation. `adoptOrphans` had adopted the
+  branch unbound; `sweepReconciled`'s `unboundMerged` rule reclaims such a record
+  once `mergedInto` is set. A real registry showed the same shape (state `ready`
+  plus a `mergedInto`, no containing ref). The stale value also fed the watch row
+  and so the Swift close decision (`mergedInto != nil` = reclaim silently).
+
+  *Fix.* `reconcileOne` drops the saved `mergedInto` before rebuilding the record.
+  The sweep re-verifies from git immediately before removing a checkout or branch
+  and, on doubt, keeps both and logs `worktree.sweep.refused` with branch and
+  reason. No new ADR: this restores ADR-0103's own rule (derived, never trusted
+  from storage); addendum added there.
+
+  *Verification.* `worktree-stale-merged-into.test.ts` reproduces the timeline in
+  a real temp repo (red before the fix: branch deleted), plus the refusal line,
+  the watch row, the unmerged-adopted case and a truly merged unbound branch
+  still swept. Swift needs no change.
+
 - **2026-11-26 — unreleased: a tab that cannot resolve a provisional backlog item is no longer asked about it for ever ([ADR-0121](../decisions/0121-own-change-consequences-are-not-parked.md) addendum).** *Diagnosis.* On 2026-11-25 a terms tab (session `12d5b487`) finished and committed, but each scope-met close fired a corrective wakeup ("auto: own-change consequences parked at scope-met", 23:08, 23:59, 00:46, 01:15, 01:39) about one provisional item that named the redline the tab itself wrote. The item waited on a branch the tab may not merge and the supervisor had taken it over; the tab said so five times and the check fired again. Read in the transcript: it is not the Stop hook, it is the post-turn guard in `sdk-runner.ts` (`ownChangeConsequences` into `buildReconcilePrompt`, `workflow-guard.ts`), whose answers were fix / `keep` as pre-existing / leave it and do not claim scope met. The last one is the loop, and unlike ADR-0104 / ADR-0138 the check had no brake. *Fix.* `Handed over: <item-id> to <who> — <reason>` in the final message writes a dated note on the item and leaves it `provisional` (never kept or dismissed on the model's say-so, ADR-0047), working in a supervised or machine turn too; and an item refuses a session's close at most twice, counted on the session meta, then the close is allowed and `own.consequence.bypass` is logged and noted on the item. The refusal text names the line and the brake. New `own-consequence-close.ts`; 11 tests (the loop reproduced, then the brake, the note, an item the tab can resolve still asked, a wakeup turn, a note the item cannot take). *Verification.* Test file red on the missing module, then green; full run 200 files, 3,146 tests passing (3,135 before); runtime `tsc` clean.
 
 - **2026-11-25 — v1.1.3: supervising fourteen tabs from the app: a fleet view that tells the truth, panes on one standard, skills a brief names are checked.**

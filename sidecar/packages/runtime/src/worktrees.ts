@@ -37,6 +37,7 @@ import { autoTickSpine } from "./plan-seed";
 import { slugifyWorkDir } from "./projects";
 import { listSessionMetas } from "./session-meta";
 import { branchesHeldForQueue } from "./supervisor-queue-branches";
+import { logTelemetry } from "./telemetry";
 
 /**
  * Lifecycle of one worktree. Everything except `running` is DERIVED from git
@@ -903,8 +904,13 @@ function* reconcileOne(workDir: string, record: WorktreeRecord, checkouts: Set<s
       removed += Number(r) || 0;
     }
   }
+  // `mergedInto` is derived: a value saved on the record by an earlier reconcile
+  // must not survive one that does not re-derive it (2026-11-26 — a branch that
+  // had sat on another ref's tip kept `mergedInto` after its own commits, and
+  // the sweep deleted it).
+  const { mergedInto: _saved, ...fresh } = record;
   return {
-    ...record,
+    ...fresh,
     state,
     commits,
     filesChanged,
@@ -1154,7 +1160,22 @@ export async function sweepWorktreesAsync(
   return sweepReconciled(workDir, await reconcileWorktreesAsync(workDir, now), opts);
 }
 
-function sweepReconciled(
+/**
+ * Why a tree the sweep believes spent is NOT, according to git right now — or
+ * undefined when it still is. `empty` means no commits past its base; `merged`
+ * means the same ancestry-then-content proof the derivation used.
+ */
+function staleSpentReason(workDir: string, w: ReconciledWorktree): string | undefined {
+  if (w.state === "empty") {
+    const commits = Number(gitOr(workDir, ["rev-list", "--count", `${w.base}..${w.branch}`], "0")) || 0;
+    return commits === 0 ? undefined : `branch now holds ${commits} commit(s) past its base`;
+  }
+  const { mergedInto: _saved, ...record } = w;
+  return runSync(mergedIntoSteps(workDir, record)) ? undefined : "no other ref contains the branch and its content is not merged anywhere now";
+}
+
+/** Exported so a test can drive the sweep with a snapshot that has gone stale. */
+export function sweepReconciled(
   workDir: string,
   reconciled: ReconciledWorktree[],
   opts: { isSessionBusy?: (sessionId: string) => boolean },
@@ -1186,6 +1207,22 @@ function sweepReconciled(
         removedCheckout: false,
         deletedBranch: false,
         reason: "kept — the checkout holds uncommitted or untracked work",
+      });
+      continue;
+    }
+    // The last check before anything is removed: the state above was derived a
+    // moment ago, and a record is only ever a guess about where work lives.
+    // Ask git again, now, and refuse on any doubt (2026-11-26).
+    const refusal = w.branch.startsWith(BRANCH_PREFIX) ? staleSpentReason(workDir, w) : undefined;
+    if (refusal) {
+      logTelemetry({ kind: "worktree.sweep.refused", branch: w.branch, slug: w.slug, state: w.state, reason: refusal });
+      out.push({
+        slug: w.slug,
+        branch: w.branch,
+        state: w.state,
+        removedCheckout: false,
+        deletedBranch: false,
+        reason: `kept — ${refusal}`,
       });
       continue;
     }
