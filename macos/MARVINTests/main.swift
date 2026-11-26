@@ -8197,6 +8197,35 @@ runner.suite("session-row-text-r2-11") {
 
 // MARK: - Backlog window and plans panel (pane standard, 25.11.2026)
 
+// The Resolved tab is paged (ADR-0044 addendum, 27.11.2026): the open items and
+// the counts come when the window opens, the archive a page at a time.
+runner.suite("backlog-resolved-paging") {
+    func row(_ id: String, _ status: String) -> BacklogItem {
+        BacklogItem(id: id, title: id, body: "", status: status, severity: "med", created: "2026-11-01")
+    }
+
+    runner.test("a fresh read of the open items keeps the resolved rows already in hand, and drops one the server now lists as open") {
+        let current = [row("a", "open"), row("r1", "done"), row("r2", "dismissed"), row("back", "done")]
+        let merged = BacklogPaging.mergeOpen([row("a", "open"), row("b", "provisional"), row("back", "open")], into: current)
+        runner.expect(merged.map(\.id), equals: ["a", "b", "back", "r1", "r2"], "open rows first, resolved rows kept, a reopened row is the open one")
+        runner.expect(merged.first { $0.id == "back" }?.status, equals: "open", "the server's row wins")
+    }
+
+    runner.test("a page of the archive is appended, replaces a row it repeats, and a reset starts the resolved list over") {
+        let current = [row("a", "open"), row("r1", "done"), row("r2", "done")]
+        let next = BacklogPaging.mergePage([row("r2", "done"), row("r3", "dismissed")], into: current, reset: false)
+        runner.expect(next.map(\.id), equals: ["a", "r1", "r2", "r3"], "no duplicate, page order kept")
+        let again = BacklogPaging.mergePage([row("r9", "done")], into: current, reset: true)
+        runner.expect(again.map(\.id), equals: ["a", "r9"], "reset drops the old resolved rows, keeps the open ones")
+    }
+
+    runner.test("the footer says how much is loaded, and disappears when everything is") {
+        runner.expect((BacklogPaging.footer(loaded: 100, total: 2544) ?? "").contains("Showing 100 of 2544"), "partial load")
+        runner.expect(BacklogPaging.footer(loaded: 2544, total: 2544) == nil, "complete load")
+        runner.expect(BacklogPaging.pageSize, equals: 100, "a hundred at a time")
+    }
+}
+
 runner.suite("backlog-browse-pane-standard") {
     let now = ISO8601DateFormatter().date(from: "2026-11-25T12:00:00Z")!
     func item(_ id: String, _ title: String, status: String = "open", severity: String = "med",

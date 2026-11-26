@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { maybeRefreshWorktreeGraph } from "@marvin/graphify-bridge";
 import { buildProjectContext } from "@marvin/project-context";
 import { readAuthConfig } from "@marvin/runtime/auth-config";
+import { deriveBacklogFromGit } from "@marvin/runtime/backlog-derive";
 import { attachPendingPayload } from "@marvin/runtime/confirm-registry";
 import { pollOpenRouterBalance, recordTurnCost } from "@marvin/runtime/cost-tracker";
 import { calculateEstimatedCost } from "@marvin/runtime/models";
@@ -98,6 +99,11 @@ export async function buildTurnSystemPrompt(args: {
   skipProjectContext?: boolean | undefined;
 }): Promise<string> {
   const systemPrompt = buildSystemPrompt(args.personality);
+  // The index below lists the open items; close first the ones git proves fixed
+  // (a `Backlog: <slug>` trailer on the project's branch, backlog-derive.ts), so
+  // a session does not start by being told to do work that already landed.
+  // Cheap when nothing moved (one rev-parse), and never a reason to fail a turn.
+  if (!args.skipProjectContext) await deriveBacklogFromGit(args.workDir).catch(() => undefined);
   const projectContext = args.skipProjectContext
     ? ""
     : (

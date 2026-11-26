@@ -124,7 +124,7 @@ describe("backlog store — add / list / resolve", () => {
 
     // An over-cap body is REFUSED, never silently cut — nothing is written.
     const both = await updateBacklogItem(workDir, add.item.id, {
-      severity: "med",
+      severity: "medium",
       body: `${"x".repeat(MAX_BODY_CHARS + 100)}`,
     });
     expect(both.ok).toBe(false);
@@ -326,11 +326,12 @@ function item(over: Partial<BacklogItem> & { title: string }): BacklogItem {
     kind: over.kind ?? "unspecified",
     blocked: over.blocked ?? false,
     blockedOn: over.blockedOn ?? "",
-    severity: over.severity ?? "med",
+    severity: over.severity ?? "medium",
     sessionId: "",
     claimedBy: "",
     claimedBranch: "",
     claimedAt: "",
+    release: "", origin: "", relatesTo: "", resolvedBy: "", evidence: "", reopenedAt: "",
     created: "2026-08-06T00:00:00.000Z",
     updated: "2026-08-06T00:00:00.000Z",
   };

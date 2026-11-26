@@ -13,8 +13,8 @@ import type { BacklogItem } from "../src/backlog";
 import { MAX_NOTICES_PER_RESOLUTION, notifyTabsOfResolution, resolutionNoticeText } from "../src/backlog-notify";
 
 const item = (over: Partial<BacklogItem> & { title: string }): BacklogItem => ({
-  id: "x", body: "", status: "done", severity: "med", kind: "bug", blocked: false, blockedOn: "",
-  sessionId: "", claimedBy: "", claimedBranch: "", claimedAt: "", created: "", updated: "", ...over,
+  id: "x", body: "", status: "done", severity: "medium", kind: "bug", blocked: false, blockedOn: "",
+  sessionId: "", claimedBy: "", claimedBranch: "", claimedAt: "", release: "", origin: "", relatesTo: "", resolvedBy: "", evidence: "", reopenedAt: "", created: "", updated: "", ...over,
 });
 
 describe("resolutionNoticeText", () => {

@@ -8,6 +8,50 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-11-27 — The project backlog: done is derived from git, closed items are indexed, the schema is checked (ADR-0044 amendment).**
+
+  *Symptom.* On the owner's real project the store held 2,837 item files (293
+  open, 5 doing, 2,221 done, 318 dismissed). The backlog window read and sent
+  all of them to show 298; on 26.11, 54 items were filed and about 50 stayed
+  open after fixes that had reached the working branch through a release-branch
+  merge; one item hit the 4,000-character note cap; the severity was written
+  several ways. A sweep session read all 2,837 files to find the open ones.
+
+  *Decision.* Research report `backlog-practices-2026-11-27` (recommendations 1-4
+  and 8). State is derived from git, like worktrees (ADR-0103): a `Fixes-Backlog: <slug>`
+  trailer on a commit reachable from the base branch tabs are cut from closes an
+  open or doing item, with the sha as evidence, persisted as `resolvedBy:
+  derived`; nothing is derived while a merge is in progress in the main checkout.
+  A first version moved closed files into `archive/`; review found
+  `.marvin/backlog/` is tracked in git (1,237 of 2,837 files), so that was
+  dropped before shipping: files never move, and two indexes carry the state — the
+  open index `backlog.md` and a git-ignored `backlog-closed.idx` (mtime and size
+  per line, rebuilt when missing or stale, the ADR-0072 shape). `severity` stays
+  the one field, `low | medium | high`, folded on read and never bulk-rewritten;
+  `type` and `waitsOn` are input aliases of `kind` and `blockedOn`.
+
+  *Review round.* The closing key is `Fixes-Backlog:` (the whole value a
+  comma-separated list of existing slugs, else the line is ignored and reported
+  once); `Backlog:` is a reference and closes nothing — the live repository
+  already has `Backlog: <slug>, points 1 to 4.` lines. An item held by an open
+  tab is left alone. An unchanged branch tip costs one `rev-parse` and no read
+  of the backlog. The closed index's temp file has a random suffix per write.
+
+  *Measured.* Synthetic 2,837-file store (293 / 5 / 2,221 / 318), warm file
+  cache, no file moved: `GET /api/backlog` before 4,141,506 bytes in 253, 432 and
+  308 ms; after 460,036 bytes in 30-32 ms (open items + counts; 116 ms for the
+  first read, which builds the index) and 154,646 bytes in 33 ms for the first
+  100 closed items. The Swift decode and render of the old 4 MB answer, which
+  the owner felt, is not in the "before" number.
+
+  *Verified.* Derive (real temp git repos: a fix on a side branch that arrives
+  by a merge, a base unlike the checkout's branch, a merge in progress, a reopen,
+  a revert, a typo'd slug, a detached HEAD), the index (no file moves or changes,
+  rebuild from missing / stale / garbled, paging, a git-tracked store with a clean
+  `git status` after a full build and only the item files after add / resolve),
+  the pane's route, the tool boundary, and the Swift paging rules. Not run: the
+  owner's live store, the installed app.
+
 - **2026-11-26 — A tab's link to a capture in /tmp opened a viewer that said `FilesServiceError error 0` (ADR-0008 addendum).**
 
   *Symptom.* Clicking `/tmp/v3214-shots/v3214-pd05-arbori-1280.png` (valid PNG,

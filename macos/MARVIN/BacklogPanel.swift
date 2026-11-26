@@ -32,7 +32,14 @@ import SwiftUI
     /// Called after any mutation so the tray chip count can refresh.
     let onChanged: () -> Void
 
+    /// The open items, plus the resolved ones loaded so far (`BacklogPaging`).
     @State private var items: [BacklogItem] = []
+    /// The Resolved tab loads closed items a page at a time when it is
+    /// opened; `resolvedFetched` is how many the server has handed over.
+    @State private var resolvedTotal = 0
+    @State private var resolvedFetched = 0
+    @State private var resolvedHasMore = false
+    @State private var resolvedLoading = false
     @State private var isLoading = false
     /// The first fetch has finished (successfully or not) — until then the
     /// list shows a skeleton, never the empty state.
@@ -145,6 +152,10 @@ import SwiftUI
             adjustInitialScope()
         }
         .onChange(of: filter) { _, _ in selection.formIntersection(visibleIds) }
+        // The closed items are read when their tab is opened, not when the window is.
+        .onChange(of: scope) { _, next in
+            if next == .resolved { Task { await loadResolved(reset: true) } }
+        }
         // Another tab (or a hand edit) changed the backlog while this window is
         // open: bring the list up to date in place (ADR-0044 addendum).
         .onChange(of: BacklogLiveStore.shared.generation) { _, _ in Task { await reloadQuietly() } }
@@ -377,8 +388,31 @@ import SwiftUI
     private var listPane: some View {
         VStack(spacing: 0) {
             listBody
+            if scope == .resolved { resolvedFooter }
             if scope == .review, !bulkTargets.items.isEmpty { bulkBar }
             if scope == .open { MarvinDivider(); addRow }
+        }
+    }
+
+    /// Under the Resolved list: how much of the archive is loaded, and the way to load more.
+    @ViewBuilder private var resolvedFooter: some View {
+        let loaded = items.filter { BacklogScope.resolved.includes(status: $0.status) }.count
+        if resolvedLoading || resolvedHasMore {
+            MarvinDivider()
+            HStack(spacing: 8) {
+                if resolvedLoading { ProgressView().controlSize(.small) }
+                Text(BacklogPaging.footer(loaded: loaded, total: max(resolvedTotal, counts.resolved)) ?? "Loading…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MarvinTheme.textMuted)
+                Spacer(minLength: 8)
+                if resolvedHasMore {
+                    Button("Load more") { Task { await loadResolved(reset: false) } }
+                        .disabled(resolvedLoading)
+                        .accessibilityHint("Loads the next \(BacklogPaging.pageSize) resolved items")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
         }
     }
 
@@ -603,7 +637,8 @@ import SwiftUI
         isLoading = true
         defer { isLoading = false; hasLoaded = true }
         do {
-            items = try await BacklogService.shared.fetch(workDir: workDir)
+            // The open items only; the archive comes by page when its tab is opened.
+            items = BacklogPaging.mergeOpen(try await BacklogService.shared.fetch(workDir: workDir), into: items)
             loadError = nil
         } catch {
             loadError = error.localizedDescription
@@ -616,7 +651,25 @@ import SwiftUI
     /// window must not blink for a change it already shows.
     private func reloadQuietly() async {
         guard hasLoaded, !isLoading, let fresh = try? await BacklogService.shared.fetch(workDir: workDir) else { return }
-        if fresh != items { items = fresh }
+        let merged = BacklogPaging.mergeOpen(fresh, into: items)
+        if merged != items { items = merged }
+    }
+
+    /// The Resolved tab: the first page when it is opened (`reset`), the next one on "Load more".
+    private func loadResolved(reset: Bool) async {
+        guard !resolvedLoading else { return }
+        resolvedLoading = true
+        defer { resolvedLoading = false }
+        let offset = reset ? 0 : resolvedFetched
+        do {
+            let page = try await BacklogService.shared.fetchResolved(workDir: workDir, offset: offset)
+            items = BacklogPaging.mergePage(page.items, into: items, reset: reset)
+            resolvedFetched = offset + page.items.count
+            resolvedTotal = page.total
+            resolvedHasMore = page.hasMore
+        } catch {
+            post(PaneNotice(kind: .error, headline: "Couldn’t load the resolved items.", detail: error.localizedDescription))
+        }
     }
 
     /// Done / Dismiss / Keep / Reopen: change the row where it is, then tell the

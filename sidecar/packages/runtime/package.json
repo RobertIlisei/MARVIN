@@ -53,6 +53,7 @@
     "./integration": "./src/integration.ts",
     "./backlog-notify": "./src/backlog-notify.ts",
     "./backlog-live": "./src/backlog-live.ts",
+    "./backlog-derive": "./src/backlog-derive.ts",
     "./personality": "./src/personality.ts",
     "./sdk-runner": "./src/sdk-runner.ts",
     "./transient-errors": "./src/transient-errors.ts",

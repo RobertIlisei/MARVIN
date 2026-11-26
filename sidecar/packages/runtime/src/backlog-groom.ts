@@ -117,7 +117,7 @@ const KIND_ORDER: GroomFindingKind[] = [
   "stale",
 ];
 
-const SEVERITY_RANK: Record<BacklogSeverity, number> = { high: 0, med: 1, low: 2 };
+const SEVERITY_RANK: Record<BacklogSeverity, number> = { high: 0, medium: 1, low: 2 };
 
 function daysBetween(now: Date, iso: string): number | null {
   const then = Date.parse(iso);

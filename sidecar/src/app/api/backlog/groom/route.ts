@@ -22,7 +22,7 @@ import { existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 import { groomBacklog } from "@marvin/runtime/backlog-groom";
-import { listBacklog } from "@marvin/runtime/backlog";
+import { legacySeverity, listBacklog } from "@marvin/runtime/backlog";
 import { validateProjectCwd } from "@marvin/runtime/projects";
 
 export const runtime = "nodejs";
@@ -69,7 +69,7 @@ export async function GET(req: NextRequest) {
       kind: f.kind,
       id: f.item.id,
       title: f.item.title,
-      severity: f.item.severity,
+      severity: legacySeverity(f.item.severity),
       status: f.item.status,
       relatedIds: f.related.map((r) => r.id),
       detail: f.detail,

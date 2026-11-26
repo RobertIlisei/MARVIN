@@ -65,7 +65,7 @@ describe("the file counter", () => {
     await addBacklogItem(workDir, { title: "second thing", body: "b" });
     await addBacklogItem(workDir, { title: "third thing", body: "b", provisional: true });
     await setBacklogStatus(workDir, "second-thing", "done");
-    const items = await listBacklog(workDir);
+    const items = await listBacklog(workDir, { status: "all" }); // the open files + the closed ones
     const counter = createBacklogCounter();
     const got = await counter.count(workDir);
     expect(got).toEqual(countsFromRows(items));

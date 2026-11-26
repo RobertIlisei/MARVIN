@@ -21,7 +21,8 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { noteBacklogWrite } from "./backlog-live";
+import { CLOSED_INDEX_FILE, type ClosedEntry, noteItemWritten, scanStore } from "./backlog-index";
+import { type BacklogCounts, countsFromRows, noteBacklogWrite } from "./backlog-live";
 import { type AdrIndex, buildAdrIndex, linkTrailerFor, stripLinkTrailer } from "./note-links";
 
 export const INDEX_HEADER = "# Project Backlog";
@@ -36,7 +37,7 @@ export const MAX_NOTES_CHARS = 4000;
 /** Why a body can't be stored, or null. Description = every line that isn't a
  *  `> ` note; notes = the `> ` lines. Each has its own cap; both refuse, never
  *  truncate. */
-export function bodyLimitError(body: string): string | null {
+export function bodyLimitError(body: string, id?: string): string | null {
   const lines = body.split("\n");
   const notes = lines.filter((l) => l.startsWith(">")).join("\n");
   const description = lines.filter((l) => !l.startsWith(">")).join("\n").trim();
@@ -44,7 +45,14 @@ export function bodyLimitError(body: string): string | null {
     return `the description is ${description.length} chars (max ${MAX_BODY_CHARS}); a backlog item is a pointer, not a doc — condense it and retry. Nothing was written.`;
   }
   if (notes.length > MAX_NOTES_CHARS) {
-    return `the notes are ${notes.length} chars (max ${MAX_NOTES_CHARS}); condense older notes with backlog_update (move history to the item's source doc) and retry. Nothing was written.`;
+    // Refuse with advice, never silently and never by raising the cap
+    // (ADR-0044 addendum, 2026-11-27): an item that has outgrown its notes is
+    // two pieces of work, and the second one is a new item that points back.
+    return (
+      `the notes are ${notes.length} chars (max ${MAX_NOTES_CHARS}); this item cannot take more. ` +
+      `File the new point as its own item with backlog_add and \`relatesTo: "${id ?? "<this item's slug>"}"\`, ` +
+      `or condense the older notes with backlog_update (move history to the item's source doc). Nothing was written.`
+    );
   }
   return null;
 }
@@ -63,8 +71,69 @@ export const MAX_OPEN_ITEMS = 500;
 // a discovery survives even if the turn never reaches a handoff.
 export const BACKLOG_STATUSES = ["provisional", "open", "doing", "done", "dismissed"] as const;
 export type BacklogStatus = (typeof BACKLOG_STATUSES)[number];
-export const BACKLOG_SEVERITIES = ["low", "med", "high"] as const;
+
+/**
+ * Severity — how much an item matters: `low | medium | high`, one field, and
+ * the one the files already carry (`severity:`). It had drifted into `med`,
+ * `medium`, `hi` and others as tabs and people wrote it by hand (ADR-0044
+ * amendment, 2026-11-27); the write path now accepts exactly these three, and
+ * a reader folds every old spelling WITHOUT rewriting the file — the files are
+ * tracked in git, so one is rewritten only when its item is next written
+ * anyway. `priority` is accepted as an input name for the same field.
+ */
+export const BACKLOG_SEVERITIES = ["low", "medium", "high"] as const;
 export type BacklogSeverity = (typeof BACKLOG_SEVERITIES)[number];
+
+const SEVERITY_SYNONYMS: Record<string, BacklogSeverity> = {
+  low: "low", lo: "low", minor: "low", trivial: "low",
+  medium: "medium", med: "medium", mid: "medium", normal: "medium", moderate: "medium",
+  high: "high", hi: "high", major: "high", urgent: "high", critical: "high",
+};
+
+/** READ side: any spelling a file or an older client ever used → one of the three. An unknown value is `medium`, never a refusal. */
+export function normalizeSeverity(raw: string | undefined | null): BacklogSeverity {
+  return SEVERITY_SYNONYMS[(raw ?? "").trim().toLowerCase()] ?? "medium";
+}
+
+/** Like `normalizeSeverity`, but null for a value that is no spelling of a severity at all (the wire route, which still accepts the pane's `med`). */
+export function lenientSeverity(raw: string | undefined | null): BacklogSeverity | null {
+  return SEVERITY_SYNONYMS[(raw ?? "").trim().toLowerCase()] ?? null;
+}
+
+/** WRITE side (tools): exactly `low | medium | high`, with a message that says so. */
+export function parseSeverity(raw: unknown): { ok: true; value: BacklogSeverity } | { ok: false; error: string } {
+  const v = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if ((BACKLOG_SEVERITIES as readonly string[]).includes(v)) return { ok: true, value: v as BacklogSeverity };
+  const hint = lenientSeverity(typeof raw === "string" ? raw : "");
+  return {
+    ok: false,
+    error: `severity (priority) ${JSON.stringify(raw)} is not valid — use exactly one of ${BACKLOG_SEVERITIES.join(", ")}${hint ? ` (did you mean "${hint}"?)` : ""}. Nothing was written.`,
+  };
+}
+
+/** The old three-letter spelling the macOS pane still reads (`severity: "med"`); the wire carries it until the pane reads the normalised value. */
+export function legacySeverity(s: BacklogSeverity): "low" | "med" | "high" {
+  return s === "medium" ? "med" : s;
+}
+
+/**
+ * `type` (bug | debt | idea | chore) is an INPUT alias for `kind` (ADR-0064),
+ * not a second field: `bug` and `chore` are kinds already, `debt` is a chore
+ * and `idea` a feature. `kind` itself stays one of BACKLOG_KINDS. `waitsOn` is
+ * likewise an input alias for `blockedOn` (and marks the item blocked).
+ */
+export const BACKLOG_TYPE_ALIASES = { bug: "bug", chore: "chore", debt: "chore", idea: "feature" } as const;
+export type BacklogTypeAlias = keyof typeof BACKLOG_TYPE_ALIASES;
+
+const MAX_RELEASE_CHARS = 40;
+const MAX_ORIGIN_CHARS = 80;
+
+/** Single-line optional text field with a cap; refuses, never truncates. */
+function lineField(name: string, raw: string | undefined, max: number): { ok: true; value: string } | { ok: false; error: string } {
+  const v = (raw ?? "").replace(/\s+/g, " ").trim();
+  if (v.length > max) return { ok: false, error: `${name} is ${v.length} chars (max ${max}); keep it to one short line. Nothing was written.` };
+  return { ok: true, value: v };
+}
 
 /**
  * What KIND of work an item is — orthogonal to severity, which says how much
@@ -99,9 +168,22 @@ export interface BacklogItem {
   title: string;
   body: string;
   status: BacklogStatus;
+  /** low | medium | high (older files say `med`; read normalised). */
   severity: BacklogSeverity;
   /** What sort of work this is. See BACKLOG_KINDS. */
   kind: BacklogKind;
+  /** Free text: the release it was found in or is aimed at ("v3.2"). */
+  release: string;
+  /** Where it came from: a session id or a review name. */
+  origin: string;
+  /** Slug of the item this one continues (a new item filed because the old one's notes were full). */
+  relatesTo: string;
+  /** "derived" when the item was closed by a `Backlog:` trailer on a commit (git-derived, not a person's decision). */
+  resolvedBy: "" | "derived";
+  /** For a derived resolution: the commit sha that proves it. */
+  evidence: string;
+  /** When a resolved item was last reopened (ISO). A fix commit older than this does not close it again. */
+  reopenedAt: string;
   /**
    * Waiting on something OUTSIDE the repo — a sign-off, a legal cutoff, a pilot
    * filing, an undecided policy.
@@ -147,6 +229,14 @@ export interface AddBacklogInput {
   body?: string;
   severity?: BacklogSeverity;
   kind?: BacklogKind;
+  /** Alias of `kind` (see BACKLOG_TYPE_ALIASES); `kind` wins when both are given. */
+  type?: BacklogTypeAlias;
+  release?: string;
+  origin?: string;
+  /** Alias of `blockedOn`; marks the item blocked unless `blocked` says otherwise. */
+  waitsOn?: string;
+  /** Slug of an existing item (open or closed) this one follows up. */
+  relatesTo?: string;
   blocked?: boolean;
   blockedOn?: string;
   sessionId?: string;
@@ -483,11 +573,44 @@ function slugify(title: string): string {
   return trimmed || "item";
 }
 
+// ---------------------------------------------------------------------------
+// Layout (ADR-0044 amendment, 2026-11-27)
+// ---------------------------------------------------------------------------
+//
+//   .marvin/backlog/<slug>.md      one file per item, open or closed — never moved
+//   .marvin/backlog.md             the OPEN index: provisional, open, doing
+//   .marvin/backlog-closed.idx     the CLOSED index: done, dismissed, newest first
+//
+// One real project holds 2,837 item files (2,544 closed) and TRACKS about 1,200
+// of them in git, so a file never changes place; the two indexes are what make
+// reading open work cheap (`backlog-index.ts`). Only `backlog.md` is a document
+// a person reads; `backlog-closed.idx` is a git-ignored cache.
+
 function backlogDir(workDir: string): string {
   return join(workDir, ".marvin", "backlog");
 }
 function indexFile(workDir: string): string {
   return join(workDir, ".marvin", "backlog.md");
+}
+
+/** done and dismissed are closed; everything else is open work. */
+export function isResolvedStatus(s: BacklogStatus): boolean {
+  return s === "done" || s === "dismissed";
+}
+
+/** A slug is a file name inside the store; anything that could leave it is not an id. */
+function validId(id: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) && !id.includes("..");
+}
+function itemPath(workDir: string, id: string): string {
+  return join(backlogDir(workDir), `${id}.md`);
+}
+
+/** The path of an item's file, or null when there is none (or the id could not be a file name). */
+function locate(workDir: string, id: string): string | null {
+  if (!validId(id)) return null;
+  const p = itemPath(workDir, id);
+  return existsSync(p) ? p : null;
 }
 
 /**
@@ -525,6 +648,12 @@ function parseField(content: string, field: string): string {
   return new RegExp(`^${field}:[^\\S\\n]*(.*)$`, "m").exec(content)?.[1]?.trim() ?? "";
 }
 
+/** The frontmatter block only — a body line that happens to start `release:` is not a field. */
+function frontmatterOf(content: string): string {
+  const end = content.indexOf("\n---", 3);
+  return end >= 0 ? content.slice(0, end) : content;
+}
+
 function parseItem(slug: string, content: string): BacklogItem {
   const bodyStart = content.indexOf("\n---", 3);
   const afterFm = bodyStart >= 0 ? content.indexOf("\n", bodyStart + 1) : -1;
@@ -532,33 +661,40 @@ function parseItem(slug: string, content: string): BacklogItem {
   // counts toward the body cap, never shows in the detail view's body field,
   // and never round-trips into itself on the next write.
   const body = stripLinkTrailer(afterFm >= 0 ? content.slice(afterFm + 1).trim() : "").trim();
-  const statusRaw = parseField(content, "status");
-  const sevRaw = parseField(content, "severity");
-  const kindRaw = parseField(content, "kind");
+  const fm = frontmatterOf(content);
+  const statusRaw = parseField(fm, "status");
+  const kindRaw = parseField(fm, "kind");
+  const resolvedByRaw = parseField(fm, "resolvedBy");
   return {
-    id: parseField(content, "id") || slug,
-    title: parseField(content, "title") || slug,
+    id: parseField(fm, "id") || slug,
+    title: parseField(fm, "title") || slug,
     body,
     status: (BACKLOG_STATUSES as readonly string[]).includes(statusRaw)
       ? (statusRaw as BacklogStatus)
       : "open",
-    severity: (BACKLOG_SEVERITIES as readonly string[]).includes(sevRaw)
-      ? (sevRaw as BacklogSeverity)
-      : "med",
+    // `med` in every file written before 2026-11-27; folded here, rewritten
+    // only when this item is next written for another reason.
+    severity: normalizeSeverity(parseField(fm, "severity")),
     // Absent in every file written before ADR-0064. Missing -> "unspecified"
     // rather than a guess: an invented kind would make filters silently wrong.
     kind: (BACKLOG_KINDS as readonly string[]).includes(kindRaw)
       ? (kindRaw as BacklogKind)
       : "unspecified",
-    blocked: parseField(content, "blocked") === "true",
+    release: parseField(fm, "release"),
+    origin: parseField(fm, "origin"),
+    relatesTo: parseField(fm, "relatesTo"),
+    resolvedBy: resolvedByRaw === "derived" ? "derived" : "",
+    evidence: parseField(fm, "evidence"),
+    reopenedAt: parseField(fm, "reopenedAt"),
+    blocked: parseField(fm, "blocked") === "true",
     // Self-heal files corrupted by the old parser (see repairSwallowedField).
-    blockedOn: repairSwallowedField(parseField(content, "blockedOn")),
-    sessionId: parseField(content, "sessionId"),
-    claimedBy: parseField(content, "claimedBy"),
-    claimedBranch: parseField(content, "claimedBranch"),
-    claimedAt: parseField(content, "claimedAt"),
-    created: parseField(content, "created"),
-    updated: parseField(content, "updated"),
+    blockedOn: repairSwallowedField(parseField(fm, "blockedOn")),
+    sessionId: parseField(fm, "sessionId"),
+    claimedBy: parseField(fm, "claimedBy"),
+    claimedBranch: parseField(fm, "claimedBranch"),
+    claimedAt: parseField(fm, "claimedAt"),
+    created: parseField(fm, "created"),
+    updated: parseField(fm, "updated"),
   };
 }
 
@@ -566,9 +702,9 @@ function parseItem(slug: string, content: string): BacklogItem {
  * Write one item with its derived link trailer.
  *
  * Every write path goes through here so the trailer can never drift out of
- * sync with the body that produced it. `adrIndex` is passed in when a caller is
- * writing many items, so a relink pass scans the ADR directory once rather than
- * once per item.
+ * sync with the body that produced it, and so the closed index follows the
+ * item. `adrIndex` is passed in when a caller is writing many items, so a
+ * relink pass scans the ADR directory once rather than once per item.
  */
 async function writeItem(
   workDir: string,
@@ -577,7 +713,8 @@ async function writeItem(
 ): Promise<void> {
   const index = adrIndex ?? (await buildAdrIndex(workDir));
   const trailer = linkTrailerFor(`${item.title}\n${item.body}`, workDir, index);
-  await writeFile(join(backlogDir(workDir), `${item.id}.md`), serialize(item, trailer), "utf-8");
+  await writeFile(itemPath(workDir, item.id), serialize(item, trailer), "utf-8");
+  await noteItemWritten(workDir, item.id, item.status, item.updated, item.title);
   // Say so (ADR-0044 addendum): every write path ends here, so every surface
   // that shows a backlog count hears about it — one debounced signal per project.
   noteBacklogWrite(workDir);
@@ -589,7 +726,7 @@ async function writeItem(
  * two starbursts until each item happens to be touched again.
  */
 export async function relinkBacklogNotes(workDir: string): Promise<number> {
-  const items = await readAll(workDir);
+  const items = await readActive(workDir);
   if (items.length === 0) return 0;
   const adrIndex = await buildAdrIndex(workDir);
   let n = 0;
@@ -612,34 +749,102 @@ function serialize(item: BacklogItem, linkTrailer = ""): string {
     `status: ${item.status}\n` +
     `severity: ${item.severity}\n` +
     `kind: ${item.kind}\n` +
+    (item.release ? `release: ${item.release}\n` : "") +
+    (item.origin ? `origin: ${item.origin.replace(/\n/g, " ")}\n` : "") +
+    (item.relatesTo ? `relatesTo: ${item.relatesTo}\n` : "") +
     `blocked: ${item.blocked ? "true" : "false"}\n` +
     `blockedOn: ${item.blockedOn.replace(/\n/g, " ").trim()}\n` +
     `sessionId: ${item.sessionId}\n` +
     (item.claimedBy ? `claimedBy: ${item.claimedBy}\nclaimedBranch: ${item.claimedBranch}\nclaimedAt: ${item.claimedAt}\n` : "") +
+    (item.resolvedBy ? `resolvedBy: ${item.resolvedBy}\n` : "") +
+    (item.evidence ? `evidence: ${item.evidence}\n` : "") +
+    (item.reopenedAt ? `reopenedAt: ${item.reopenedAt}\n` : "") +
     `created: ${item.created}\n` +
     `updated: ${item.updated}\n` +
     `---\n\n${item.body || item.title}\n${linkTrailer}`
   );
 }
 
-async function readAll(workDir: string): Promise<BacklogItem[]> {
-  const dir = backlogDir(workDir);
-  let files: string[];
+/** One read of the store: the open items (parsed) and the closed index. Closed files are not read. */
+async function readStore(workDir: string): Promise<{ open: BacklogItem[]; closed: ClosedEntry[]; counts: { done: number; dismissed: number } }> {
+  const scan = await scanStore(workDir);
+  const open = [...scan.openFiles.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, content]) => parseItem(id, content));
+  return { open, closed: scan.closed, counts: scan.counts };
+}
+
+/** The open items: provisional, open, doing. */
+async function readActive(workDir: string): Promise<BacklogItem[]> {
+  return (await readStore(workDir)).open;
+}
+
+/** Every item slug in the store, open or closed: the file names, nothing read. */
+export async function backlogSlugs(workDir: string): Promise<Set<string>> {
   try {
-    files = (await readdir(dir)).filter((f) => f.endsWith(".md"));
+    return new Set((await readdir(backlogDir(workDir))).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)));
   } catch {
-    return [];
+    return new Set();
   }
+}
+
+/** One item by id, open or closed. */
+export async function getBacklogItem(workDir: string, id: string): Promise<BacklogItem | null> {
+  const path = locate(workDir, id);
+  if (!path) return null;
+  try {
+    return parseItem(id, await readFile(path, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+export interface ResolvedPage {
+  items: BacklogItem[];
+  /** Closed items matching the status filter, from the closed index. */
+  total: number;
+  offset: number;
+  hasMore: boolean;
+}
+
+/** How many closed items there are, from the closed index (no item file of a closed item is read). */
+export async function closedCounts(workDir: string): Promise<{ done: number; dismissed: number }> {
+  return (await scanStore(workDir)).counts;
+}
+
+/**
+ * A page of closed items, newest first. The order and the total come from the
+ * closed index; only the files of the page are read.
+ */
+export async function listResolved(
+  workDir: string,
+  opts: { status?: "done" | "dismissed"; limit?: number; offset?: number } = {},
+): Promise<ResolvedPage> {
+  const limit = Math.min(Math.max(Math.trunc(opts.limit ?? 100), 1), 500);
+  const offset = Math.max(Math.trunc(opts.offset ?? 0), 0);
+  const { closed } = await scanStore(workDir);
+  const rows = opts.status ? closed.filter((e) => e.status === opts.status) : closed;
+  const slice = rows.slice(offset, offset + limit);
   const items: BacklogItem[] = [];
-  for (const f of files.sort()) {
+  for (const e of slice) {
     try {
-      const content = await readFile(join(dir, f), "utf-8");
-      items.push(parseItem(f.replace(/\.md$/, ""), content));
+      items.push(parseItem(e.id, await readFile(itemPath(workDir, e.id), "utf-8")));
     } catch {
-      /* skip unreadable */
+      /* gone since the scan */
     }
   }
-  return items;
+  return { items, total: rows.length, offset, hasMore: offset + slice.length < rows.length };
+}
+
+/**
+ * Everything the backlog window shows on open: the open items, and the counts
+ * by status with the closed ones taken from the closed index — one scan, no
+ * closed file read.
+ */
+export async function backlogOverview(workDir: string): Promise<{ open: BacklogItem[]; counts: BacklogCounts; resolved: { done: number; dismissed: number; total: number } }> {
+  const { open, counts } = await readStore(workDir);
+  const c = countsFromRows(open);
+  c.done = counts.done;
+  c.dismissed = counts.dismissed;
+  return { open, counts: c, resolved: { ...counts, total: counts.done + counts.dismissed } };
 }
 
 const STATUS_MARK: Record<BacklogStatus, string> = {
@@ -650,48 +855,69 @@ const STATUS_MARK: Record<BacklogStatus, string> = {
   dismissed: "[-]",
 };
 
+const SEVERITY_ORDER: Record<BacklogSeverity, number> = { high: 0, medium: 1, low: 2 };
+
 /**
- * Rebuild `.marvin/backlog.md` from the item files. Lists only open + doing
- * (active work); done/dismissed drop from the index but keep their files as
- * history. Returns the active count.
+ * Rebuild `.marvin/backlog.md` — the OPEN index — from the open files. Lists
+ * only open + doing + to-review (active work), one compact line each; closed
+ * items are named by a count and live in the closed index. Returns the active
+ * count.
  */
 export async function rewriteBacklogIndex(workDir: string): Promise<number> {
   // Active rail = provisional + open + doing. Provisional items (ADR-0047) are
   // listed too so an auto-captured discovery resurfaces next session even if it
   // was never reviewed — losing it is the failure this exists to prevent.
-  const active = (await readAll(workDir))
-    .filter((i) => i.status === "provisional" || i.status === "open" || i.status === "doing")
-    .sort((a, b) => {
-      const order = { high: 0, med: 1, low: 2 } as const;
-      return order[a.severity] - order[b.severity] || a.created.localeCompare(b.created);
-    });
-  const lines = active.map(
+  const store = await readStore(workDir);
+  const active = store.open.sort(
+    (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.created.localeCompare(b.created),
+  );
+  const lines = active.map((i) => {
+    const meta = [i.release, i.blockedOn && i.blocked ? `waits on ${i.blockedOn}` : ""].filter(Boolean);
     // `[[backlog/<id>]]` rather than a bare path: Obsidian resolves it to the
     // note, which is what connects the index to its items in the graph view
     // (ADR-0065). Without links the vault is N disconnected dots. Reads the
     // same as the old text form everywhere else, including the context
     // injection that quotes this file.
-    (i) => `- ${STATUS_MARK[i.status]} (${i.severity}) ${i.title}${i.status === "doing" && describeClaim(i) ? ` · ${describeClaim(i)}` : ""} — [[backlog/${i.id}]]`,
-  );
+    return `- ${STATUS_MARK[i.status]} (${i.severity}) ${i.title}${i.status === "doing" && describeClaim(i) ? ` · ${describeClaim(i)}` : ""}${meta.length ? ` · ${meta.join(" · ")}` : ""} — [[backlog/${i.id}]]`;
+  });
+  const closedTotal = store.counts.done + store.counts.dismissed;
   const body =
     `${INDEX_HEADER}\n\n` +
     `Parked follow-ups (open + in-progress; \`[?]\` = auto-captured, awaiting your ` +
     `keep/dismiss). One line per item; details in \`.marvin/backlog/<slug>.md\`. ` +
     `A PARKING LOT, not a queue agents pull from (ADR-0044) — resolve via the ` +
-    `\`backlog_resolve\` tool or the backlog panel; done/dismissed items drop from ` +
-    `this index (files kept).\n\n` +
+    `\`backlog_resolve\` tool or the backlog panel.${closedTotal ? ` ${closedTotal} closed items are not listed here (\`backlog_list status: done | dismissed | all\` reads them; index: \`.marvin/${CLOSED_INDEX_FILE}\`).` : ""}\n\n` +
     (lines.length ? lines.join("\n") : "_No open backlog items._") +
     "\n";
+  await mkdir(join(workDir, ".marvin"), { recursive: true });
   await writeFile(indexFile(workDir), body, "utf-8");
   return active.length;
 }
 
+/**
+ * The backlog's items. By default the OPEN ones (provisional, open, doing) —
+ * closed files are not read unless asked: `status: "done" | "dismissed"` reads
+ * them (prefer `listResolved`, which pages), `"all"` returns both.
+ */
 export async function listBacklog(
   workDir: string,
-  opts?: { status?: BacklogStatus },
+  opts?: { status?: BacklogStatus | "all" },
 ): Promise<BacklogItem[]> {
-  const all = await readAll(workDir);
-  return opts?.status ? all.filter((i) => i.status === opts.status) : all;
+  const status = opts?.status;
+  if (status === "done" || status === "dismissed") {
+    const out: BacklogItem[] = [];
+    for (let offset = 0; ; ) {
+      const page = await listResolved(workDir, { status, limit: 500, offset });
+      out.push(...page.items);
+      if (!page.hasMore) return out;
+      offset += page.items.length;
+    }
+  }
+  const active = await readActive(workDir);
+  if (status === "all") {
+    return [...active, ...(await listBacklog(workDir, { status: "done" })), ...(await listBacklog(workDir, { status: "dismissed" }))];
+  }
+  return status ? active.filter((i) => i.status === status) : active;
 }
 
 /**
@@ -711,18 +937,36 @@ export async function addBacklogItem(
   const body = (input.body ?? "").trim();
   const addLimit = bodyLimitError(body);
   if (addLimit) return { ok: false, error: addLimit };
-  const severity: BacklogSeverity = input.severity ?? "med";
+  let severity: BacklogSeverity = "medium";
+  if (input.severity !== undefined) {
+    const p = parseSeverity(input.severity);
+    if (!p.ok) return { ok: false, error: p.error };
+    severity = p.value;
+  }
+  if (input.type !== undefined && !(input.type in BACKLOG_TYPE_ALIASES)) {
+    return { ok: false, error: `type ${JSON.stringify(input.type)} is not valid — it is an alias of kind: use one of ${Object.keys(BACKLOG_TYPE_ALIASES).join(", ")}, or set kind (${BACKLOG_KINDS.join(", ")}). Nothing was written.` };
+  }
+  const release = lineField("release", input.release, MAX_RELEASE_CHARS);
+  if (!release.ok) return release;
+  const origin = lineField("origin", input.origin, MAX_ORIGIN_CHARS);
+  if (!origin.ok) return origin;
   const slug = slugify(title);
+  let relatesTo = "";
+  if (input.relatesTo?.trim()) {
+    relatesTo = input.relatesTo.trim();
+    if (relatesTo === slug) return { ok: false, error: "relatesTo names this item itself. Nothing was written." };
+    if (!locate(workDir, relatesTo)) {
+      return { ok: false, error: `relatesTo "${relatesTo}" is not a backlog item — pass the slug from backlog_list. Nothing was written.` };
+    }
+  }
   const dir = backlogDir(workDir);
-  const path = join(dir, `${slug}.md`);
   const now = new Date().toISOString();
 
-  const existing = existsSync(path)
-    ? parseItem(slug, await readFile(path, "utf-8"))
-    : null;
+  const loc = locate(workDir, slug);
+  const existing = loc ? parseItem(slug, await readFile(loc, "utf-8")) : null;
 
   // Read once and reuse for both the open-count rail and overlap detection.
-  const all = await readAll(workDir);
+  const all = await readActive(workDir);
 
   // Open-count rail only applies to genuinely NEW open items. Provisional
   // auto-captures (ADR-0047) bypass it — silently blocking a discovery is the
@@ -741,7 +985,6 @@ export async function addBacklogItem(
   // ADR-0113 — the same slug parked again while ANOTHER tab holds it: say who,
   // change nothing. (Same tab re-parking its own item still updates it.)
   if (existing && existing.status === "doing" && existing.claimedBy && existing.claimedBy !== (input.sessionId ?? "")) {
-    const all = await readAll(workDir);
     return {
       ok: true,
       item: existing,
@@ -763,6 +1006,8 @@ export async function addBacklogItem(
   } else {
     status = input.provisional ? "provisional" : "open";
   }
+  const reopening = !!existing && isResolvedStatus(existing.status);
+  const waits = input.waitsOn?.replace(/\s+/g, " ").trim();
 
   const item: BacklogItem = {
     id: slug,
@@ -772,10 +1017,16 @@ export async function addBacklogItem(
     severity,
     // An omitted kind KEEPS what's there rather than resetting to unspecified —
     // a re-add (or a provisional confirm) must not wipe a classification the
-    // user made in the panel.
-    kind: input.kind ?? existing?.kind ?? "unspecified",
-    blocked: input.blocked ?? existing?.blocked ?? false,
-    blockedOn: (input.blockedOn ?? existing?.blockedOn ?? "").trim().slice(0, 200),
+    // user made in the panel. The same goes for every optional field below.
+    kind: input.kind ?? (input.type ? BACKLOG_TYPE_ALIASES[input.type] : undefined) ?? existing?.kind ?? "unspecified",
+    release: input.release !== undefined ? release.value : (existing?.release ?? ""),
+    origin: input.origin !== undefined ? origin.value : (existing?.origin ?? ""),
+    relatesTo: relatesTo || (existing?.relatesTo ?? ""),
+    resolvedBy: reopening ? "" : (existing?.resolvedBy ?? ""),
+    evidence: reopening ? "" : (existing?.evidence ?? ""),
+    reopenedAt: reopening ? now : (existing?.reopenedAt ?? ""),
+    blocked: input.blocked ?? (waits ? true : undefined) ?? existing?.blocked ?? false,
+    blockedOn: (input.blockedOn ?? waits ?? existing?.blockedOn ?? "").trim().slice(0, 200),
     sessionId: input.sessionId ?? existing?.sessionId ?? "",
     claimedBy: existing?.claimedBy ?? "",
     claimedBranch: existing?.claimedBranch ?? "",
@@ -842,7 +1093,7 @@ export async function resolveBacklogItem(
 ): Promise<ResolveResult> {
   const res = await setBacklogStatus(workDir, args.id, args.resolution, args.note);
   if (!res.ok) return res;
-  return { ok: true, item: res.item, related: relatedBacklogItems(res.item, await readAll(workDir)) };
+  return { ok: true, item: res.item, related: relatedBacklogItems(res.item, await readActive(workDir)) };
 }
 
 /** Id-keyed field edit — severity and/or body REPLACE (unlike the
@@ -856,29 +1107,54 @@ export async function updateBacklogItem(
     severity?: BacklogSeverity;
     body?: string;
     kind?: BacklogKind;
+    /** Alias of `kind`; `kind` wins when both are given. */
+    type?: BacklogTypeAlias;
+    release?: string;
+    origin?: string;
     blocked?: boolean;
     blockedOn?: string;
+    /** Alias of `blockedOn`; marks the item blocked unless `blocked` says otherwise. */
+    waitsOn?: string;
     /** Append a dated `> note` line without changing status or claim. */
     note?: string;
   },
   now: Date = new Date(),
 ): Promise<ResolveResult> {
-  const path = join(backlogDir(workDir), `${id}.md`);
-  if (!existsSync(path)) return { ok: false, error: `no backlog item "${id}".` };
-  const item = parseItem(id, await readFile(path, "utf-8"));
+  const loc = locate(workDir, id);
+  if (!loc) return { ok: false, error: `no backlog item "${id}".` };
+  const item = parseItem(id, await readFile(loc, "utf-8"));
+  if (fields.severity !== undefined) {
+    const p = parseSeverity(fields.severity);
+    if (!p.ok) return { ok: false, error: p.error };
+    fields = { ...fields, severity: p.value };
+  }
+  if (fields.type !== undefined && !(fields.type in BACKLOG_TYPE_ALIASES)) {
+    return { ok: false, error: `type ${JSON.stringify(fields.type)} is not valid — it is an alias of kind: use one of ${Object.keys(BACKLOG_TYPE_ALIASES).join(", ")}, or set kind (${BACKLOG_KINDS.join(", ")}). Nothing was written.` };
+  }
+  const release = fields.release !== undefined ? lineField("release", fields.release, MAX_RELEASE_CHARS) : null;
+  if (release && !release.ok) return release;
+  const origin = fields.origin !== undefined ? lineField("origin", fields.origin, MAX_ORIGIN_CHARS) : null;
+  if (origin && !origin.ok) return origin;
   if (fields.note !== undefined && fields.note.trim()) {
     const base = fields.body !== undefined ? fields.body.trim() : item.body;
     fields = { ...fields, body: `${base}\n\n> note ${now.toISOString().slice(0, 10)} — ${fields.note.trim()}`.trim() };
   }
   // Refuse, never truncate: a silent `.slice` cut real item text mid-word
-  // (2026-09-28). The caller condenses and retries; nothing is written.
-  const updateLimit = fields.body !== undefined ? bodyLimitError(fields.body.trim()) : null;
+  // (2026-09-28). The caller condenses (or files a follow-up) and retries;
+  // nothing is written.
+  const updateLimit = fields.body !== undefined ? bodyLimitError(fields.body.trim(), id) : null;
   if (updateLimit) return { ok: false, error: updateLimit };
   if (fields.severity !== undefined) item.severity = fields.severity;
   if (fields.body !== undefined) item.body = fields.body.trim();
-  if (fields.kind !== undefined) item.kind = fields.kind;
+  const kind = fields.kind ?? (fields.type ? BACKLOG_TYPE_ALIASES[fields.type] : undefined);
+  if (kind !== undefined) item.kind = kind;
+  if (release?.ok) item.release = release.value;
+  if (origin?.ok) item.origin = origin.value;
+  const waits = fields.waitsOn?.replace(/\s+/g, " ").trim();
   if (fields.blocked !== undefined) item.blocked = fields.blocked;
+  else if (waits) item.blocked = true;
   if (fields.blockedOn !== undefined) item.blockedOn = fields.blockedOn.trim().slice(0, 200);
+  else if (fields.waitsOn !== undefined) item.blockedOn = (waits ?? "").slice(0, 200);
   // `updated` drives STALENESS, so only a change to the WORK counts as touching
   // it. Labelling an item is not engaging with it: a classification pass over a
   // whole backlog would otherwise reset every staleness clock at once and blind
@@ -911,9 +1187,9 @@ export async function claimBacklogItem(
   claim: BacklogClaim,
   now = new Date().toISOString(),
 ): Promise<ClaimResult> {
-  const path = join(backlogDir(workDir), `${id}.md`);
-  if (!existsSync(path)) return { ok: false, error: `no backlog item "${id}".` };
-  const item = parseItem(id, await readFile(path, "utf-8"));
+  const loc = locate(workDir, id);
+  if (!loc) return { ok: false, error: `no backlog item "${id}".` };
+  const item = parseItem(id, await readFile(loc, "utf-8"));
   if (item.status === "done" || item.status === "dismissed") {
     return { ok: false, error: `backlog item "${id}" is ${item.status}; reopen it (backlog_resolve keep) before claiming.` };
   }
@@ -939,7 +1215,7 @@ export async function claimBacklogItem(
 /** ADR-0113 — the branch a claim is on became known after the claim (a tab's first message cut it). */
 export async function noteClaimBranch(workDir: string, sessionId: string, branch: string): Promise<number> {
   let n = 0;
-  for (const item of await readAll(workDir)) {
+  for (const item of await readActive(workDir)) {
     if (item.status === "doing" && item.claimedBy === sessionId && item.claimedBranch !== branch) {
       item.claimedBranch = branch;
       try {
@@ -957,7 +1233,8 @@ export async function noteClaimBranch(workDir: string, sessionId: string, branch
 /** Set any status (e.g. `doing` when promoted to a turn). Rewrites the index.
  *  ADR-0113 — any status other than `doing` releases the claim; `doing` with
  *  a `claim` records the holder (the panel's Plan), without one keeps whatever
- *  holder there was. */
+ *  holder there was. Closing an item moves its line to the closed index;
+ *  reopening one (`open`, `provisional`, `doing`) takes it back. */
 export async function setBacklogStatus(
   workDir: string,
   id: string,
@@ -965,17 +1242,22 @@ export async function setBacklogStatus(
   note?: string,
   claim?: BacklogClaim,
 ): Promise<ResolveResult> {
-  const path = join(backlogDir(workDir), `${id}.md`);
-  if (!existsSync(path)) return { ok: false, error: `no backlog item "${id}".` };
-  const item = parseItem(id, await readFile(path, "utf-8"));
+  const loc = locate(workDir, id);
+  if (!loc) return { ok: false, error: `no backlog item "${id}".` };
+  const item = parseItem(id, await readFile(loc, "utf-8"));
   // Refuse, never truncate: appending a note used to `.slice` the whole body
   // to the cap, so on an item near it the note vanished or the tail was cut
   // (2026-09-28, the Dxx stage items). Checked before anything is changed.
   const withNote = note && note.trim() ? `${item.body}\n\n> ${status} — ${note.trim()}`.trim() : null;
-  const noteLimit = withNote !== null ? bodyLimitError(withNote) : null;
+  const noteLimit = withNote !== null ? bodyLimitError(withNote, id) : null;
   if (noteLimit) return { ok: false, error: `adding this note: ${noteLimit}` };
+  const wasResolved = isResolvedStatus(item.status);
   item.status = status;
   item.updated = new Date().toISOString();
+  // Whoever resolves or reopens by hand replaces what git derived.
+  item.resolvedBy = "";
+  item.evidence = "";
+  if (wasResolved && !isResolvedStatus(status)) item.reopenedAt = item.updated;
   if (status !== "doing") {
     item.claimedBy = "";
     item.claimedBranch = "";
@@ -992,5 +1274,40 @@ export async function setBacklogStatus(
     return { ok: true, item };
   } catch (err) {
     return { ok: false, error: `failed to update backlog item: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * Close an open or doing item because git says its fix is on the project's
+ * branch (`backlog-derive.ts`). Persisted as an ordinary resolution — status
+ * `done` — plus `resolvedBy: derived` and the commit sha as `evidence`, so the
+ * derivation is never repeated. The note is best effort: an item whose notes
+ * are full is still resolved, its evidence lives in the frontmatter.
+ */
+export async function resolveDerivedBacklogItem(
+  workDir: string,
+  id: string,
+  evidence: { sha: string; subject: string; branch: string },
+): Promise<ResolveResult> {
+  const loc = locate(workDir, id);
+  if (!loc) return { ok: false, error: `no backlog item "${id}".` };
+  const item = parseItem(id, await readFile(loc, "utf-8"));
+  if (item.status !== "open" && item.status !== "doing") return { ok: false, error: `backlog item "${id}" is ${item.status}, not open.` };
+  const note = `> done — derived: commit ${evidence.sha.slice(0, 12)} "${evidence.subject.slice(0, 90)}" carries \`Fixes-Backlog: ${id}\` and is on ${evidence.branch}.`;
+  const withNote = `${item.body}\n\n${note}`.trim();
+  if (!bodyLimitError(withNote, id)) item.body = withNote;
+  item.status = "done";
+  item.resolvedBy = "derived";
+  item.evidence = evidence.sha;
+  item.updated = new Date().toISOString();
+  item.claimedBy = "";
+  item.claimedBranch = "";
+  item.claimedAt = "";
+  try {
+    await writeItem(workDir, item);
+    await rewriteBacklogIndex(workDir);
+    return { ok: true, item };
+  } catch (err) {
+    return { ok: false, error: `failed to resolve backlog item: ${(err as Error).message}` };
   }
 }
