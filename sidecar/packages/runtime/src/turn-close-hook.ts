@@ -188,8 +188,10 @@ export function decideSkillClose(lastText: string, facts: SkillCloseFacts): Skil
   if (missing.length === 0) return none;
   const unavailable = missing.filter((n) => facts.unavailable.includes(n));
   const waivers = parseSkillWaivers(lastText);
-  const waived = missing.filter((n) => !unavailable.includes(n) && waivers.has(n));
-  const needed = missing.filter((n) => !unavailable.includes(n) && !waivers.has(n));
+  // Strict mode: a waiver discharges only the skills the project lists as optional.
+  const waivable = (n: string) => waivers.has(n) && (!facts.strict || (facts.optional ?? []).includes(n));
+  const waived = missing.filter((n) => !unavailable.includes(n) && waivable(n));
+  const needed = missing.filter((n) => !unavailable.includes(n) && !waivable(n));
   if (needed.length === 0) return { block: null, waived, unavailable };
   const list = needed.map((n) => `\`${n}\``).join(", ");
   return {
@@ -198,10 +200,13 @@ export function decideSkillClose(lastText: string, facts: SkillCloseFacts): Skil
       reason:
         `skills gate (ADR-0138): this turn claims scope met, but the brief named ${needed.length === 1 ? "a skill" : "skills"} that never ran in this session: ${list}. ` +
         `Run ${needed.map((n) => `\`Skill { skill: "${n}" }\``).join(" and ")} and act on what ${needed.length === 1 ? "it says" : "they say"}, then close. ` +
-        "If one genuinely does not apply, say so in your final message, one line per skill: " +
-        "`Skill not used: <name> — <reason>`. That is accepted, and it is logged. " +
-        "If the scope is NOT met, say what remains instead of the scope-met line. " +
-        `(After ${BUILTIN_GATE_MAX_DENIES} refusals the close is allowed and the bypass logged.)`,
+        (facts.strict
+          ? `This project runs skills in strict mode (.marvin/skills.json): the close is refused every time until they ran, with no brake, and \`Skill not used:\` only discharges skills the project lists as optional${(facts.optional ?? []).length > 0 ? ` (${(facts.optional ?? []).map((n) => `\`${n}\``).join(", ")})` : " (none are)"}. ` +
+            "Only the user can override: lower or switch off the `builtin:skills-named` row in the Practice pane, or set strict to false in .marvin/skills.json. "
+          : "If one genuinely does not apply, say so in your final message, one line per skill: " +
+            "`Skill not used: <name> — <reason>`. That is accepted, and it is logged. ") +
+        "If the scope is NOT met, say what remains instead of the scope-met line." +
+        (facts.strict ? "" : ` (After ${BUILTIN_GATE_MAX_DENIES} refusals the close is allowed and the bypass logged.)`),
     },
     waived,
     unavailable,
@@ -431,7 +436,7 @@ export function makeTurnCloseStopHook(args: {
         } else if (r.block && skillGate.tier !== "deny") {
           tel("skills.close.nudge");
         } else if (r.block) {
-          if (Math.max(skillBlocks, sk.blocks) >= BUILTIN_GATE_MAX_DENIES) {
+          if (!sk.strict && Math.max(skillBlocks, sk.blocks) >= BUILTIN_GATE_MAX_DENIES) {
             tel("skills.close.bypass");
             notePracticeRuleFired("builtin:skills-named", "bypass");
           } else {

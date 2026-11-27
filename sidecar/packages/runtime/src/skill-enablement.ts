@@ -55,6 +55,9 @@ interface SkillsJson {
    *  (ADR-0138 addendum). Read and validated by `readProjectFirstSkills`
    *  (skill-brief.ts); kept as is across a Skills-pane write. */
   first?: unknown;
+  /** Strict skills mode and its waivable skills (ADR-0138 addendum, `readProjectSkillsStrict`). */
+  strict?: unknown;
+  optional?: unknown;
 }
 
 function skillsJsonPath(workDir: string): string {
@@ -88,6 +91,9 @@ export function setEnabledSkills(workDir: string, enabled: string[]): void {
   try {
     const prior = JSON.parse(readFileSync(skillsJsonPath(workDir), "utf-8")) as SkillsJson | null;
     if (prior && Array.isArray(prior.first)) payload.first = prior.first;
+    // `strict` / `optional` too (ADR-0138 addendum): a pane toggle must not switch strict mode off.
+    if (prior && "strict" in prior) payload.strict = prior.strict;
+    if (prior && "optional" in prior) payload.optional = prior.optional;
   } catch {
     /* no prior file, or unreadable: nothing to keep */
   }

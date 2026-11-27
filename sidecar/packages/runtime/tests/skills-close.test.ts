@@ -61,6 +61,31 @@ describe("decideSkillClose", () => {
   });
 });
 
+describe("decideSkillClose in strict mode (ADR-0138 addendum)", () => {
+  it("a waiver discharges only the skills listed optional; the rest stay refused", () => {
+    const strict = facts({ strict: true, optional: ["ponytail-review"] });
+    const text = `${SCOPE_MET}\nSkill not used: ponytail — one-line edit\nSkill not used: ponytail-review — same`;
+    const r = decideSkillClose(text, strict);
+    expect(r.waived).toEqual(["ponytail-review"]);
+    expect(r.block?.reason).toContain("`ponytail`");
+    expect(r.block?.reason).not.toContain("Run `Skill { skill: \"ponytail-review\" }`");
+    expect(r.block?.reason).toContain("Practice pane");
+    expect(r.block?.reason).not.toContain("is accepted");
+  });
+
+  it("closes when every missing skill is optional and waived", () => {
+    const r = decideSkillClose(`${SCOPE_MET}\nSkill not used: ponytail — not needed\nSkill not used: ponytail-review — not needed`, facts({ strict: true, optional: ["ponytail", "ponytail-review"] }));
+    expect(r.block).toBeNull();
+    expect(r.waived).toEqual(["ponytail", "ponytail-review"]);
+  });
+
+  it("strict off (or absent) keeps today's behaviour: any waiver discharges any skill", () => {
+    const text = `${SCOPE_MET}\nSkill not used: ponytail — not needed\nSkill not used: ponytail-review — not needed`;
+    expect(decideSkillClose(text, facts()).block).toBeNull();
+    expect(decideSkillClose(text, facts({ strict: false, optional: [] })).block).toBeNull();
+  });
+});
+
 describe("the skills Stop hook", () => {
   const prev = process.env.MARVIN_DESIGN_HOOKS;
   const base: TurnCloseFacts = { mutations: 0, lastTodos: undefined, machineTurn: false, alreadyFired: false };
@@ -110,6 +135,29 @@ describe("the skills Stop hook", () => {
     expect((await call(hook, SCOPE_MET)).decision).toBe("block");
     expect(await call(hook, SCOPE_MET)).toEqual({});
     expect(blocked).toHaveBeenCalledTimes(2);
+  });
+
+  it("strict mode has no brake: the third, fourth and later closes still refuse", async () => {
+    const { hook } = session({ strict: true, optional: [] });
+    for (let i = 0; i < 5; i += 1) expect((await call(hook, SCOPE_MET)).decision, `close ${i + 1}`).toBe("block");
+    // Blocks already counted on the record (a restart) do not release it either.
+    expect((await call(session({ strict: true, optional: [], blocks: 9 }).hook, SCOPE_MET)).decision).toBe("block");
+  });
+
+  it("strict mode: a waiver for a non-optional skill does not close, an optional one does; a machine turn is still checked", async () => {
+    const all = ["ponytail", "ponytail-review"].map((n) => `Skill not used: ${n} — not needed`).join("\n");
+    expect((await call(session({ strict: true, optional: ["ponytail-review"] }).hook, `${SCOPE_MET}\n${all}`)).decision).toBe("block");
+    expect(await call(session({ strict: true, optional: ["ponytail", "ponytail-review"] }).hook, `${SCOPE_MET}\n${all}`)).toEqual({});
+    expect((await call(session({ strict: true, optional: [] }, { machineTurn: true }).hook, `${SCOPE_MET}\n${all}`)).decision).toBe("block");
+  });
+
+  it("strict mode still yields to the user: a lowered or retired Practice row does not block", async () => {
+    updateRule("builtin:skills-named", { tier: "nudge" });
+    __resetBuiltinCacheForTests();
+    expect(await call(session({ strict: true, optional: [] }).hook, SCOPE_MET)).toEqual({});
+    updateRule("builtin:skills-named", { tier: "deny", status: "retired" });
+    __resetBuiltinCacheForTests();
+    expect(await call(session({ strict: true, optional: [] }).hook, SCOPE_MET)).toEqual({});
   });
 
   it("the brake survives a restart: blocks already counted on the record are not forgotten", async () => {

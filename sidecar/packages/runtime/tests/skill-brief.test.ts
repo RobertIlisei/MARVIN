@@ -18,6 +18,7 @@ import {
   parseSkillsLine,
   parseSkillWaivers,
   readProjectFirstSkills,
+  readProjectSkillsStrict,
   seedTurnSkills,
   skillCloseFacts,
   skillsFirstFacts,
@@ -244,6 +245,45 @@ describe("start skills on the session meta", () => {
       expect(got).not.toContain("a b");
       expect(got).not.toContain("../../etc");
       expect(got.every((n) => /^[a-z0-9][a-z0-9._-]{0,79}$/.test(n))).toBe(true);
+    } finally {
+      rmSync(w, { recursive: true, force: true });
+    }
+  });
+
+  it("strict mode is read at a validating boundary: only a literal true, optional as a clean name list", () => {
+    const w = mkdtempSync(join(tmpdir(), "marvin-skill-strict-w-"));
+    const put = (v: unknown) => writeFileSync(join(w, ".marvin", "skills.json"), typeof v === "string" ? v : JSON.stringify(v));
+    try {
+      expect(readProjectSkillsStrict(w)).toEqual({ strict: false, optional: [] }); // no file
+      mkdirSync(join(w, ".marvin"), { recursive: true });
+      put("{not json");
+      expect(readProjectSkillsStrict(w).strict).toBe(false);
+      for (const bad of ["true", 1, "yes", null, [], {}]) {
+        put({ strict: bad, optional: ["pr-review"] });
+        expect(readProjectSkillsStrict(w), JSON.stringify(bad)).toEqual({ strict: false, optional: [] });
+      }
+      put({ strict: true });
+      expect(readProjectSkillsStrict(w)).toEqual({ strict: true, optional: [] });
+      put({ strict: true, optional: "pr-review" });
+      expect(readProjectSkillsStrict(w)).toEqual({ strict: true, optional: [] });
+      put({ strict: true, optional: ["Pr-Review", 7, null, "a b", "../../x", "pr-review", ...Array.from({ length: 40 }, (_, i) => `s${i}`)] });
+      const got = readProjectSkillsStrict(w).optional;
+      expect(got[0]).toBe("pr-review");
+      expect(got.filter((n) => n === "pr-review")).toHaveLength(1);
+      expect(got.length).toBeLessThanOrEqual(20);
+      expect(got).not.toContain("a b");
+    } finally {
+      rmSync(w, { recursive: true, force: true });
+    }
+  });
+
+  it("the Skills pane's own write keeps `strict` and `optional`", () => {
+    const w = mkdtempSync(join(tmpdir(), "marvin-skill-strict-p-"));
+    try {
+      mkdirSync(join(w, ".marvin"), { recursive: true });
+      writeFileSync(join(w, ".marvin", "skills.json"), JSON.stringify({ enabled: ["a"], strict: true, optional: ["pr-review"] }));
+      setEnabledSkills(w, ["a", "b"]);
+      expect(readProjectSkillsStrict(w)).toEqual({ strict: true, optional: ["pr-review"] });
     } finally {
       rmSync(w, { recursive: true, force: true });
     }

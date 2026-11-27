@@ -43,6 +43,7 @@ import { isSafeProjectId, readLedger } from "./supervisor-ledger";
 import { type Delegation, getSupervisorState } from "./supervisor-state";
 import { lastActAtByTab, type ProposalView, proposalView } from "./supervisor-status";
 import { isUserOnlyConfirm, type TouchedTurn, touchedTurnFor } from "./supervisor-touch";
+import { readProjectSkillsStrict } from "./skill-brief";
 import { listLiveTurns } from "./turn-registry";
 import { readWaitStretch, waitingSinceOf } from "./wait-stretch";
 import { listWakeups, type WakeupRecord } from "./wakeup-scheduler";
@@ -125,7 +126,7 @@ export interface SessionWatchRow {
   /** ADR-0124 — graph calls vs source reads (Read/Grep/Glob and Bash), whole session. */
   graphUsage: SessionGraphUsage | null;
   /** ADR-0138 — the skills the brief named, which ran, which did not; null when the brief named none. */
-  skills: { required: string[]; used: string[]; missing: string[]; first: string[] } | null;
+  skills: { required: string[]; used: string[]; missing: string[]; first: string[]; strict: boolean } | null;
   lastTurn: SessionWatchLastTurn | null;
   /** ADR-0130 — the session's own pending job or wakeup; `supervisor.waitingOnOwn` keeps the kind alone. */
   waitingOn: SessionWatchWaitingOn | null;
@@ -381,9 +382,10 @@ function skillProgress(
   required: string[],
   run: string[],
   first: string[] = [],
-): { required: string[]; used: string[]; missing: string[]; first: string[] } {
+  strict = false,
+): { required: string[]; used: string[]; missing: string[]; first: string[]; strict: boolean } {
   const ran = new Set(run);
-  return { required, used: required.filter((n) => ran.has(n)), missing: required.filter((n) => !ran.has(n)), first };
+  return { required, used: required.filter((n) => ran.has(n)), missing: required.filter((n) => !ran.has(n)), first, strict };
 }
 
 // ── the snapshot ──────────────────────────────────────────────────────────
@@ -542,7 +544,7 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
       diff: cwdInfo.present ? await sessionDiff(cwdInfo.cwd, base, now) : null,
       plan: planProgress(projectId, id),
       graphUsage: sessionGraphUsage(projectId, id),
-      skills: meta?.skills?.required?.length ? skillProgress(meta.skills.required, meta.skillsRun ?? [], meta.skills.first ?? []) : null,
+      skills: meta?.skills?.required?.length ? skillProgress(meta.skills.required, meta.skillsRun ?? [], meta.skills.first ?? [], readProjectSkillsStrict(workDir).strict) : null,
       lastTurn: meta?.lastTurn ? { ...meta.lastTurn, marker: meta.scopeMetAt ? "scope-met" : null } : null,
       waitingOn,
       attention: meta?.attention ? { kind: meta.attention.kind, excerpt: meta.attention.excerpt, since: meta.attention.since } : null,

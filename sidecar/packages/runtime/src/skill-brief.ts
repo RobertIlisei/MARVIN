@@ -250,6 +250,9 @@ export interface SkillCloseFacts {
   unavailable: string[];
   /** Scope-met closes already refused for these skills. */
   blocks: number;
+  /** Strict mode (skills.json): no brake, and a waiver only discharges `optional` skills. */
+  strict?: boolean;
+  optional?: string[];
 }
 
 /** What the Stop hook needs, or null when the session has no seeded list. */
@@ -260,7 +263,8 @@ export function skillCloseFacts(projectId: string, sessionId: string, workDir: s
   const run = new Set(meta.skillsRun ?? []);
   const used = required.filter((n) => run.has(n));
   const missing = required.filter((n) => !run.has(n));
-  return { required, used, unavailable: unavailableSkills(projectId, workDir, missing), blocks: meta.skills?.blocks ?? 0 };
+  const { strict, optional } = readProjectSkillsStrict(workDir);
+  return { required, used, unavailable: unavailableSkills(projectId, workDir, missing), blocks: meta.skills?.blocks ?? 0, strict, optional };
 }
 
 /** Count one refused close on the session meta (the two-block brake). */
@@ -303,9 +307,46 @@ export function readProjectFirstSkills(workDir: string): string[] {
   }
 }
 
+export interface ProjectSkillsStrict {
+  strict: boolean;
+  /** Skills a `Skill not used:` line may discharge under strict mode. */
+  optional: string[];
+}
+
+/**
+ * ADR-0138 addendum (strict mode): `strict` and `optional` in
+ * `<workDir>/.marvin/skills.json`. Same boundary as `readProjectFirstSkills`:
+ * the file is written by whoever wrote the repository, so only a literal
+ * `true` turns strict on (a string, number or anything else reads as off, i.e.
+ * today's behaviour) and `optional` is an array of at most 20 valid skill
+ * names (anything else, or a non-array, reads as none: under strict nothing is
+ * then waivable). Never throws.
+ */
+export function readProjectSkillsStrict(workDir: string): ProjectSkillsStrict {
+  const off: ProjectSkillsStrict = { strict: false, optional: [] };
+  try {
+    const j = JSON.parse(readFileSync(join(workDir, ".marvin", "skills.json"), "utf-8")) as { strict?: unknown; optional?: unknown } | null;
+    if (!j || j.strict !== true) return off;
+    const optional: string[] = [];
+    if (Array.isArray(j.optional)) {
+      for (const raw of j.optional) {
+        if (typeof raw !== "string" || !NAME.test(raw.trim())) continue;
+        const name = normaliseSkillName(raw);
+        if (name && !optional.includes(name)) optional.push(name);
+        if (optional.length >= FIRST_SETTING_MAX) break;
+      }
+    }
+    return { strict: true, optional };
+  } catch {
+    return off;
+  }
+}
+
 export interface SkillsFirstFacts {
   /** Start skills that have not run and that this project can invoke. */
   missing: string[];
+  /** The project's strict mode: no two-refusal brake. */
+  strict: boolean;
   /** Mutations already refused for these skills, across turns and restarts. */
   blocks: number;
 }
@@ -326,7 +367,7 @@ export function skillsFirstFacts(projectId: string, sessionId: string, workDir: 
   const gone = new Set(unavailableSkills(projectId, workDir, notRun));
   const missing = notRun.filter((n) => !gone.has(n));
   if (missing.length === 0) return null;
-  return { missing, blocks: meta.skills.firstBlocks ?? 0 };
+  return { missing, blocks: meta.skills.firstBlocks ?? 0, strict: readProjectSkillsStrict(workDir).strict };
 }
 
 /** Count one refused mutation on the session meta (the two-refusal brake). */

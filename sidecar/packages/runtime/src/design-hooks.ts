@@ -1741,7 +1741,7 @@ export function runDesignHooks(args: {
     const names = firstDeny.names.join(",");
     if (mode === "measure") {
       logDesignHookEvent({ kind: "skills.first.measured", turnId: ctx.turnId, tool: toolName, skills: names });
-    } else if (firstDeny.blocks >= (firstGate.tier === "deny" ? BUILTIN_GATE_MAX_DENIES : 1)) {
+    } else if (!(firstDeny.strict && firstGate.tier === "deny") && firstDeny.blocks >= (firstGate.tier === "deny" ? BUILTIN_GATE_MAX_DENIES : 1)) {
       if (firstGate.tier === "deny") {
         logDesignHookEvent({ kind: "skills.first.bypass", turnId: ctx.turnId, tool: toolName, skills: names, denies: firstDeny.blocks });
         notePracticeRuleFired("builtin:skills-first", "bypass");
@@ -2326,7 +2326,7 @@ export function checkSkillsFirst(
   ctx: DesignTurnContext,
   toolName: string,
   toolInput: Record<string, unknown>,
-): { deny: DesignHookDeny; names: string[]; blocks: number } | null {
+): { deny: DesignHookDeny; names: string[]; blocks: number; strict: boolean } | null {
   if (!ctx.spineSession) return null;
   let what: string;
   if (toolName === "Edit" || toolName === "Write" || toolName === "NotebookEdit" || toolName === "MultiEdit") {
@@ -2351,13 +2351,16 @@ export function checkSkillsFirst(
   return {
     names: facts.missing,
     blocks: facts.blocks,
+    strict: facts.strict,
     deny: {
       behavior: "deny",
       message:
         `skills-first gate (ADR-0138): the brief marks ${facts.missing.length === 1 ? "a skill" : "skills"} to run before the first change, and ${what} would be that change. ` +
         `Run ${facts.missing.map((n) => `\`Skill { skill: "${n}" }\``).join(" and ")} now, act on what ${facts.missing.length === 1 ? "it says" : "they say"}, then retry: ${list}. ` +
         "Reads, searches and the graph are not affected. " +
-        `(MARVIN_DESIGN_HOOKS=measure logs instead of denying; after ${BUILTIN_GATE_MAX_DENIES} refusals in a session the call is allowed and the bypass logged.)`,
+        (facts.strict
+          ? "(Strict mode, .marvin/skills.json: no brake. Only the user can override: lower or switch off the `builtin:skills-first` row in the Practice pane, or set strict to false.)"
+          : `(MARVIN_DESIGN_HOOKS=measure logs instead of denying; after ${BUILTIN_GATE_MAX_DENIES} refusals in a session the call is allowed and the bypass logged.)`),
       interrupt: false,
     },
   };

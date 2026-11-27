@@ -5,7 +5,7 @@
 // `+N −M` badge measured against a worktree's base.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -228,7 +228,14 @@ describe("buildSessionWatch", () => {
       used: ["pr-review"],
       missing: ["ponytail", "ponytail-review"],
       first: ["ponytail"],
+      strict: false,
     });
+    // Strict mode is the project's own setting, read from its skills.json.
+    mkdirSync(join(repo, ".marvin"), { recursive: true });
+    writeFileSync(join(repo, ".marvin", "skills.json"), JSON.stringify({ strict: true }));
+    const strictRows = await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["skills-sess"] });
+    expect(strictRows[0]!.skills?.strict).toBe(true);
+    rmSync(join(repo, ".marvin", "skills.json"), { force: true });
     expect(rows.find((r) => r.marvinSessionId === "old-skills-sess")!.skills?.first).toEqual([]);
     expect(rows.find((r) => r.marvinSessionId === "no-skills-sess")!.skills).toBeNull();
   });

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -128,6 +128,48 @@ describe("the skills-first gate", () => {
     log.mockRestore();
     expect(kinds).toContain("skills.first.block");
     expect(kinds).toContain("skills.first.bypass");
+  });
+
+  describe("strict mode (.marvin/skills.json)", () => {
+    const skillsJson = join(root, ".marvin", "skills.json");
+    afterEach(() => rmSync(skillsJson, { force: true }));
+    const setStrict = (v: unknown) => {
+      mkdirSync(join(root, ".marvin"), { recursive: true });
+      writeFileSync(skillsJson, JSON.stringify(v));
+    };
+
+    it("has no brake: the third and later refusals still deny, across turns", () => {
+      setStrict({ strict: true });
+      const { ctx } = session(BRIEF);
+      for (let i = 0; i < 5; i += 1) expect(run(ctx(), edit())?.behavior, `call ${i + 1}`).toBe("deny");
+      expect(run(ctx(), commit)?.message).toContain("Practice pane");
+      expect(run(ctx(), commit)?.message).toContain("no brake");
+    });
+
+    it("running the start skill still lifts it", () => {
+      setStrict({ strict: true });
+      const { ctx } = session(BRIEF);
+      const c = ctx();
+      expect(run(c, edit())?.behavior).toBe("deny");
+      ran(c, "ponytail");
+      expect(run(c, edit())).toBeNull();
+    });
+
+    it("a malformed strict value keeps today's two-refusal brake", () => {
+      setStrict({ strict: "true" });
+      const { ctx } = session(BRIEF);
+      expect(run(ctx(), edit())?.behavior).toBe("deny");
+      expect(run(ctx(), edit())?.behavior).toBe("deny");
+      expect(run(ctx(), edit())).toBeNull();
+    });
+
+    it("the user can still lower the row, and a subagent is untouched", () => {
+      setStrict({ strict: true });
+      expect(run(session(BRIEF).ctx(), edit(), "enforce", "agent-1")).toBeNull();
+      updateRule("builtin:skills-first", { tier: "nudge" });
+      __resetBuiltinCacheForTests();
+      expect(run(session(BRIEF).ctx(), edit())).toBeNull();
+    });
   });
 
   it("a start skill the project cannot invoke is not blocked on", () => {

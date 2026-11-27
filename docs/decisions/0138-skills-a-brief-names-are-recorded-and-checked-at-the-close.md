@@ -93,3 +93,34 @@ One hour after the close check went live, on a real project, new tabs showed the
 ## Addendum 2026-11-27: the close check also runs on a machine turn
 
 Measured on a real project: of eight tabs seeded with a 12-skill list, none had a refused close (`skills.blocks` unset), although 5 to 11 skills had not run and only one waiver line was written. The record was correct (`skillsRun` matched each transcript's `Skill` calls exactly; `used` is derived by the watch row and the close facts, it is not a meta field). The gate never fired because every scope-met close in those tabs was a `[scheduled wakeup ...]` turn, the first human turn having said "Scope is not met", and decision 4 skipped machine turns. A long-running tab closes on its wakeup, so the exemption silenced the gate on every real close. The check now runs on a machine turn that claims scope met; the two-block brake and the waiver line bound the cost. Test: `skills-close.test.ts`.
+
+## Addendum 2026-11-27: a strict mode a project can switch on
+
+### Context
+
+On a real project (agri-saas-platform, 2026-11-27) UI tabs closed with 8 to 11 of 12 named skills never run. The two gates did fire, but ADR-0104's brake releases both after two refusals, and any `Skill not used: <name> — <reason>` line discharges any skill, so a tab that wanted to close wrote the lines and closed. The owner approved a per-project mode that removes both escapes.
+
+### Decision
+
+1. **`strict` and `optional` in `<workDir>/.marvin/skills.json`.** `"strict": true` turns the mode on; the default is off and today's behaviour is unchanged. `"optional": [...]` names skills a waiver may still discharge. Both are read by `readProjectSkillsStrict` at a validating boundary (ADR-0110, REVIEW.md "Always check"): only a literal `true` enables strict (`"true"`, `1`, anything else reads as off); `optional` is an array of at most 20 valid skill names, normalised and deduplicated, and anything else reads as none, so under strict nothing is waivable. The file is read at gate time, so a change applies to a running tab (unlike `first`, which is resolved at seeding: strict can only tighten, and a hostile repository gains nothing by it that it could not do by naming skills in a brief).
+2. **No brake.** Under strict, `builtin:skills-named` and `builtin:skills-first` refuse every time until the skills ran: the `skills.blocks` / `skills.firstBlocks` counts and the in-hook counter no longer release the gate, and no bypass is logged. Machine turns and subagent calls keep ADR-0138's coverage exactly: the close check still runs on a wakeup turn that claims scope met, the first-change gate still never fires on a subagent's call.
+3. **A waiver discharges only an optional skill.** Under strict, `Skill not used: <name> — <reason>` is honoured for a skill listed in `optional` and ignored for any other; the close stays refused. A skill the project cannot invoke is still not asked for.
+4. **The discharge path is the user's, not the model's.** ADR-0104 requires a deny to have one. It is the existing Practice pane row for each gate (`builtin:skills-named`, `builtin:skills-first`, `practice.ts` `BUILTIN_RULES` and `builtinGate`): the user lowers the tier to nudge or switches the row off, and both gates already honour that before any strict logic runs (the strict check sits inside the deny branch). The user can also set `strict` to false in the file. The refusal message says so and names the missing skills and the `Skill { skill: "<name>" }` call that runs each. No new channel was added.
+5. **The Skills pane write keeps `strict` and `optional`**, as it does `first`; a toggle that dropped them would switch strict mode off silently.
+6. **Visibility.** Watch rows carry `skills.strict` (`boolean`; false when the project has no setting).
+
+### Consequences
+
+- A strict project with a named skill that is installed but cannot usefully run in a tab has no model-side escape: the tab stalls until the user lowers the row, edits `optional`, or sets `strict` false. That is the point of the mode, and it is why `optional` exists.
+- A strict tab without a captured command catalog treats a not-installed skill as available (the existing rule), so it can stall on one. The remedy is the same.
+- The Swift Sessions pane decodes rows without `strict`; showing it there is not built.
+
+### Scope of Done
+
+- [x] Strict off or absent: every existing test passes unchanged: `skills-close.test.ts`, `skills-first.test.ts`.
+- [x] Strict on: the third and later closes and first-change refusals still refuse, also after a restart count: `skills-close.test.ts`, `skills-first.test.ts`.
+- [x] A waiver for a non-optional skill does not discharge it, one for an optional skill does, and a wakeup turn is still checked: `skills-close.test.ts`.
+- [x] Malformed `strict` / `optional` values are rejected at the read boundary with today's behaviour, and a Skills-pane write keeps both: `skill-brief.test.ts`, `skills-first.test.ts`.
+- [x] A lowered or retired Practice row still lets a strict tab through; a subagent call is untouched: `skills-close.test.ts`, `skills-first.test.ts`.
+- [x] Watch rows carry `strict`: `session-watch.test.ts`.
+- Not built: a Practice pane or Skills pane control for `strict` / `optional` (edit the file), and the strict flag in the Swift row.
