@@ -57,7 +57,9 @@ packages:
   # ADR-0078 — terminal renderer only; the pty is MARVINLogic/PTYProcess.
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm.git
-    from: 1.20.0
+    # Exact, not `from:` — 1.99.x is the 2.0 line (TerminalView.getTerminal()
+    # removed). A fresh derived-data build resolved 1.99.3 and broke.
+    exactVersion: 1.20.0
 
 # Top-level options — Apple-shop defaults plus explicit minima.
 options:

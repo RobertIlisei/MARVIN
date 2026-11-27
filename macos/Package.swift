@@ -172,10 +172,11 @@ let package = Package(
         // state machine + NSView. The pty and the shell are MARVIN's own
         // (`MARVINLogic/PTYProcess`), so `LocalProcess*` is not used — that
         // keeps env scrubbing, teardown and tests in code we own. Pinned to
-        // a minor: the delegate surface is stable, majors are not.
+        // exactly 1.20.0: 1.99.x is the 2.0 line and removes
+        // `TerminalView.getTerminal()`, which TerminalSessionStore uses.
         .package(
             url: "https://github.com/migueldeicaza/SwiftTerm.git",
-            from: "1.20.0"
+            exact: "1.20.0"
         ),
     ],
     targets: [
