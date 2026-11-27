@@ -47,7 +47,7 @@ Four things stopped MARVIN from enforcing the rest, each checked in the code:
 - [x] Every `Skill` call is recorded under its normalised name per checkout, the review skills keep their freshness rule, and a restart does not forget what ran: tests `records a skill that is not a review skill…`, `keeps the ADR-0104 freshness rule…`, `hydrates the record…`, and the persistence cases in `skill-brief.test.ts`.
 - [x] A rule with `paths` and `requireSkillThisSession` denies a matching commit, allows it after the skill ran, brakes at two, and clamps a hostile rules file: tests `a rule with paths and a skill denies…`, `keeps the ADR-0104 brake…`, `clamps a rule file's own lists…`, `a rule whose lists hold nothing valid never fires…`.
 - [x] The `Skills:` parser reads the three shapes and a real brief line, and seeds once from the first message only: `skill-brief.test.ts`.
-- [x] The close hook blocks naming the missing skills, accepts the waiver line, treats an unavailable skill as unavailable, brakes after two blocks across a restart, and ignores machine turns, non-scope-met turns and read failures: `skills-close.test.ts`.
+- [x] The close hook blocks naming the missing skills, accepts the waiver line, treats an unavailable skill as unavailable, brakes after two blocks across a restart, and ignores non-scope-met turns and read failures (machine turns are checked since the 2026-11-27 addendum): `skills-close.test.ts`.
 - [x] The watch row carries `skills`; the extractor `skill.named.unused` counts a named, un-run, un-waived skill at the first scope-met close: `session-watch.test.ts`, `skill-named-unused.test.ts`.
 - Not built: a form in the Practice pane to create a skill-on-paths rule (route only). The turn reminder that names the seeded skills was built the same day, see the addendum below.
 
@@ -89,3 +89,7 @@ One hour after the close check went live, on a real project, new tabs showed the
 - [x] The project `first` setting applies only to skills the brief names, is validated, and survives a Skills-pane write: `skill-brief.test.ts`.
 - [x] The watch row carries `skills.first` and the Swift row decodes with and without it: `session-watch.test.ts`, `MARVINTests`.
 - Not built: gating a mutation made through the shell, and a Practice pane form to edit `first` (edit the file).
+
+## Addendum 2026-11-27: the close check also runs on a machine turn
+
+Measured on a real project: of eight tabs seeded with a 12-skill list, none had a refused close (`skills.blocks` unset), although 5 to 11 skills had not run and only one waiver line was written. The record was correct (`skillsRun` matched each transcript's `Skill` calls exactly; `used` is derived by the watch row and the close facts, it is not a meta field). The gate never fired because every scope-met close in those tabs was a `[scheduled wakeup ...]` turn, the first human turn having said "Scope is not met", and decision 4 skipped machine turns. A long-running tab closes on its wakeup, so the exemption silenced the gate on every real close. The check now runs on a machine turn that claims scope met; the two-block brake and the waiver line bound the cost. Test: `skills-close.test.ts`.

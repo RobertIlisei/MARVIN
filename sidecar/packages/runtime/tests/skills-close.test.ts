@@ -125,8 +125,20 @@ describe("the skills Stop hook", () => {
     expect(blocked).not.toHaveBeenCalled();
   });
 
-  it("ignores machine turns, turns that do not claim scope met, and a session with no seeded list", async () => {
-    expect(await call(session({}, { machineTurn: true }).hook, SCOPE_MET)).toEqual({});
+  it("checks a machine turn that claims scope met: a long-running tab closes on its wakeup turn", async () => {
+    // Measured 2026-11-27, agri-saas: of 8 tabs seeded with 12 skills, every
+    // scope-met close was a `[scheduled wakeup ...]` turn; the first, human
+    // turn said "Scope is not met". The gate skipped machine turns, so it never
+    // fired (blocks: none) while 5 to 11 named skills had not run.
+    const { hook, blocked } = session({}, { machineTurn: true });
+    const r = await call(hook, SCOPE_MET);
+    expect(r.decision).toBe("block");
+    expect(r.reason).toContain("`ponytail`");
+    expect(blocked).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores turns that do not claim scope met, and a session with no seeded list", async () => {
+    expect(await call(session({}, { machineTurn: true }).hook, "Waiting on the job.")).toEqual({});
     expect(await call(session().hook, "Working on step 2.")).toEqual({});
     const noList = makeTurnCloseStopHook({ turnId: "t", facts: () => ({ ...base }), skills: () => null, onFired: () => {} });
     expect(await call(noList, SCOPE_MET)).toEqual({});
@@ -173,5 +185,29 @@ describe("the skills Stop hook", () => {
     const seen = kinds();
     log.mockRestore();
     expect(seen).toEqual(["skills.close.block", "skills.close.waived", "skills.close.block", "skills.close.bypass"]);
+  });
+});
+
+// A Skill call as the SDK names it, from a real transcript (agri-saas 2026-11-27):
+// {"type":"tool_use","name":"Skill","input":{"skill":"marvin-project-local:ponytail"}}.
+// It lands in the session meta (`skillsRun`) and from there in the close facts
+// and the watch row's `skills.used`; `used` is derived, never a meta field.
+describe("a real Skill tool_use reaches the meta and the close facts", () => {
+  it("records the namespaced name once and reads it back as used", async () => {
+    const { createTurnDesignContext, recordAllowedTool } = await import("../src/design-hooks");
+    const { readSessionMeta, upsertSessionMeta } = await import("../src/session-meta");
+    const { seedTurnSkills, skillCloseFacts } = await import("../src/skill-brief");
+    const posture = { model: "m", advisorModel: null, personality: "marvin" as const, permissionStrategy: "auto" as const, thinkingMode: "high" };
+    const root = mkdtempSync(join(tmpdir(), "marvin-skills-close-root-"));
+    upsertSessionMeta("p-real", "s-real", { workDir: root, tree: { mode: "shared" }, posture });
+    seedTurnSkills({ projectId: "p-real", sessionId: "s-real", message: "Skills: `ponytail`, `ux-review`, `pr-review`", turnId: "t", isFirstTurn: () => true, workDir: root });
+    const ctx = createTurnDesignContext("turn-1", root, { spineSession: { projectId: "p-real", sessionId: "s-real" } });
+    recordAllowedTool(ctx, "Skill", { skill: "marvin-project-local:ponytail" });
+    recordAllowedTool(ctx, "Skill", { skill: "ux-review-toolkit:UX-Review", args: "x" });
+    recordAllowedTool(ctx, "Skill", { skill: "marvin-project-local:ponytail" });
+    expect(readSessionMeta("p-real", "s-real")?.skillsRun).toEqual(["ponytail", "ux-review"]);
+    const f = skillCloseFacts("p-real", "s-real", root);
+    expect(f?.used).toEqual(["ponytail", "ux-review"]);
+    expect(f && decideSkillClose(SCOPE_MET, f).block?.reason).toContain("`pr-review`");
   });
 });

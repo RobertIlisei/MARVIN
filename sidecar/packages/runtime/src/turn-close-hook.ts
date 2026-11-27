@@ -393,10 +393,12 @@ export function makeTurnCloseStopHook(args: {
       }
     }
     // ADR-0138 — the skills the brief named. A gate (two blocks, then through),
-    // so it is checked before the loop guard; never on a machine turn; a read
-    // failure never blocks.
+    // so it is checked before the loop guard; a read failure never blocks. A
+    // machine turn IS checked (addendum 2026-11-27): a long-running tab claims
+    // scope met on a scheduled-wakeup turn, so skipping those left the gate
+    // silent on every real close. The record is the session's, not the turn's.
     const skillGate = builtinGate("builtin:skills-named");
-    if (args.skills && !skillGate.off && !facts.machineTurn && hasScopeMet(evt.last_assistant_message ?? "")) {
+    if (args.skills && !skillGate.off && hasScopeMet(evt.last_assistant_message ?? "")) {
       let sk: SkillCloseFacts | null = null;
       try {
         sk = args.skills();
