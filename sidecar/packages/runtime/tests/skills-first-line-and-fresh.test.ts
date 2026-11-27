@@ -166,6 +166,36 @@ describe("after_last_edit (fresh closing reviews)", () => {
     expect(skillCloseFacts(project, "fresh-hook", w)!.stale?.map((s) => s.name)).toEqual(["pr-review"]);
   });
 
+  it("a Bash commit of code after the review makes it stale; a docs-only commit does not", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { createTurnDesignContext, recordAllowedTool } = await import("../src/design-hooks");
+    const repo = mkdtempSync(join(tmpdir(), "marvin-skill-fresh-repo-"));
+    const git = (...a: string[]) => execFileSync("git", ["-C", repo, ...a], { stdio: "ignore" });
+    try {
+      git("init", "-q");
+      mkdirSync(join(repo, "docs"), { recursive: true });
+      mkdirSync(join(repo, "src"), { recursive: true });
+      put({ after_last_edit: ["pr-review"] });
+      upsertSessionMeta(project, "fresh-commit", { workDir: w, tree: { mode: "shared" }, posture });
+      seedTurnSkills({ projectId: project, sessionId: "fresh-commit", message: "Skills: `pr-review`", turnId: "t", isFirstTurn: () => true });
+      const ctx = createTurnDesignContext("t-commit", repo, { spineSession: { projectId: project, sessionId: "fresh-commit" } });
+      recordAllowedTool(ctx, "Skill", { skill: "pr-review" });
+      await new Promise((r) => setTimeout(r, 5));
+      writeFileSync(join(repo, "docs", "a.md"), "x");
+      git("add", "-A");
+      recordAllowedTool(ctx, "Bash", { command: 'git commit -m "docs"' });
+      expect(readSessionMeta(project, "fresh-commit")?.lastEditAt).toBeUndefined();
+      git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "docs");
+      writeFileSync(join(repo, "src", "a.ts"), "x");
+      git("add", "-A");
+      recordAllowedTool(ctx, "Bash", { command: 'git commit -m "code"' });
+      expect(readSessionMeta(project, "fresh-commit")?.lastEditAt).toBeTypeOf("string");
+      expect(skillCloseFacts(project, "fresh-commit", w)!.stale?.map((s) => s.name)).toEqual(["pr-review"]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("the Skills pane's own write keeps `after_last_edit`", () => {
     put({ enabled: ["a"], after_last_edit: ["pr-review"] });
     setEnabledSkills(w, ["a", "b"]);

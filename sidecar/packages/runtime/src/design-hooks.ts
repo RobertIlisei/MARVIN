@@ -426,8 +426,20 @@ export function recordAllowedTool(
   }
   if (toolName === "Bash") {
     const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
-    if (parseCommitCommand(cmd)) {
+    const committing = parseCommitCommand(cmd);
+    if (committing) {
       shipReviewTreeState(ctx.sessionCwd).lastCommit = { seq: nextShipSeq(), turnId: ctx.turnId };
+      // ADR-0138 addendum (`after_last_edit`): tabs change files from Bash too,
+      // so a commit that seals code moves the edit clock. Judged on the diff
+      // the gate already reads, before the commit runs (exit status is not
+      // known here: a failed commit errs towards stale). `.marvin/`, `docs/`
+      // and prose-only commits do not move it.
+      if (ctx.spineSession) {
+        const files = collectCommitDiff(ctx.sessionCwd, committing)?.files ?? [];
+        if (files.some((f) => !/^(\.marvin|docs)\//.test(f) && !DOC_ONLY_FILE.test(f))) {
+          noteLastEdit(ctx.spineSession.projectId, ctx.spineSession.sessionId);
+        }
+      }
       if (ctx.spineSession) {
         const st = spineCommitState(ctx.spineSession);
         st.commits += 1;
