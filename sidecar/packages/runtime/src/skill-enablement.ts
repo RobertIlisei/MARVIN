@@ -58,6 +58,8 @@ interface SkillsJson {
   /** Strict skills mode and its waivable skills (ADR-0138 addendum, `readProjectSkillsStrict`). */
   strict?: unknown;
   optional?: unknown;
+  /** Skills whose run must follow the last edit (`readProjectAfterLastEdit`). */
+  after_last_edit?: unknown;
 }
 
 function skillsJsonPath(workDir: string): string {
@@ -94,6 +96,7 @@ export function setEnabledSkills(workDir: string, enabled: string[]): void {
     // `strict` / `optional` too (ADR-0138 addendum): a pane toggle must not switch strict mode off.
     if (prior && "strict" in prior) payload.strict = prior.strict;
     if (prior && "optional" in prior) payload.optional = prior.optional;
+    if (prior && "after_last_edit" in prior) payload.after_last_edit = prior.after_last_edit;
   } catch {
     /* no prior file, or unreadable: nothing to keep */
   }

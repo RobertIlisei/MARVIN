@@ -124,3 +124,30 @@ On a real project (agri-saas-platform, 2026-11-27) UI tabs closed with 8 to 11 o
 - [x] A lowered or retired Practice row still lets a strict tab through; a subagent call is untouched: `skills-close.test.ts`, `skills-first.test.ts`.
 - [x] Watch rows carry `strict`: `session-watch.test.ts`.
 - Not built: a Practice pane or Skills pane control for `strict` / `optional` (edit the file), and the strict flag in the Swift row.
+
+## Addendum 2026-11-28: a bare `Skills first:` line is read, and a closing review must be fresh
+
+### Context
+
+Two defects seen on one agri-saas tab (owner-approved 2026-11-28). (1) Its brief held `Skills first: ponytail, agricore-design-system, impeccable, …` (eight names, no backticks) and the session was seeded with `skills.first = ["ponytail"]`: `namedSkills` only reads backticked names, so the line named nothing, and the one start skill came from the project's `first` setting. (2) `pr-review`, `ponytail-review` and `verification-before-completion` counted as run even when they ran before the tab's last edit, so the final change could close unreviewed.
+
+### Decision
+
+1. **A `Skills first:` line may carry bare names.** `bareNames` (skill-brief.ts) splits the line, minus parenthesised notes and backticked names, on commas, semicolons and `and`; a piece counts only when the whole piece is a valid skill name, so prose names nothing. A bare name is a start skill only when the brief also lists it under `Skills:` (it never adds a required skill; backticked names on the line still do, as before). Seeded `first` is the union of the brief's start skills and the project's `first` (only skills the brief names), deduplicated, brief order kept.
+2. **`after_last_edit` in `.marvin/skills.json`.** An array of at most 20 valid skill names (`readProjectAfterLastEdit`, same validating boundary as `first` / `optional`; anything else reads as none, today's behaviour; the Skills pane write keeps it). At a scope-met close (`skillCloseFacts`, `decideSkillClose`) a listed skill that the brief named counts as run only when its last run is after the session's last edit; otherwise it is `stale`, not `used`, and the refusal says `<skill> ran before your last edit at HH:MM; run it again`. A waiver (`Skill not used:`) discharges a stale skill like a missing one; strict mode keeps its rules (no brake, waiver only for `optional`); non-strict keeps the ADR-0104 two-refusal brake. Read at gate time, so it applies to a running tab.
+3. **What is recorded.** Session meta gains `skillsRunAt` (ISO of each skill's last run, written on every run; `skillsRun` stays idempotent) and `lastEditAt` (written by `recordAllowedTool` on an Edit / Write / NotebookEdit whose path is inside the session's tree and not under `.marvin/`, and only when the session has a seeded skills list). A run with no recorded time (a meta from before this) cannot be shown fresh once an edit exists.
+4. **Edits, not commits.** The clock is the last edit, not the last `git commit`: a commit seals code that was already edited, so an edit-based clock covers it, while a commit-based one would let an unreviewed edit through until the commit. Wakeup turns are unchanged (the close check still runs on them); a subagent's mutations are denied before this record is written.
+
+### Consequences
+
+- With `after_last_edit` set, a tab that edits after its closing reviews must run them again; a docs-only edit after the review costs one more run or a waiver.
+- A Bash-made change (`sed -i`, a generator) is not an Edit and does not move the clock. Accepted: widening the clock to every Bash call would make every review stale.
+- The Swift Sessions pane does not show `stale`.
+
+### Scope of Done
+
+- [x] The real message shape (backticked `Skills:` line, bare `Skills first:` line, a note line) seeds all eight start skills, united with the project's `first`: `skills-first-line-and-fresh.test.ts`.
+- [x] A skill run before an edit is stale, after it fresh; a non-listed skill and an absent setting are unchanged; malformed values read as none: `skills-first-line-and-fresh.test.ts`.
+- [x] The refusal names the stale skill and the edit time; strict has no brake, non-strict keeps it; a waiver discharges: `skills-close-stale.test.ts`.
+- [x] `.marvin/` and outside-the-tree edits do not move the clock: `skills-first-line-and-fresh.test.ts`.
+- Not built: a pane control for `after_last_edit`, the stale list in the Swift row, Bash-made changes moving the clock.

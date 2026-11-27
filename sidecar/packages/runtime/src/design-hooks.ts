@@ -62,7 +62,7 @@ import { hasSeededPlan, seededOpenSteps } from "./plan-seed";
 import { readPlanState } from "./plan-state";
 import { PROJECT_SKILLS_PLUGIN } from "./project-skills-plugin";
 import { slugifyWorkDir } from "./projects";
-import { normaliseSkillName, noteSkillFirstBlock, noteSkillRun, skillsFirstFacts } from "./skill-brief";
+import { normaliseSkillName, noteLastEdit, noteSkillFirstBlock, noteSkillRun, skillsFirstFacts } from "./skill-brief";
 
 /**
  * Hooks only ever return a deny PermissionResult (or null). We narrow the
@@ -473,6 +473,14 @@ export function recordAllowedTool(
   if (toolName === "Edit" || toolName === "Write" || toolName === "NotebookEdit") {
     ctx.mutationCount += 1;
     const target = pickPath(toolInput, ["file_path", "notebook_path", "path"]);
+    // ADR-0138 addendum (`after_last_edit`): a tracked file is one inside the
+    // session's tree and outside `.marvin/` (the app's own plan / memory files).
+    if (ctx.spineSession && target) {
+      const rel = relative(ctx.sessionCwd, isAbsolute(target) ? target : join(ctx.sessionCwd, target));
+      if (!rel.startsWith("..") && !isAbsolute(rel) && !/(^|[\\/])\.marvin[\\/]/.test(rel)) {
+        noteLastEdit(ctx.spineSession.projectId, ctx.spineSession.sessionId);
+      }
+    }
     if (toolName === "Write" && target) ctx.createdFiles.add(isAbsolute(target) ? target : join(ctx.sessionCwd, target));
     if (target && ctx.chargedFiles.has(target)) {
       ctx.chargedFiles.delete(target);

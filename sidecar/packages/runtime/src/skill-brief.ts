@@ -70,6 +70,24 @@ function namedSkills(fragment: string): NamedSkill[] {
   return out;
 }
 
+/**
+ * The bare (un-backticked) names on a `Skills first:` line: `a, b, c`. Real
+ * briefs write that line without backticks, and the backtick-only reader took it
+ * for prose (2026-11-28: an eight-skill line seeded one start skill). Notes in
+ * parentheses and backticked names are dropped; the rest is split on commas,
+ * semicolons and `and`, and a piece counts only when the whole piece is a valid
+ * name, so "whatever is needed, then the rest" names nothing. The caller keeps
+ * only the names the brief also lists under `Skills:`.
+ */
+function bareNames(fragment: string): string[] {
+  const out: string[] = [];
+  for (const piece of fragment.replace(/\([^)]*\)/g, " ").replace(/`[^`\n]*`/g, " ").split(/[,;]|\band\b/i)) {
+    const raw = piece.trim().replace(/[.:]+$/, "");
+    if (raw && NAME.test(raw)) out.push(normaliseSkillName(raw));
+  }
+  return out;
+}
+
 const LABEL = /^\s*(?:[-*>]\s+)?(?:\*\*)?skills(?:\*\*)?\s*:(?:\*\*)?\s*(.*)$/i;
 /** `Skills first: …` / `**Skills first:** …`: every name on the line is a start skill. */
 const FIRST_LABEL = /^\s*(?:[-*>]\s+)?(?:\*\*)?skills\s+first(?:\*\*)?\s*:(?:\*\*)?\s*(.*)$/i;
@@ -94,6 +112,7 @@ export interface SkillsBrief {
  */
 export function parseSkillsBrief(message: string): SkillsBrief | null {
   const found: NamedSkill[] = [];
+  const bareFirst = new Set<string>();
   const lines = message.split("\n");
   let inList = false;
   for (const line of lines) {
@@ -117,6 +136,7 @@ export function parseSkillsBrief(message: string): SkillsBrief | null {
     const firstLabel = FIRST_LABEL.exec(line);
     if (firstLabel) {
       found.push(...namedSkills(firstLabel[1] ?? "").map((n) => ({ ...n, first: true })));
+      for (const n of bareNames(firstLabel[1] ?? "")) bareFirst.add(n);
       continue;
     }
     const label = LABEL.exec(line);
@@ -124,7 +144,7 @@ export function parseSkillsBrief(message: string): SkillsBrief | null {
   }
   const required = [...new Set(found.map((n) => n.name))].slice(0, SKILLS_MAX);
   if (required.length === 0) return null;
-  const first = required.filter((name) => found.some((n) => n.name === name && n.first));
+  const first = required.filter((name) => found.some((n) => n.name === name && n.first) || bareFirst.has(name));
   return { required, first };
 }
 
@@ -207,15 +227,36 @@ export function seedTurnSkills(args: {
 }
 
 /** Remember that this session ran a skill. Idempotent; never throws. */
-export function noteSkillRun(projectId: string, sessionId: string, rawName: string): void {
+export function noteSkillRun(projectId: string, sessionId: string, rawName: string, at: string = new Date().toISOString()): void {
   try {
     const name = normaliseSkillName(rawName);
     if (!name) return;
     const meta = readSessionMeta(projectId, sessionId);
     if (!meta) return;
     const run = meta.skillsRun ?? [];
-    if (run.includes(name)) return;
-    updateSessionMeta(projectId, sessionId, { skillsRun: [...run, name].slice(-SKILLS_RUN_MAX) });
+    // The LAST run time is kept on every run (a closing review must be fresh,
+    // `after_last_edit`); the name list stays idempotent.
+    const skillsRunAt = { ...(meta.skillsRunAt ?? {}), [name]: at };
+    const keep = Object.keys(skillsRunAt).slice(-SKILLS_RUN_MAX);
+    updateSessionMeta(projectId, sessionId, {
+      skillsRun: run.includes(name) ? run : [...run, name].slice(-SKILLS_RUN_MAX),
+      skillsRunAt: Object.fromEntries(keep.map((k) => [k, skillsRunAt[k] as string])),
+    });
+  } catch {
+    /* recording must never break a tool call */
+  }
+}
+
+/**
+ * Remember when the session last edited a file (Edit / Write / NotebookEdit).
+ * Only a session with a seeded skills list is written: nothing else reads it.
+ * Never throws.
+ */
+export function noteLastEdit(projectId: string, sessionId: string, at: string = new Date().toISOString()): void {
+  try {
+    const meta = readSessionMeta(projectId, sessionId);
+    if (!meta?.skills) return;
+    updateSessionMeta(projectId, sessionId, { lastEditAt: at });
   } catch {
     /* recording must never break a tool call */
   }
@@ -253,6 +294,9 @@ export interface SkillCloseFacts {
   /** Strict mode (skills.json): no brake, and a waiver only discharges `optional` skills. */
   strict?: boolean;
   optional?: string[];
+  /** `after_last_edit` skills that ran, but before the session's last edit. They
+   *  are not in `used`. */
+  stale?: { name: string; ranAt: string; editAt: string }[];
 }
 
 /** What the Stop hook needs, or null when the session has no seeded list. */
@@ -261,10 +305,32 @@ export function skillCloseFacts(projectId: string, sessionId: string, workDir: s
   const required = meta?.skills?.required;
   if (!meta || !required || required.length === 0) return null;
   const run = new Set(meta.skillsRun ?? []);
-  const used = required.filter((n) => run.has(n));
   const missing = required.filter((n) => !run.has(n));
+  // `after_last_edit`: a listed skill counts only when its last run came after
+  // the session's last edit. A run with no recorded time (a meta from before
+  // the times were kept) cannot be shown fresh once an edit exists.
+  const fresh = new Set(readProjectAfterLastEdit(workDir));
+  const editAt = meta.lastEditAt;
+  const stale: { name: string; ranAt: string; editAt: string }[] = [];
+  if (editAt && fresh.size > 0) {
+    for (const n of required) {
+      if (!run.has(n) || !fresh.has(n)) continue;
+      const ranAt = meta.skillsRunAt?.[n];
+      if (!ranAt || ranAt <= editAt) stale.push({ name: n, ranAt: ranAt ?? "", editAt });
+    }
+  }
+  const staleNames = new Set(stale.map((x) => x.name));
+  const used = required.filter((n) => run.has(n) && !staleNames.has(n));
   const { strict, optional } = readProjectSkillsStrict(workDir);
-  return { required, used, unavailable: unavailableSkills(projectId, workDir, missing), blocks: meta.skills?.blocks ?? 0, strict, optional };
+  return {
+    required,
+    used,
+    unavailable: unavailableSkills(projectId, workDir, missing),
+    blocks: meta.skills?.blocks ?? 0,
+    strict,
+    optional,
+    ...(stale.length > 0 ? { stale } : {}),
+  };
 }
 
 /** Count one refused close on the session meta (the two-block brake). */
@@ -296,6 +362,30 @@ export function readProjectFirstSkills(workDir: string): string[] {
     if (!j || !Array.isArray(j.first)) return [];
     const out: string[] = [];
     for (const raw of j.first) {
+      if (typeof raw !== "string" || !NAME.test(raw.trim())) continue;
+      const name = normaliseSkillName(raw);
+      if (name && !out.includes(name)) out.push(name);
+      if (out.length >= FIRST_SETTING_MAX) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * `after_last_edit` in `<workDir>/.marvin/skills.json` (ADR-0138 addendum): the
+ * skills whose run only counts at a scope-met close when it came after the
+ * session's last edit (the closing reviews). Same boundary as `first`: an array
+ * of at most 20 valid names, normalised and deduplicated; anything else, or a
+ * non-array, reads as none (today's behaviour). Never throws.
+ */
+export function readProjectAfterLastEdit(workDir: string): string[] {
+  try {
+    const j = JSON.parse(readFileSync(join(workDir, ".marvin", "skills.json"), "utf-8")) as { after_last_edit?: unknown } | null;
+    if (!j || !Array.isArray(j.after_last_edit)) return [];
+    const out: string[] = [];
+    for (const raw of j.after_last_edit) {
       if (typeof raw !== "string" || !NAME.test(raw.trim())) continue;
       const name = normaliseSkillName(raw);
       if (name && !out.includes(name)) out.push(name);

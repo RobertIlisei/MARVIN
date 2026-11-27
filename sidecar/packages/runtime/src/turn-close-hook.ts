@@ -193,12 +193,24 @@ export function decideSkillClose(lastText: string, facts: SkillCloseFacts): Skil
   const waived = missing.filter((n) => !unavailable.includes(n) && waivable(n));
   const needed = missing.filter((n) => !unavailable.includes(n) && !waivable(n));
   if (needed.length === 0) return { block: null, waived, unavailable };
-  const list = needed.map((n) => `\`${n}\``).join(", ");
+  const quote = (names: string[]) => names.map((n) => `\`${n}\``).join(", ");
+  const staleNames = new Set((facts.stale ?? []).map((x) => x.name));
+  const never = needed.filter((n) => !staleNames.has(n));
+  const staleNeeded = needed.filter((n) => staleNames.has(n));
+  const editAt = (facts.stale ?? []).find((x) => staleNeeded.includes(x.name))?.editAt;
+  const at = editAt ? new Date(editAt) : null;
+  const clock = at && !Number.isNaN(at.getTime()) ? `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}` : "?";
+  const problems = [
+    never.length > 0 ? `the brief named ${never.length === 1 ? "a skill" : "skills"} that never ran in this session: ${quote(never)}` : "",
+    staleNeeded.length > 0
+      ? `${quote(staleNeeded)} ran before your last edit at ${clock}; run it again (this project sets \`after_last_edit\` in .marvin/skills.json, so a run that came before the last edit does not count)`
+      : "",
+  ].filter(Boolean);
   return {
     block: {
       kind: "skills-unused",
       reason:
-        `skills gate (ADR-0138): this turn claims scope met, but the brief named ${needed.length === 1 ? "a skill" : "skills"} that never ran in this session: ${list}. ` +
+        `skills gate (ADR-0138): this turn claims scope met, but ${problems.join("; and ")}. ` +
         `Run ${needed.map((n) => `\`Skill { skill: "${n}" }\``).join(" and ")} and act on what ${needed.length === 1 ? "it says" : "they say"}, then close. ` +
         (facts.strict
           ? `This project runs skills in strict mode (.marvin/skills.json): the close is refused every time until they ran, with no brake, and \`Skill not used:\` only discharges skills the project lists as optional${(facts.optional ?? []).length > 0 ? ` (${(facts.optional ?? []).map((n) => `\`${n}\``).join(", ")})` : " (none are)"}. ` +

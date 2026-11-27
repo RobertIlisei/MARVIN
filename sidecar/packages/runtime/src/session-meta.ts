@@ -105,6 +105,11 @@ export interface SessionMeta {
   /** ADR-0138 — every skill this session has run, by normalised name. Persisted
    *  so a session resumed after a MARVIN restart does not forget what ran. */
   skillsRun?: string[];
+  /** ADR-0138 addendum: when each skill last ran (ISO, by normalised name), and
+   *  when the session last edited a file. For `after_last_edit`: a closing
+   *  review that ran before the last edit does not count. */
+  skillsRunAt?: Record<string, string>;
+  lastEditAt?: string;
   /** ADR-0121 addendum — scope-met closes each own-change backlog item has
    *  refused, by item id: the ADR-0104 brake (two, then the close is allowed).
    *  On the meta so a restart does not reset it. */
