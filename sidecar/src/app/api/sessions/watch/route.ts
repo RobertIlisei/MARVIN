@@ -1,5 +1,5 @@
 /**
- * GET /api/sessions/watch?projectId=…&ids=a,b,c → { projectId, rows, generatedAt, sidecarStartedAt }
+ * GET /api/sessions/watch?projectId=…&ids=a,b,c → { projectId, rows, graphRefresh: graphRefreshStatus(), generatedAt, sidecarStartedAt }
  *
  * ADR-0107 — the cold-start snapshot for the multi-session watch UI: one row
  * per session with its live state, pending confirms, tree, diff badge, plan
@@ -7,6 +7,7 @@
  * Read-only; no CSRF guard (matches the other GET reads).
  */
 
+import { graphRefreshStatus } from "@marvin/graphify-bridge";
 import { getProject } from "@marvin/runtime/projects";
 import { buildSessionWatch, sidecarStartedAt } from "@marvin/runtime/session-watch";
 import { ensureSupervisorLoop } from "@marvin/runtime/supervisor-loop";

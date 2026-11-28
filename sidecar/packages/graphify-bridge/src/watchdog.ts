@@ -22,6 +22,7 @@ import {
   graphifyVersion,
   resolveGraphifyBin,
 } from "./graphify-bin";
+import { requestGraphRefresh } from "./refresh-gate";
 
 const pExecFile = promisify(execFile);
 
@@ -139,7 +140,7 @@ export async function maybeRefreshGraphify(
   state.lastTriggeredForHead = head ?? null;
   state.running = true;
 
-  try {
+  const { done } = requestGraphRefresh(`code:${workDir}`, () => {
     const bin = resolveGraphifyBin();
     warnIfBelowMinimum(bin);
     const child = spawn(bin, ["update", workDir], {
@@ -149,12 +150,7 @@ export async function maybeRefreshGraphify(
       env: graphifyEnv(),
     });
     deprioritise(child.pid);
-    child.on("close", () => {
-      state.running = false;
-      state.lastRunMs = Date.now() - now;
-    });
     child.on("error", (err) => {
-      state.running = false;
       const hint = graphifyMissingHint(err);
       if (hint && !warnedMissing) {
         warnedMissing = true;
@@ -162,10 +158,16 @@ export async function maybeRefreshGraphify(
       }
     });
     child.unref();
-  } catch {
+    return child;
+  });
+  void done.then((ms) => {
     state.running = false;
-    return { triggered: false, reason: "spawn failed", workDir };
-  }
+    if (ms === null) {
+      // Never ran (dropped, or too little memory): let the next turn ask again.
+      state.lastTriggerAt = 0;
+      state.lastTriggeredForHead = null;
+    } else state.lastRunMs = ms;
+  });
 
   return {
     triggered: true,

@@ -87,3 +87,38 @@ first-message context.
 - [ ] Bundled-.app path for the Python knowledge builder — confirm it's shipped
       (or have graphify build the knowledge layer) so auto-build works outside
       dev. Code graph is unaffected (`graphify` on PATH).
+
+## Addendum 2026-11-28 — one machine-wide cap on graph refreshes
+
+**What went wrong.** A per-turn refresh of a large project's graph
+(`graphify update <tab worktree>`) holds 3.6-4.2 GB. Each tab's refresh was
+debounced per tab, and ADR-0124 serialised worktree refreshes only *within one
+project* — the project's own code graph, its knowledge graph and every
+project's worktrees still ran side by side. On an 18-core / 36 GB Mac Studio
+with ~18 tab worktrees, nine ran at once at 00:46 (~36 GB) and the machine ran
+out of memory and had to be restarted.
+
+**Decision.** `refresh-gate.ts` in graphify-bridge is the one door every
+refresh goes through (code watchdog, knowledge watchdog, worktree refresh):
+
+- at most `MARVIN_GRAPH_REFRESH_MAX` run at once (integer 1..4, default 1);
+  the rest wait FIFO; a request for a key already queued or running is
+  coalesced; a request that waited over 10 minutes is dropped (the next turn
+  asks again — the caller's HEAD / fingerprint / debounce marker is reset so
+  that next ask is not read as "unchanged");
+- before starting one, available memory is read and the refresh is skipped
+  below `MARVIN_GRAPH_REFRESH_MIN_FREE_PCT` (integer 5..90, default 30); the
+  tab keeps its graph; a skip is logged at most once a minute. On macOS
+  "available" is `vm_stat` free + inactive + speculative + purgeable pages,
+  not `os.freemem()`, which counts only free pages and sits near a few percent
+  on a healthy Mac (it would skip everything); Linux uses `MemAvailable`. An
+  unreadable value lets the refresh run — the cap still bounds it;
+- the gate only manages the children MARVIN spawned (it holds their handles);
+  no pattern kills (MARVIN refuses `pkill` / `killall`), no per-refresh
+  ceiling;
+- `[graph-refresh]` log lines: `queued`, `coalesced`, `started`, `finished
+  duration=`, `dropped-stale`, `skipped-low-memory`; `/api/sessions/watch`
+  returns `graphRefresh: {running, queued, max}`.
+
+ADR-0124's per-project worktree queue is replaced by this gate. Fires from
+`/api/chat` (`route.ts:267-268`) and `turn-orchestrator.ts:393`.

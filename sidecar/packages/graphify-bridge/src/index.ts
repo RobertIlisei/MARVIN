@@ -44,3 +44,8 @@ export {
   type KnowledgeGraphRefreshResult,
   maybeRefreshKnowledgeGraph,
 } from "./knowledge-watchdog";
+export {
+  graphRefreshMax,
+  graphRefreshMinFreePct,
+  graphRefreshStatus,
+} from "./refresh-gate";

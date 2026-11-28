@@ -23,6 +23,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import { graphifyEnv, graphifyPython } from "./graphify-bin";
+import { requestGraphRefresh } from "./refresh-gate";
 import { deprioritise } from "./watchdog";
 
 const pExecFile = promisify(execFile);
@@ -134,7 +135,7 @@ export async function maybeRefreshKnowledgeGraph(
   state.lastTriggeredForHead = head ?? null;
   state.running = true;
 
-  try {
+  const { done } = requestGraphRefresh(`knowledge:${workDir}`, () => {
     const python = graphifyPython();
     const child = spawn(python, [script, workDir], {
       cwd: workDir,
@@ -148,7 +149,6 @@ export async function maybeRefreshKnowledgeGraph(
       stderr = (stderr + chunk.toString()).slice(-2000);
     });
     child.on("close", (code) => {
-      state.running = false;
       // Warn once per process: 2026-09-29 the builder ran under a python3
       // without the graphify package and exited 2 on every turn, with stdio
       // discarded — the knowledge graph went stale and nothing said so.
@@ -160,14 +160,16 @@ export async function maybeRefreshKnowledgeGraph(
         );
       }
     });
-    child.on("error", () => {
-      state.running = false;
-    });
     child.unref();
-  } catch {
+    return child;
+  });
+  void done.then((ms) => {
     state.running = false;
-    return { triggered: false, reason: "spawn failed", workDir };
-  }
+    if (ms === null) {
+      state.lastTriggerAt = 0;
+      state.lastTriggeredForHead = null;
+    }
+  });
 
   return { triggered: true, reason: source, workDir, head: head ?? undefined };
 }

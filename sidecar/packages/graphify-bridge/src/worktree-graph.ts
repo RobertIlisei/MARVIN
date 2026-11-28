@@ -30,6 +30,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { graphifyEnv, graphifyMissingHint, resolveGraphifyBin } from "./graphify-bin";
+import { requestGraphRefresh } from "./refresh-gate";
 
 const pExecFile = promisify(execFile);
 
@@ -67,16 +68,11 @@ export function resolveGraphRoot(workDir: string, cwd?: string): GraphRoot {
   return { root: workDir, worktree, note: WORKTREE_GRAPH_FALLBACK_NOTE };
 }
 
-interface ProjectRefreshState {
-  running: string | null;
-  queue: string[];
-}
 interface WorktreeRefreshState {
   lastTriggerAt: number;
   lastFingerprint: string | null;
 }
 
-const projectState = new Map<string, ProjectRefreshState>();
 const worktreeState = new Map<string, WorktreeRefreshState>();
 
 export interface WorktreeGraphRefreshResult {
@@ -163,34 +159,6 @@ export function seedWorktreeGraph(workDir: string, worktree: string): boolean {
 // A missing binary fails every refresh; say so once per process.
 let warnedMissing = false;
 
-function startUpdate(workDir: string, worktree: string, st: ProjectRefreshState): void {
-  st.running = worktree;
-  const done = () => {
-    st.running = null;
-    const next = st.queue.shift();
-    if (next) startUpdate(workDir, next, st);
-  };
-  try {
-    const child = spawn(resolveGraphifyBin(), ["update", worktree], {
-      cwd: worktree,
-      stdio: "ignore",
-      env: graphifyEnv(),
-    });
-    child.on("close", done);
-    child.on("error", (err) => {
-      const hint = graphifyMissingHint(err);
-      if (hint && !warnedMissing) {
-        warnedMissing = true;
-        console.warn(`[graphify-worktree] ${hint}`);
-      }
-      done();
-    });
-    child.unref();
-  } catch {
-    done();
-  }
-}
-
 /**
  * Bring the code graph of the worktree `cwd` sits in up to date — seed it on
  * first use, then an incremental AST update. Fire-and-forget from the turn
@@ -227,17 +195,35 @@ export async function maybeRefreshWorktreeGraph(
   }
   wt.lastTriggerAt = now;
   wt.lastFingerprint = fingerprint;
-  const st = projectState.get(workDir) ?? { running: null, queue: [] };
-  projectState.set(workDir, st);
-  if (st.running) {
-    if (st.running !== worktree && !st.queue.includes(worktree)) st.queue.push(worktree);
-    return { triggered: false, reason: "queued behind another refresh", worktree, seeded };
+  const { outcome, done } = requestGraphRefresh(`code:${worktree}`, () => {
+    const child = spawn(resolveGraphifyBin(), ["update", worktree], {
+      cwd: worktree,
+      stdio: "ignore",
+      env: graphifyEnv(),
+    });
+    child.on("error", (err) => {
+      const hint = graphifyMissingHint(err);
+      if (hint && !warnedMissing) {
+        warnedMissing = true;
+        console.warn(`[graphify-worktree] ${hint}`);
+      }
+    });
+    child.unref();
+    return child;
+  });
+  void done.then((ms) => {
+    if (ms === null) {
+      // Never ran (dropped, or too little memory): the next turn must not read "tree unchanged".
+      wt.lastTriggerAt = 0;
+      wt.lastFingerprint = null;
+    }
+  });
+  if (outcome !== "started") {
+    return { triggered: false, reason: `${outcome} behind the machine-wide refresh cap`, worktree, seeded };
   }
-  startUpdate(workDir, worktree, st);
   return { triggered: true, reason: options?.source ?? "manual", worktree, seeded };
 }
 
 export function resetWorktreeGraphState(): void {
-  projectState.clear();
   worktreeState.clear();
 }

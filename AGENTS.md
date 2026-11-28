@@ -672,7 +672,12 @@ machine has none).
 **Who builds them (ADR-0041).** When the **running IDE** has a project open, it
 auto-refreshes that project's *code AND knowledge* graphs per turn — fire-and-
 forget from `/api/chat`, debounced, AST-only (no LLM cost), scoped to the
-active project's workDir (never MARVIN's own repo). The richer *semantic*
+active project's workDir (never MARVIN's own repo). Every refresh passes one
+machine-wide gate (ADR-0041 addendum 2026-11-28): `MARVIN_GRAPH_REFRESH_MAX`
+(1..4, default 1) run at once, the rest queue FIFO / coalesce / drop after
+10 min, and a refresh is skipped below `MARVIN_GRAPH_REFRESH_MIN_FREE_PCT`
+(5..90, default 30) available memory — nine at once (~36 GB) once took a Mac
+down. The richer *semantic*
 `/graphify` pass (LLM, `GRAPH_REPORT.md` + `cost.json`) stays manual/opt-in.
 For a **coding-agent session working on MARVIN's own source** (no running IDE in
 the loop), rebuild manually: `graphify update .` (code) and
